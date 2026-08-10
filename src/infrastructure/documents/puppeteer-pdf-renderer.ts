@@ -1,4 +1,8 @@
+import fsPromises from "node:fs/promises";
+
 import puppeteer, { type Browser } from "puppeteer";
+
+import type { DependencyReadinessStatus } from "../../application/health/readiness-service";
 
 export interface PdfRendererPort {
   renderPdf(html: string): Promise<Buffer>;
@@ -58,6 +62,22 @@ export class PuppeteerPdfRenderer implements PdfRendererPort {
     }
   }
 
+  async checkReadiness(): Promise<DependencyReadinessStatus> {
+    try {
+      const executablePath = this.resolveExecutablePath();
+      await fsPromises.access(executablePath);
+
+      return {
+        status: "up"
+      };
+    } catch (error) {
+      return {
+        status: "down",
+        details: error instanceof Error ? error.message : "pdf renderer is unavailable"
+      };
+    }
+  }
+
   private async getBrowser(): Promise<Browser> {
     if (!this.browserPromise) {
       this.browserPromise = puppeteer
@@ -72,5 +92,9 @@ export class PuppeteerPdfRenderer implements PdfRendererPort {
     }
 
     return this.browserPromise;
+  }
+
+  private resolveExecutablePath(): string {
+    return this.config.executablePath ?? puppeteer.executablePath();
   }
 }

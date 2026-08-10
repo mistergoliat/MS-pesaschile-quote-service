@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { ApplicationError } from "../../src/application/quote/errors";
 import { QuoteService, type CreateDraftQuoteCommand } from "../../src/application/quote/quote-service";
+import { loadEnv } from "../../src/infrastructure/config/env";
 import { PostgresDatabase } from "../../src/infrastructure/persistence/postgres/postgres";
 import { PostgresQuoteRepository } from "../../src/infrastructure/persistence/postgres/quote-repository";
 import {
@@ -171,7 +172,7 @@ describe("PostgreSQL quote persistence", () => {
         expect(current - previous).toBe(1);
       }
     });
-  });
+  }, POSTGRES_INTEGRATION_TEST_TIMEOUT_MS);
 
   it("enforces optimistic locking for concurrent writers", async () => {
     await withContext(async (context) => {
@@ -235,7 +236,7 @@ describe("PostgreSQL quote persistence", () => {
 
       expect(persisted?.version).toBe(2);
     });
-  });
+  }, POSTGRES_INTEGRATION_TEST_TIMEOUT_MS);
 
   it("rolls back the business mutation when audit insert fails", async () => {
     await withContext(async (context) => {
@@ -301,7 +302,7 @@ describe("PostgreSQL quote persistence", () => {
         await client.end();
       }
     });
-  });
+  }, POSTGRES_INTEGRATION_TEST_TIMEOUT_MS);
 
   it("rolls back the header update when line replacement fails", async () => {
     await withContext(async (context) => {
@@ -361,7 +362,7 @@ describe("PostgreSQL quote persistence", () => {
         await client.end();
       }
     });
-  });
+  }, POSTGRES_INTEGRATION_TEST_TIMEOUT_MS);
 
   it("replays completed idempotent requests and rejects same key with different payload", async () => {
     await withContext(async (context) => {
@@ -556,23 +557,23 @@ describe("PostgreSQL quote persistence", () => {
 
       await context.database.close();
 
-      const restartedDatabase = new PostgresDatabase({
+      const restartedDatabase = new PostgresDatabase(loadEnv({
         NODE_ENV: "test",
         HOST: "127.0.0.1",
-        PORT: 0,
+        PORT: "0",
         LOG_LEVEL: "silent",
         DATABASE_URL: connectionString,
         DATABASE_SSL_MODE: "disable",
         SERVICE_NAME: "pesaschile-quote-service",
         SERVICE_VERSION: "0.1.0-test",
         SERVICE_AUTH_TOKEN: "token",
-        HEALTHCHECK_DATABASE_TIMEOUT_MS: 1000,
+        HEALTHCHECK_DATABASE_TIMEOUT_MS: "1000",
         QUOTE_COMPANY_NAME: "Pesas Chile SPA",
         QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
         QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
         QUOTE_RENDER_VERSION: "quote-v1",
-        QUOTE_PDF_RENDER_TIMEOUT_MS: 15000
-      });
+        QUOTE_PDF_RENDER_TIMEOUT_MS: "15000"
+      }));
       const restartedService = new QuoteService(
         new PostgresQuoteRepository(restartedDatabase)
       );

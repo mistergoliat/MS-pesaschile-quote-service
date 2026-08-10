@@ -116,6 +116,19 @@ export function toHttpError(error: unknown): HttpError {
     return error;
   }
 
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "FST_ERR_CTP_BODY_TOO_LARGE"
+  ) {
+    return new HttpError({
+      statusCode: 413,
+      code: "validation_error",
+      message: "Request body is too large"
+    });
+  }
+
   if (error instanceof ZodError) {
     return createValidationError("Request validation failed", error.issues);
   }
@@ -175,6 +188,15 @@ export function sendErrorResponse(
         route: request.routeOptions.url
       },
       "Unexpected request failure"
+    );
+  } else if (httpError.statusCode >= 400) {
+    request.log.warn(
+      {
+        code: httpError.code,
+        requestId: request.id,
+        route: request.routeOptions.url
+      },
+      "Handled request failure"
     );
   }
 

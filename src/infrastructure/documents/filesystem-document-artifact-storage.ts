@@ -9,6 +9,12 @@ export interface StoredDocumentArtifact {
   readonly sizeBytes: number;
 }
 
+export interface StoredDocumentArtifactMetadata {
+  readonly storageKey: string;
+  readonly sizeBytes: number;
+  readonly modifiedAt: string;
+}
+
 function normalizeStorageKey(storageKey: string): string {
   if (!/^[A-Za-z0-9._/-]+$/.test(storageKey) || storageKey.includes("..")) {
     throw new Error(`Invalid storage key: ${storageKey}`);
@@ -26,6 +32,21 @@ export class FilesystemDocumentArtifactStorage {
 
   get rootPath(): string {
     return this.#rootPath;
+  }
+
+  async checkReadiness(): Promise<{ status: "up" | "down"; details?: string }> {
+    try {
+      await this.ensureRootWritable();
+
+      return {
+        status: "up"
+      };
+    } catch (error) {
+      return {
+        status: "down",
+        details: error instanceof Error ? error.message : "storage root is unavailable"
+      };
+    }
   }
 
   async writeText(storageKey: string, content: string): Promise<StoredDocumentArtifact> {
@@ -78,39 +99,60 @@ export class FilesystemDocumentArtifactStorage {
   }
 
   async listStorageKeys(prefixKey = ""): Promise<string[]> {
+    return (await this.listArtifacts(prefixKey)).map((artifact) => artifact.storageKey);
+  }
+
+  async listArtifacts(prefixKey = ""): Promise<StoredDocumentArtifactMetadata[]> {
     const directoryPath = this.resolveStoragePath(prefixKey);
 
     if (!(await this.pathExists(directoryPath))) {
       return [];
     }
 
-    return this.collectStorageKeys(directoryPath, prefixKey.replace(/\\/g, "/"));
+    return this.collectArtifacts(directoryPath, prefixKey.replace(/\\/g, "/"));
   }
 
-  private async collectStorageKeys(
+  async ensureRootWritable(): Promise<void> {
+    await fsPromises.mkdir(this.#rootPath, {
+      recursive: true
+    });
+
+    const probePath = path.join(this.#rootPath, `.write-probe-${crypto.randomUUID()}`);
+    await fsPromises.writeFile(probePath, "ok", "utf8");
+    await fsPromises.rm(probePath, {
+      force: true
+    });
+  }
+
+  private async collectArtifacts(
     directoryPath: string,
     prefixKey: string
-  ): Promise<string[]> {
+  ): Promise<StoredDocumentArtifactMetadata[]> {
     const entries = await fsPromises.readdir(directoryPath, {
       withFileTypes: true
     });
-    const storageKeys: string[] = [];
+    const artifacts: StoredDocumentArtifactMetadata[] = [];
 
     for (const entry of entries) {
       const entryPath = path.join(directoryPath, entry.name);
       const entryKey = prefixKey.length > 0 ? `${prefixKey}/${entry.name}` : entry.name;
 
       if (entry.isDirectory()) {
-        storageKeys.push(...(await this.collectStorageKeys(entryPath, entryKey)));
+        artifacts.push(...(await this.collectArtifacts(entryPath, entryKey)));
         continue;
       }
 
       if (entry.isFile()) {
-        storageKeys.push(entryKey);
+        const stat = await fsPromises.stat(entryPath);
+        artifacts.push({
+          storageKey: entryKey,
+          sizeBytes: stat.size,
+          modifiedAt: stat.mtime.toISOString()
+        });
       }
     }
 
-    return storageKeys;
+    return artifacts;
   }
 
   private resolveStoragePath(storageKey: string): string {

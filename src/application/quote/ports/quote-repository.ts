@@ -54,6 +54,20 @@ export interface QuoteListResult {
   };
 }
 
+export interface ExpiredIssuedQuoteCandidateInput {
+  readonly now: string;
+  readonly limit: number;
+}
+
+export interface IssuedDocumentArtifactRecord {
+  readonly quoteId: string;
+  readonly contentHash: string;
+  readonly htmlStorageKey: string;
+  readonly htmlSha256: string;
+  readonly pdfStorageKey: string;
+  readonly pdfSha256: string;
+}
+
 export interface QuoteAuditListInput extends OffsetPaginationInput {
   readonly quoteId: string;
 }
@@ -108,7 +122,7 @@ export interface PersistExistingQuoteInput {
   readonly quote: Quote;
   readonly expectedVersion: number;
   readonly auditEvents: readonly QuoteAuditEventRecord[];
-  readonly idempotencyCompletion: IdempotencyCompletionInput;
+  readonly idempotencyCompletion?: IdempotencyCompletionInput;
 }
 
 export interface PersistRevisionInput {
@@ -123,6 +137,7 @@ export interface QuoteRepositoryTransaction {
   allocateNextQuoteNumber(): Promise<string>;
   findById(quoteId: string): Promise<Quote | null>;
   findByQuoteNumber(quoteNumber: string): Promise<Quote | null>;
+  findExpiredIssuedCandidates(input: ExpiredIssuedQuoteCandidateInput): Promise<readonly Quote[]>;
   claimIdempotency(input: IdempotencyClaimInput): Promise<IdempotencyClaimResult>;
   markIdempotencyFailed(input: IdempotencyFailureInput): Promise<void>;
   persistNewQuote(input: PersistNewQuoteInput): Promise<void>;
@@ -135,6 +150,7 @@ export interface QuoteRepository {
   findByQuoteNumber(quoteNumber: string): Promise<Quote | null>;
   listQuotes(filters: QuoteListFilters): Promise<QuoteListResult>;
   listAuditEvents(input: QuoteAuditListInput): Promise<QuoteAuditListResult>;
+  listIssuedDocumentArtifacts(): Promise<readonly IssuedDocumentArtifactRecord[]>;
   markIdempotencyFailed(input: IdempotencyFailureInput): Promise<void>;
   withTransaction<T>(work: (transaction: QuoteRepositoryTransaction) => Promise<T>): Promise<T>;
 }

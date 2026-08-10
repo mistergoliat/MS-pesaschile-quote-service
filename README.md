@@ -25,11 +25,13 @@ The governing design remains [docs/quote-service-v1-technical-design.md](/C:/Use
 1. Copy `.env.example` to `.env`.
 2. Install dependencies with `npm install`.
 3. Install the PDF browser with `npm run pdf:install-browser`.
-4. If Chromium is not auto-discovered in your environment, set `QUOTE_PDF_EXECUTABLE_PATH` to the installed `chrome-headless-shell` or `chrome` executable.
+4. If Chromium is not auto-discovered in your environment, set `QUOTE_PDF_EXECUTABLE_PATH` to the installed `chrome-headless-shell` executable.
 5. Start PostgreSQL with `npm run db:compose:up`.
 6. Run migrations with `npm run db:migrate`.
 7. Verify connectivity with `npm run db:check`.
 8. Start the server with `npm run dev`.
+
+Production does not assume a host-installed browser. The supported V1 strategy is a reproducible runtime image that provisions `chrome-headless-shell` and points `QUOTE_PDF_EXECUTABLE_PATH` at an in-image path.
 
 ## Validation Commands
 
@@ -154,6 +156,7 @@ No SQL column names, internal filesystem paths, storage keys, or `Decimal` objec
 ### Health
 
 - `GET /health`
+- `GET /health/ready`
 
 ### Quote Commands
 
@@ -411,6 +414,112 @@ Operational commands:
 
 - Install the PDF browser: `npm run pdf:install-browser`
 - Clean orphaned artifacts: `npm run documents:cleanup`
+
+## T06 Operational Hardening
+
+### Expiration Scheduler
+
+Issued quotes can now expire automatically through an internal scheduler.
+
+- Only quotes in `issued` with `validUntil < now` are selected.
+- Expiration uses the domain transition plus transactional persistence and audit.
+- Selection is batched and uses `FOR UPDATE SKIP LOCKED` to stay safe under concurrent workers.
+- The scheduler starts only after the server is listening and stops during graceful shutdown.
+
+Configuration:
+
+- `QUOTE_EXPIRATION_SCHEDULER_ENABLED`
+- `QUOTE_EXPIRATION_INTERVAL_MS`
+- `QUOTE_EXPIRATION_BATCH_SIZE`
+
+### Orphan Cleanup
+
+T06 adds an internal cleanup job on top of the manual `npm run documents:cleanup` command.
+
+- Only artifacts older than `QUOTE_DOCUMENT_ORPHAN_MIN_AGE_MS` are eligible.
+- Referenced issued artifacts are protected.
+- Cleanup uses a PostgreSQL advisory lock so only one instance runs the sweep at a time.
+- Crash-before-commit artifacts remain invisible to the API and are eventually removable by the cleanup job or the manual command.
+
+Configuration:
+
+- `QUOTE_DOCUMENT_CLEANUP_ENABLED`
+- `QUOTE_DOCUMENT_CLEANUP_INTERVAL_MS`
+- `QUOTE_DOCUMENT_ORPHAN_MIN_AGE_MS`
+
+### Readiness And Startup Validation
+
+`GET /health` remains the basic liveness check. `GET /health/ready` verifies operational readiness:
+
+- lifecycle phase;
+- PostgreSQL connectivity;
+- document storage writability;
+- PDF renderer/browser availability.
+
+Startup now fails fast if the service cannot reach PostgreSQL, write to the configured storage root, or locate a working browser executable for PDF rendering.
+
+### Timeouts And Limits
+
+Server defaults are explicit and configurable:
+
+- `HTTP_BODY_LIMIT_BYTES`
+- `HTTP_REQUEST_TIMEOUT_MS`
+- `HTTP_CONNECTION_TIMEOUT_MS`
+- `HTTP_KEEP_ALIVE_TIMEOUT_MS`
+- `APP_SHUTDOWN_TIMEOUT_MS`
+- `DB_POOL_MAX`
+- `DB_POOL_IDLE_TIMEOUT_MS`
+- `DB_POOL_CONNECTION_TIMEOUT_MS`
+- `DB_QUERY_TIMEOUT_MS`
+
+Oversized HTTP payloads return `413`.
+
+### Graceful Shutdown
+
+On `SIGINT` or `SIGTERM` the service:
+
+1. marks lifecycle as shutting down;
+2. stops background schedulers;
+3. waits for Fastify shutdown within `APP_SHUTDOWN_TIMEOUT_MS`;
+4. closes the PostgreSQL pool;
+5. closes the PDF renderer/browser resources.
+
+There is no forced `process.exit()` on the happy path.
+
+### Production Runtime
+
+This repository now includes a production-oriented `Dockerfile`.
+
+- Base runtime: Node.js 20 on Debian Bookworm slim.
+- Browser strategy: `chrome-headless-shell@stable` provisioned inside the image.
+- Runtime user: non-root `nodeapp`.
+- Persistent artifacts: mount `/var/lib/pesaschile/quote-documents`.
+- Healthcheck: `/health/ready`.
+
+Build:
+
+```bash
+docker build -t pesaschile-quote-service:local .
+```
+
+Run:
+
+```bash
+docker run --rm \
+  -p 3000:3000 \
+  -e DATABASE_URL=postgres://postgres:postgres@host.docker.internal:5432/pesaschile_quote_service \
+  -e SERVICE_AUTH_TOKEN=replace-with-a-real-token \
+  -e QUOTE_DOCUMENT_REF_SECRET=replace-with-a-long-random-secret \
+  -v quote_documents:/var/lib/pesaschile/quote-documents \
+  pesaschile-quote-service:local
+```
+
+### Production Notes
+
+- Run migrations explicitly with `npm run db:migrate`. The server does not auto-migrate on startup.
+- Filesystem storage is durable only if backed by a persistent volume.
+- Multiple instances that serve document downloads need shared durable storage.
+- Email and WhatsApp delivery remain out of scope; T05/T06 only produce and retain the document artifacts.
 
 ## Testing
 

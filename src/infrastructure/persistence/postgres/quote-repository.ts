@@ -7,10 +7,12 @@ import {
   ApplicationError
 } from "../../../application/quote/errors";
 import type {
+  ExpiredIssuedQuoteCandidateInput,
   IdempotencyClaimInput,
   IdempotencyClaimResult,
   IdempotencyCompletionInput,
   IdempotencyFailureInput,
+  IssuedDocumentArtifactRecord,
   PersistExistingQuoteInput,
   PersistNewQuoteInput,
   PersistRevisionInput,
@@ -718,6 +720,34 @@ export class PostgresQuoteRepositoryTransaction implements QuoteRepositoryTransa
     return fetchQuoteByWhere(this.client, "q.quote_number = $1", quoteNumber);
   }
 
+  async findExpiredIssuedCandidates(
+    input: ExpiredIssuedQuoteCandidateInput
+  ): Promise<readonly Quote[]> {
+    const result = await this.client.query<{ quote_id: string }>(
+      `
+        select q.quote_id::text
+        from quote_service.quotes q
+        where q.status = 'issued'
+          and q.valid_until < $1::timestamptz
+        order by q.valid_until asc, q.quote_id asc
+        limit $2
+        for update skip locked
+      `,
+      [input.now, input.limit]
+    );
+    const quotes: Quote[] = [];
+
+    for (const row of result.rows) {
+      const quote = await this.findById(row.quote_id);
+
+      if (quote) {
+        quotes.push(quote);
+      }
+    }
+
+    return quotes;
+  }
+
   async claimIdempotency(input: IdempotencyClaimInput): Promise<IdempotencyClaimResult> {
     const insertResult = await this.client.query(
       `
@@ -921,7 +951,10 @@ export class PostgresQuoteRepositoryTransaction implements QuoteRepositoryTransa
 
     await replaceQuoteLines(this.client, input.quote);
     await insertAuditEvents(this.client, input.auditEvents);
-    await completeIdempotency(this.client, input.idempotencyCompletion);
+
+    if (input.idempotencyCompletion) {
+      await completeIdempotency(this.client, input.idempotencyCompletion);
+    }
   }
 
   async persistRevisionAtomically(input: PersistRevisionInput): Promise<void> {
@@ -1072,6 +1105,28 @@ export class PostgresQuoteRepository implements QuoteRepository {
         count: result.rows.length
       }
     };
+  }
+
+  async listIssuedDocumentArtifacts(): Promise<readonly IssuedDocumentArtifactRecord[]> {
+    const result = await this.database.query<IssuedDocumentArtifactRecord>(
+      `
+        select
+          quote_id::text as "quoteId",
+          issued_content_hash as "contentHash",
+          issued_html_storage_key as "htmlStorageKey",
+          issued_html_sha256 as "htmlSha256",
+          issued_pdf_storage_key as "pdfStorageKey",
+          issued_pdf_sha256 as "pdfSha256"
+        from quote_service.quotes
+        where issued_content_hash is not null
+          and issued_html_storage_key is not null
+          and issued_html_sha256 is not null
+          and issued_pdf_storage_key is not null
+          and issued_pdf_sha256 is not null
+      `
+    );
+
+    return result.rows;
   }
 
   async withTransaction<T>(
