@@ -24,10 +24,12 @@ The governing design remains [docs/quote-service-v1-technical-design.md](/C:/Use
 
 1. Copy `.env.example` to `.env`.
 2. Install dependencies with `npm install`.
-3. Start PostgreSQL with `npm run db:compose:up`.
-4. Run migrations with `npm run db:migrate`.
-5. Verify connectivity with `npm run db:check`.
-6. Start the server with `npm run dev`.
+3. Install the PDF browser with `npm run pdf:install-browser`.
+4. If Chromium is not auto-discovered in your environment, set `QUOTE_PDF_EXECUTABLE_PATH` to the installed `chrome-headless-shell` or `chrome` executable.
+5. Start PostgreSQL with `npm run db:compose:up`.
+6. Run migrations with `npm run db:migrate`.
+7. Verify connectivity with `npm run db:check`.
+8. Start the server with `npm run dev`.
 
 ## Validation Commands
 
@@ -35,6 +37,7 @@ The governing design remains [docs/quote-service-v1-technical-design.md](/C:/Use
 - `npm run typecheck`
 - `npm run build`
 - `npm run test`
+- `npm run test:unit`
 - `npm run verify`
 
 ## Authentication
@@ -134,10 +137,12 @@ Canonical quote responses include:
   "renderVersion": null,
   "generatedAt": null,
   "pdf": {
-    "documentRef": null
+    "documentRef": null,
+    "sha256": null
   },
   "html": {
-    "documentRef": null
+    "documentRef": null,
+    "sha256": null
   }
 }
 ```
@@ -162,8 +167,8 @@ No SQL column names, internal filesystem paths, storage keys, or `Decimal` objec
   - Returns `200`
 - `POST /v1/quotes/:quoteId/issue`
   - Requires `expectedVersion`
-  - Registered now for the final contract
-  - Returns `503 document_issuance_unavailable` until T05
+  - Performs real document issuance, durable storage, and final state transition to `issued`
+  - Returns `200`
 - `POST /v1/quotes/:quoteId/accept`
   - Requires `expectedVersion`
   - Returns `200`
@@ -192,6 +197,9 @@ No SQL column names, internal filesystem paths, storage keys, or `Decimal` objec
 - `GET /v1/quotes/:quoteId/documents`
 - `GET /v1/quotes/:quoteId/audit`
   - Pagination: `limit` default `50`, max `100`; `offset` default `0`
+- `GET /v1/documents/:documentRef`
+  - Requires `Authorization`
+  - Streams the persisted PDF or printable HTML for an issued quote
 
 List responses are:
 
@@ -348,6 +356,7 @@ Caller-controlled fields do not include `quoteId`, `quoteNumber`, `lineId`, pric
 ### `404`
 
 - `quote_not_found`
+- `document_not_found`
 
 ### `409`
 
@@ -361,25 +370,47 @@ Caller-controlled fields do not include `quoteId`, `quoteNumber`, `lineId`, pric
 
 ### `503`
 
-- `document_issuance_unavailable`
+- `document_generation_failed`
+- `document_storage_failed`
 
 ### `500`
 
 - `internal_server_error`
 
-## `/issue` Before T05
+## T05 Document Issuance
 
-T04 intentionally does not fake issued documents.
+`POST /v1/quotes/:quoteId/issue` now performs real issuance with this sequence:
 
-- The application boundary is already defined through `DocumentIssuancePort`.
-- Tests may inject a deterministic fake adapter.
-- Productive composition uses a disabled adapter.
-- `POST /v1/quotes/:quoteId/issue` returns `503 document_issuance_unavailable`.
-- The quote remains `draft`.
-- No issued audit event is created.
-- No successful idempotency completion is persisted for the failed issuance.
+1. Load the current draft and validate `expectedVersion`.
+2. Build a canonical immutable issuance snapshot.
+3. Render email HTML, printable HTML, and PDF outside SQL transactions.
+4. Compute `contentHash`, `htmlSha256`, and `pdfSha256`.
+5. Persist artifacts under deterministic storage keys rooted at `QUOTE_DOCUMENT_STORAGE_ROOT`.
+6. Open a short SQL transaction, revalidate state/version, persist the issued quote, audit, and idempotency completion, then commit.
 
-T05 will connect real document rendering and storage without changing the HTTP contract.
+Important invariants:
+
+- No SQL transaction stays open during HTML rendering, PDF generation, hashing, or filesystem writes.
+- `contentHash` represents the canonical logical snapshot, not the PDF bytes.
+- Public `documentRef` values are opaque HMAC-signed tokens. Internal storage keys and filesystem paths are never exposed.
+- Historical artifacts are immutable once a quote is issued.
+
+Document downloads:
+
+- `GET /v1/quotes/:quoteId/documents` returns safe document metadata and public refs.
+- `GET /v1/documents/:documentRef` streams the persisted artifact with authenticated access, `Content-Type`, `Content-Disposition`, and `X-Document-Sha256`.
+
+Failure behavior:
+
+- Renderer startup/render failures return `503 document_generation_failed`.
+- Storage failures return `503 document_storage_failed`.
+- In both cases the quote remains `draft`, no `issued` audit event is committed, and the idempotency record is marked failed so a retry can try again.
+- Crash-after-storage but before SQL commit is not solved with distributed transactions; those artifacts remain non-visible and are cleaned through `npm run documents:cleanup`.
+
+Operational commands:
+
+- Install the PDF browser: `npm run pdf:install-browser`
+- Clean orphaned artifacts: `npm run documents:cleanup`
 
 ## Testing
 
@@ -389,7 +420,11 @@ HTTP integration coverage uses:
 - real PostgreSQL test databases;
 - migrations from zero;
 - real `fetch` requests;
-- auth, create, read, update, lifecycle, revision, list, audit, idempotency, conflict, and error sanitization scenarios.
+- auth, create, read, update, lifecycle, revision, list, audit, idempotency, conflict, and error sanitization scenarios;
+- real document rendering and storage;
+- authenticated PDF/HTML downloads;
+- replay and optimistic conflict during issuance;
+- restart persistence over the same database and artifact root.
 
 This repository also keeps persistence-level integration tests for T03.
 

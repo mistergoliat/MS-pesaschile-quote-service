@@ -12,7 +12,13 @@ const envSchema = z.object({
   SERVICE_NAME: z.string().min(1).default("pesaschile-quote-service"),
   SERVICE_VERSION: z.string().min(1).default("0.1.0"),
   SERVICE_AUTH_TOKEN: z.string().min(1),
-  HEALTHCHECK_DATABASE_TIMEOUT_MS: z.coerce.number().int().positive().default(2000)
+  HEALTHCHECK_DATABASE_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
+  QUOTE_COMPANY_NAME: z.string().min(1).default("Pesas Chile SPA"),
+  QUOTE_DOCUMENT_STORAGE_ROOT: z.string().min(1),
+  QUOTE_DOCUMENT_REF_SECRET: z.string().min(16),
+  QUOTE_RENDER_VERSION: z.string().min(1).default("quote-v1"),
+  QUOTE_PDF_RENDER_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+  QUOTE_PDF_EXECUTABLE_PATH: z.string().min(1).optional()
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

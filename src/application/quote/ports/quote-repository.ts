@@ -92,6 +92,12 @@ export interface IdempotencyCompletionInput {
   readonly completedAt: string;
 }
 
+export interface IdempotencyFailureInput {
+  readonly idempotencyKey: string;
+  readonly operationName: string;
+  readonly failedAt: string;
+}
+
 export interface PersistNewQuoteInput {
   readonly quote: Quote;
   readonly auditEvents: readonly QuoteAuditEventRecord[];
@@ -118,6 +124,7 @@ export interface QuoteRepositoryTransaction {
   findById(quoteId: string): Promise<Quote | null>;
   findByQuoteNumber(quoteNumber: string): Promise<Quote | null>;
   claimIdempotency(input: IdempotencyClaimInput): Promise<IdempotencyClaimResult>;
+  markIdempotencyFailed(input: IdempotencyFailureInput): Promise<void>;
   persistNewQuote(input: PersistNewQuoteInput): Promise<void>;
   persistExistingQuote(input: PersistExistingQuoteInput): Promise<void>;
   persistRevisionAtomically(input: PersistRevisionInput): Promise<void>;
@@ -128,6 +135,7 @@ export interface QuoteRepository {
   findByQuoteNumber(quoteNumber: string): Promise<Quote | null>;
   listQuotes(filters: QuoteListFilters): Promise<QuoteListResult>;
   listAuditEvents(input: QuoteAuditListInput): Promise<QuoteAuditListResult>;
+  markIdempotencyFailed(input: IdempotencyFailureInput): Promise<void>;
   withTransaction<T>(work: (transaction: QuoteRepositoryTransaction) => Promise<T>): Promise<T>;
 }
 

@@ -10,6 +10,7 @@ import type {
   IdempotencyClaimInput,
   IdempotencyClaimResult,
   IdempotencyCompletionInput,
+  IdempotencyFailureInput,
   PersistExistingQuoteInput,
   PersistNewQuoteInput,
   PersistRevisionInput,
@@ -498,6 +499,21 @@ async function completeIdempotency(
   }
 }
 
+async function failIdempotency(queryable: SqlQueryable, input: IdempotencyFailureInput): Promise<void> {
+  await queryable.query(
+    `
+      update quote_service.idempotency_keys
+      set
+        status = 'failed',
+        updated_at = $3::timestamptz
+      where idempotency_key = $1
+        and operation_name = $2
+        and status = 'in_progress'
+    `,
+    [input.idempotencyKey, input.operationName, input.failedAt]
+  );
+}
+
 async function replaceQuoteLines(queryable: SqlQueryable, quote: Quote): Promise<void> {
   await queryable.query("delete from quote_service.quote_lines where quote_id = $1::uuid", [
     quote.quoteId
@@ -767,6 +783,33 @@ export class PostgresQuoteRepositoryTransaction implements QuoteRepositoryTransa
       };
     }
 
+    if (existing.status === "failed") {
+      const reclaimResult = await this.client.query(
+        `
+          update quote_service.idempotency_keys
+          set
+            status = 'in_progress',
+            updated_at = now(),
+            expires_at = $3::timestamptz,
+            resource_type = null,
+            resource_id = null,
+            response_code = null,
+            response_body_snapshot = null
+          where idempotency_key = $1
+            and operation_name = $2
+            and request_hash = $4
+            and status = 'failed'
+        `,
+        [input.idempotencyKey, input.operationName, input.expiresAt, input.requestHash]
+      );
+
+      if (reclaimResult.rowCount === 1) {
+        return {
+          kind: "claimed"
+        };
+      }
+    }
+
     throw new ApplicationError(
       APPLICATION_ERROR_CODES.idempotencyRequestInProgress,
       "Idempotent request is already in progress",
@@ -960,6 +1003,10 @@ export class PostgresQuoteRepositoryTransaction implements QuoteRepositoryTransa
     await insertAuditEvents(this.client, input.auditEvents);
     await completeIdempotency(this.client, input.idempotencyCompletion);
   }
+
+  async markIdempotencyFailed(input: IdempotencyFailureInput): Promise<void> {
+    await failIdempotency(this.client, input);
+  }
 }
 
 export class PostgresQuoteRepository implements QuoteRepository {
@@ -1033,5 +1080,11 @@ export class PostgresQuoteRepository implements QuoteRepository {
     return this.database.withTransaction((client) =>
       work(new PostgresQuoteRepositoryTransaction(client))
     );
+  }
+
+  async markIdempotencyFailed(input: IdempotencyFailureInput): Promise<void> {
+    await this.database.withTransaction(async (client) => {
+      await failIdempotency(client, input);
+    });
   }
 }

@@ -12,9 +12,11 @@ export interface PublicIssuedDocumentDto {
   readonly generatedAt: string | null;
   readonly pdf: {
     readonly documentRef: string | null;
+    readonly sha256: string | null;
   };
   readonly html: {
     readonly documentRef: string | null;
+    readonly sha256: string | null;
   };
 }
 
@@ -80,10 +82,12 @@ export function toPublicIssuedDocument(
       renderVersion: null,
       generatedAt: null,
       pdf: {
-        documentRef: null
+        documentRef: null,
+        sha256: null
       },
       html: {
-        documentRef: null
+        documentRef: null,
+        sha256: null
       }
     };
   }
@@ -94,15 +98,20 @@ export function toPublicIssuedDocument(
     renderVersion: issuedDocument.renderVersion,
     generatedAt: issuedDocument.generatedAt,
     pdf: {
-      documentRef: null
+      documentRef: null,
+      sha256: issuedDocument.pdfSha256
     },
     html: {
-      documentRef: null
+      documentRef: null,
+      sha256: issuedDocument.htmlSha256
     }
   };
 }
 
-export function toPublicQuoteDto(snapshot: QuoteSnapshot): PublicQuoteDto {
+export function toPublicQuoteDto(
+  snapshot: QuoteSnapshot,
+  issuedDocument = toPublicIssuedDocument(snapshot.issuedDocument)
+): PublicQuoteDto {
   return {
     quoteId: snapshot.quoteId,
     quoteNumber: snapshot.quoteNumber,
@@ -124,14 +133,17 @@ export function toPublicQuoteDto(snapshot: QuoteSnapshot): PublicQuoteDto {
       supersedesQuoteId: snapshot.supersedesQuoteId,
       supersededByQuoteId: snapshot.supersededByQuoteId
     },
-    issuedDocument: toPublicIssuedDocument(snapshot.issuedDocument),
+    issuedDocument,
     timestamps: snapshot.timestamps
   };
 }
 
-export function toPublicQuoteListDto(result: QuoteListResult): PublicQuoteListDto {
+export function toPublicQuoteListDto(
+  result: QuoteListResult,
+  mapIssuedDocument?: (quote: QuoteSnapshot) => PublicIssuedDocumentDto
+): PublicQuoteListDto {
   return {
-    items: result.items.map(toPublicQuoteDto),
+    items: result.items.map((quote) => toPublicQuoteDto(quote, mapIssuedDocument?.(quote))),
     pagination: result.pagination
   };
 }

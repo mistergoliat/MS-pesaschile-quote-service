@@ -12,6 +12,7 @@ type HttpErrorCode =
   | ApplicationErrorCode
   | "missing_authentication"
   | "invalid_authentication"
+  | "document_not_found"
   | "internal_server_error"
   | "validation_error";
 
@@ -124,6 +125,8 @@ export function toHttpError(error: unknown): HttpError {
       statusCode:
         error.code === "quote_not_found"
           ? 404
+          : error.code === "document_generation_failed" || error.code === "document_storage_failed"
+            ? 503
           : error.code === "document_issuance_unavailable"
             ? 503
             : 409,

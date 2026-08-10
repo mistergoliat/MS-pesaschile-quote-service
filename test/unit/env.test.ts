@@ -14,7 +14,12 @@ describe("loadEnv", () => {
       SERVICE_NAME: "service",
       SERVICE_VERSION: "1.0.0",
       SERVICE_AUTH_TOKEN: "token",
-      HEALTHCHECK_DATABASE_TIMEOUT_MS: "1500"
+      HEALTHCHECK_DATABASE_TIMEOUT_MS: "1500",
+      QUOTE_COMPANY_NAME: "Pesas Chile SPA",
+      QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
+      QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
+      QUOTE_RENDER_VERSION: "quote-v1",
+      QUOTE_PDF_RENDER_TIMEOUT_MS: "15000"
     });
 
     expect(env.PORT).toBe(3001);
@@ -25,7 +30,9 @@ describe("loadEnv", () => {
     expect(() =>
       loadEnv({
         DATABASE_URL: "not-a-url",
-        SERVICE_AUTH_TOKEN: "token"
+        SERVICE_AUTH_TOKEN: "token",
+        QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
+        QUOTE_DOCUMENT_REF_SECRET: "test-document-secret"
       })
     ).toThrow();
   });
