@@ -1,5 +1,3 @@
-import crypto from "node:crypto";
-
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 
@@ -14,13 +12,14 @@ import {
   SOURCE_SYSTEMS
 } from "../../domain";
 import type { AppEnv } from "../../infrastructure/config/env";
+import type { QuoteDocumentAccessService } from "../../infrastructure/documents/document-access-service";
 import { HttpError, createValidationError } from "../errors";
 import {
-  toPublicIssuedDocument,
   toPublicQuoteAuditListDto,
   toPublicQuoteDto,
   toPublicQuoteListDto
 } from "../quote-presenter";
+import { assertServiceAuthentication } from "../service-auth";
 
 const UUID_SCHEMA = z.uuid();
 const QUOTE_NUMBER_PATTERN = /^[A-Za-z0-9._/-]+$/;
@@ -133,37 +132,6 @@ const paginatedAuditQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0)
 });
 
-function parseBearerToken(authorizationHeader: unknown, expectedToken: string): void {
-  if (typeof authorizationHeader !== "string" || authorizationHeader.trim().length === 0) {
-    throw new HttpError({
-      statusCode: 401,
-      code: "missing_authentication",
-      message: "Authentication is required"
-    });
-  }
-
-  const match = authorizationHeader.match(/^Bearer\s+(.+)$/i);
-
-  if (!match || !match[1]) {
-    throw new HttpError({
-      statusCode: 401,
-      code: "invalid_authentication",
-      message: "Authentication is invalid"
-    });
-  }
-
-  const actualToken = Buffer.from(match[1], "utf8");
-  const expected = Buffer.from(expectedToken, "utf8");
-
-  if (actualToken.length !== expected.length || !crypto.timingSafeEqual(actualToken, expected)) {
-    throw new HttpError({
-      statusCode: 401,
-      code: "invalid_authentication",
-      message: "Authentication is invalid"
-    });
-  }
-}
-
 function requireIdempotencyKey(request: FastifyRequest): string {
   const idempotencyKey = request.headers["idempotency-key"];
 
@@ -229,13 +197,14 @@ export function registerQuoteRoute(
   env: AppEnv,
   quoteService: QuoteService,
   clock: ClockPort,
-  documentIssuancePort: DocumentIssuancePort
+  documentIssuancePort: DocumentIssuancePort,
+  documentAccessService: QuoteDocumentAccessService
 ): void {
   app.register(
     (quoteApp) => {
       quoteApp.addHook("preHandler", (request, _reply, done) => {
         try {
-          parseBearerToken(request.headers.authorization, env.SERVICE_AUTH_TOKEN);
+          assertServiceAuthentication(request.headers.authorization, env.SERVICE_AUTH_TOKEN);
           done();
         } catch (error) {
           done(error as Error);
@@ -275,7 +244,14 @@ export function registerQuoteRoute(
           }
         });
 
-        return reply.status(201).send(toPublicQuoteDto(result.quote));
+        return reply
+          .status(201)
+          .send(
+            toPublicQuoteDto(
+              result.quote,
+              documentAccessService.toPublicIssuedDocument(result.quote.quoteId, result.quote.issuedDocument)
+            )
+          );
       });
 
       quoteApp.get("/by-number/:quoteNumber", async (request, reply) => {
@@ -294,7 +270,12 @@ export function registerQuoteRoute(
           });
         }
 
-        return reply.send(toPublicQuoteDto(quote));
+        return reply.send(
+          toPublicQuoteDto(
+            quote,
+            documentAccessService.toPublicIssuedDocument(quote.quoteId, quote.issuedDocument)
+          )
+        );
       });
 
       quoteApp.get("/", async (request, reply) => {
@@ -307,7 +288,11 @@ export function registerQuoteRoute(
           ...(query.revisionRootId ? { revisionRootId: query.revisionRootId } : {})
         });
 
-        return reply.send(toPublicQuoteListDto(result));
+        return reply.send(
+          toPublicQuoteListDto(result, (quote) =>
+            documentAccessService.toPublicIssuedDocument(quote.quoteId, quote.issuedDocument)
+          )
+        );
       });
 
       quoteApp.put("/:quoteId/draft", async (request, reply) => {
@@ -338,7 +323,12 @@ export function registerQuoteRoute(
           }
         });
 
-        return reply.send(toPublicQuoteDto(result.quote));
+        return reply.send(
+          toPublicQuoteDto(
+            result.quote,
+            documentAccessService.toPublicIssuedDocument(result.quote.quoteId, result.quote.issuedDocument)
+          )
+        );
       });
 
       quoteApp.post("/:quoteId/issue", async (request, reply) => {
@@ -366,7 +356,12 @@ export function registerQuoteRoute(
           documentIssuancePort
         );
 
-        return reply.send(toPublicQuoteDto(result.quote));
+        return reply.send(
+          toPublicQuoteDto(
+            result.quote,
+            documentAccessService.toPublicIssuedDocument(result.quote.quoteId, result.quote.issuedDocument)
+          )
+        );
       });
 
       quoteApp.post("/:quoteId/accept", async (request, reply) => {
@@ -391,7 +386,12 @@ export function registerQuoteRoute(
           }
         });
 
-        return reply.send(toPublicQuoteDto(result.quote));
+        return reply.send(
+          toPublicQuoteDto(
+            result.quote,
+            documentAccessService.toPublicIssuedDocument(result.quote.quoteId, result.quote.issuedDocument)
+          )
+        );
       });
 
       quoteApp.post("/:quoteId/mark-paid", async (request, reply) => {
@@ -416,7 +416,12 @@ export function registerQuoteRoute(
           }
         });
 
-        return reply.send(toPublicQuoteDto(result.quote));
+        return reply.send(
+          toPublicQuoteDto(
+            result.quote,
+            documentAccessService.toPublicIssuedDocument(result.quote.quoteId, result.quote.issuedDocument)
+          )
+        );
       });
 
       quoteApp.post("/:quoteId/cancel", async (request, reply) => {
@@ -441,7 +446,12 @@ export function registerQuoteRoute(
           }
         });
 
-        return reply.send(toPublicQuoteDto(result.quote));
+        return reply.send(
+          toPublicQuoteDto(
+            result.quote,
+            documentAccessService.toPublicIssuedDocument(result.quote.quoteId, result.quote.issuedDocument)
+          )
+        );
       });
 
       quoteApp.post("/:quoteId/expire", async (request, reply) => {
@@ -466,7 +476,12 @@ export function registerQuoteRoute(
           }
         });
 
-        return reply.send(toPublicQuoteDto(result.quote));
+        return reply.send(
+          toPublicQuoteDto(
+            result.quote,
+            documentAccessService.toPublicIssuedDocument(result.quote.quoteId, result.quote.issuedDocument)
+          )
+        );
       });
 
       quoteApp.post("/:quoteId/revisions", async (request, reply) => {
@@ -493,7 +508,14 @@ export function registerQuoteRoute(
           }
         });
 
-        return reply.status(201).send(toPublicQuoteDto(result.quote));
+        return reply
+          .status(201)
+          .send(
+            toPublicQuoteDto(
+              result.quote,
+              documentAccessService.toPublicIssuedDocument(result.quote.quoteId, result.quote.issuedDocument)
+            )
+          );
       });
 
       quoteApp.get("/:quoteId/documents", async (request, reply) => {
@@ -508,7 +530,9 @@ export function registerQuoteRoute(
           });
         }
 
-        return reply.send(toPublicIssuedDocument(quote.issuedDocument));
+        return reply.send(
+          documentAccessService.toPublicIssuedDocument(quote.quoteId, quote.issuedDocument)
+        );
       });
 
       quoteApp.get("/:quoteId/audit", async (request, reply) => {
@@ -549,7 +573,12 @@ export function registerQuoteRoute(
           });
         }
 
-        return reply.send(toPublicQuoteDto(quote));
+        return reply.send(
+          toPublicQuoteDto(
+            quote,
+            documentAccessService.toPublicIssuedDocument(quote.quoteId, quote.issuedDocument)
+          )
+        );
       });
     },
     {

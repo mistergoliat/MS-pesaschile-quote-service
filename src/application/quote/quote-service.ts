@@ -148,6 +148,17 @@ function buildAuditEvent(
   return input;
 }
 
+async function releaseFailedIssueAttempt(
+  repository: QuoteRepository,
+  command: Pick<IssueQuoteCommand, "idempotencyKey" | "issuedAt">
+): Promise<void> {
+  await repository.markIdempotencyFailed({
+    idempotencyKey: command.idempotencyKey,
+    operationName: "issue_quote",
+    failedAt: command.issuedAt
+  });
+}
+
 function buildCommandRequestHash(command: CommandMetadata): string {
   return createCanonicalRequestHash(command.requestHashPayload ?? command);
 }
@@ -328,7 +339,12 @@ export class QuoteService {
           payloadSnapshot: {
             status: quoteAfter.status,
             total: quoteAfter.pricing.total,
-            validUntil: quoteAfter.validUntil
+            validUntil: quoteAfter.validUntil,
+            contentHash: quoteAfter.issuedDocument?.contentHash ?? null,
+            renderVersion: quoteAfter.issuedDocument?.renderVersion ?? null,
+            pdfSha256: quoteAfter.issuedDocument?.pdfSha256 ?? null,
+            htmlSha256: quoteAfter.issuedDocument?.htmlSha256 ?? null,
+            generatedAt: quoteAfter.issuedDocument?.generatedAt ?? null
           }
         })
     });
@@ -523,23 +539,124 @@ export class QuoteService {
     command: Omit<IssueQuoteCommand, "issuedDocument">,
     documentIssuancePort: DocumentIssuancePort
   ): Promise<QuoteOperationResult> {
-    const currentQuote = await this.findById(command.quoteId);
+    const operationName = "issue_quote";
+    const claim = await this.repository.withTransaction((transaction) =>
+      transaction.claimIdempotency({
+        idempotencyKey: command.idempotencyKey,
+        operationName,
+        requestHash: buildCommandRequestHash(command),
+        expiresAt: new Date(Date.parse(command.issuedAt) + 30 * 24 * 60 * 60 * 1000).toISOString()
+      })
+    );
 
-    if (!currentQuote) {
-      throw new ApplicationError(APPLICATION_ERROR_CODES.quoteNotFound, "Quote not found", {
-        quoteId: command.quoteId
-      });
+    if (claim.kind === "replay") {
+      return claim.responseBodySnapshot as QuoteOperationResult;
     }
 
-    const issuedDocument = await documentIssuancePort.issueForQuote({
-      quote: currentQuote,
-      issuedAt: command.issuedAt
-    });
+    let issuedDocument: IssuedDocumentSetInput | null = null;
 
-    return this.issueQuote({
-      ...command,
-      issuedDocument
-    });
+    try {
+      const currentQuote = await this.findById(command.quoteId);
+
+      if (!currentQuote) {
+        throw new ApplicationError(APPLICATION_ERROR_CODES.quoteNotFound, "Quote not found", {
+          quoteId: command.quoteId
+        });
+      }
+
+      issuedDocument = await documentIssuancePort.issueForQuote({
+        quote: currentQuote,
+        issuedAt: command.issuedAt,
+        operationId: command.idempotencyKey
+      });
+
+      const finalizedIssuedDocument = issuedDocument;
+
+      return await this.repository.withTransaction(async (transaction) => {
+        const current = await transaction.findById(command.quoteId);
+
+        if (!current) {
+          throw new ApplicationError(APPLICATION_ERROR_CODES.quoteNotFound, "Quote not found", {
+            quoteId: command.quoteId
+          });
+        }
+
+        let updated: Quote;
+
+        try {
+          updated = current.issue({
+            issuedDocument: finalizedIssuedDocument,
+            issuedAt: command.issuedAt,
+            expectedVersion: command.expectedVersion
+          });
+        } catch (error) {
+          normalizeApplicationError(error);
+        }
+
+        const result = {
+          quote: updated.toSnapshot()
+        } satisfies QuoteOperationResult;
+
+        await transaction.persistExistingQuote({
+          quote: updated,
+          expectedVersion: command.expectedVersion,
+          auditEvents: [
+            buildAuditEvent({
+              quoteId: updated.quoteId,
+              quoteNumber: updated.quoteNumber,
+              action: "issued",
+              fromStatus: current.status,
+              toStatus: updated.status,
+              actorType: command.actor.type,
+              actorId: command.actor.id,
+              sourceSystem: command.source.system,
+              correlationId: command.source.correlationId ?? null,
+              idempotencyKey: command.idempotencyKey,
+              eventAt: command.issuedAt,
+              payloadSnapshot: {
+                status: updated.status,
+                total: updated.pricing.total,
+                validUntil: updated.validUntil,
+                contentHash: updated.issuedDocument?.contentHash ?? null,
+                renderVersion: updated.issuedDocument?.renderVersion ?? null,
+                pdfSha256: updated.issuedDocument?.pdfSha256 ?? null,
+                htmlSha256: updated.issuedDocument?.htmlSha256 ?? null,
+                generatedAt: updated.issuedDocument?.generatedAt ?? null
+              }
+            })
+          ],
+          idempotencyCompletion: buildIdempotencyCompletion(
+            operationName,
+            command.idempotencyKey,
+            result.quote,
+            "quote_issued",
+            command.issuedAt
+          )
+        });
+
+        return result;
+      });
+    } catch (error) {
+      if (issuedDocument) {
+        const persistedQuote = await this.findById(command.quoteId).catch(() => null);
+        const preserveIssuedDocument =
+          persistedQuote?.status === "issued" &&
+          persistedQuote.issuedDocument?.contentHash === issuedDocument.contentHash
+            ? persistedQuote.issuedDocument
+            : undefined;
+
+        await documentIssuancePort
+          .cleanupIssuedArtifacts({
+            quoteId: command.quoteId,
+            issuedDocument,
+            ...(preserveIssuedDocument ? { preserveIssuedDocument } : {})
+          })
+          .catch(() => undefined);
+      }
+
+      await releaseFailedIssueAttempt(this.repository, command).catch(() => undefined);
+      throw error;
+    }
   }
 
   private async transitionQuote(input: {

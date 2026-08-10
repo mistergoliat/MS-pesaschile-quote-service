@@ -17,10 +17,38 @@ interface PublicQuoteDto {
   readonly quoteNumber: string;
   readonly items: Array<{ lineId: string; unitPrice: string; taxRate: string }>;
   readonly pricing: { subtotal: string; taxAmount: string; total: string };
-  readonly issuedDocument: { available: boolean };
+  readonly issuedDocument: {
+    readonly available: boolean;
+    readonly contentHash?: string | null;
+    readonly renderVersion?: string | null;
+    readonly generatedAt?: string | null;
+    readonly pdf?: {
+      readonly documentRef: string | null;
+      readonly sha256: string | null;
+    };
+    readonly html?: {
+      readonly documentRef: string | null;
+      readonly sha256: string | null;
+    };
+  };
   readonly status: string;
   readonly version: number;
   readonly revision: { rootId: string };
+}
+
+interface PublicIssuedDocumentDto {
+  readonly available: boolean;
+  readonly contentHash: string | null;
+  readonly renderVersion: string | null;
+  readonly generatedAt: string | null;
+  readonly pdf: {
+    readonly documentRef: string | null;
+    readonly sha256: string | null;
+  };
+  readonly html: {
+    readonly documentRef: string | null;
+    readonly sha256: string | null;
+  };
 }
 
 interface QuoteListResponse {
@@ -331,7 +359,7 @@ describe("Quote HTTP API", () => {
         method: "GET",
         path: `/v1/quotes/by-number/${created.body!.quoteNumber}`
       });
-      const documents = await context.request({
+      const documents = await context.request<PublicIssuedDocumentDto>({
         method: "GET",
         path: `/v1/quotes/${created.body!.quoteId}/documents`
       });
@@ -349,10 +377,12 @@ describe("Quote HTTP API", () => {
         renderVersion: null,
         generatedAt: null,
         pdf: {
-          documentRef: null
+          documentRef: null,
+          sha256: null
         },
         html: {
-          documentRef: null
+          documentRef: null,
+          sha256: null
         }
       });
       expect(missing).toMatchObject({
@@ -448,14 +478,14 @@ describe("Quote HTTP API", () => {
     });
   }, HTTP_INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("returns 503 for /issue before T05 and leaves the quote untouched", async () => {
+  it("issues a quote with durable document metadata and idempotency completion", async () => {
     await withContext(async (context) => {
       const created = await createDraftViaHttp(context);
-      const issueResponse = await context.request({
+      const issueResponse = await context.request<PublicQuoteDto>({
         method: "POST",
         path: `/v1/quotes/${created.body!.quoteId}/issue`,
         headers: {
-          "Idempotency-Key": "issue-disabled"
+          "Idempotency-Key": "issue-success"
         },
         body: {
           expectedVersion: 1,
@@ -476,18 +506,28 @@ describe("Quote HTTP API", () => {
           where operation_name = 'issue_quote'
         `
       );
+      const documents = await context.request<PublicIssuedDocumentDto>({
+        method: "GET",
+        path: `/v1/quotes/${created.body!.quoteId}/documents`
+      });
 
-      expect(issueResponse).toMatchObject({
-        status: 503,
-        body: {
-          error: {
-            code: "document_issuance_unavailable"
-          }
+      expect(issueResponse.status).toBe(200);
+      expect(issueResponse.body).toMatchObject({
+        status: "issued",
+        version: 2,
+        issuedDocument: {
+          available: true,
+          renderVersion: "quote-v1"
         }
       });
-      expect(persisted?.status).toBe("draft");
-      expect(audit.items.some((event) => event.action === "issued")).toBe(false);
-      expect(idempotencyRows.rows[0]?.count).toBe("0");
+      expect(typeof issueResponse.body?.issuedDocument.pdf?.documentRef).toBe("string");
+      expect(typeof issueResponse.body?.issuedDocument.html?.documentRef).toBe("string");
+      expect(issueResponse.body?.issuedDocument.pdf?.sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(issueResponse.body?.issuedDocument.html?.sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(persisted?.status).toBe("issued");
+      expect(audit.items.filter((event) => event.action === "issued")).toHaveLength(1);
+      expect(idempotencyRows.rows[0]?.count).toBe("1");
+      expect(documents.body).toEqual(issueResponse.body?.issuedDocument);
     });
   }, HTTP_INTEGRATION_TEST_TIMEOUT_MS);
 

@@ -11,6 +11,7 @@ import {
 } from "../helpers/postgres-quote-test-context";
 
 const { Client } = pg;
+const POSTGRES_INTEGRATION_TEST_TIMEOUT_MS = 30_000;
 
 function buildCreateDraftCommand(
   overrides: Partial<CreateDraftQuoteCommand> = {}
@@ -136,7 +137,7 @@ describe("PostgreSQL quote persistence", () => {
         await client.end();
       }
     });
-  });
+  }, POSTGRES_INTEGRATION_TEST_TIMEOUT_MS);
 
   it("generates concurrent-safe monotonic quote numbers", async () => {
     await withContext(async (context) => {
@@ -565,7 +566,12 @@ describe("PostgreSQL quote persistence", () => {
         SERVICE_NAME: "pesaschile-quote-service",
         SERVICE_VERSION: "0.1.0-test",
         SERVICE_AUTH_TOKEN: "token",
-        HEALTHCHECK_DATABASE_TIMEOUT_MS: 1000
+        HEALTHCHECK_DATABASE_TIMEOUT_MS: 1000,
+        QUOTE_COMPANY_NAME: "Pesas Chile SPA",
+        QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
+        QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
+        QUOTE_RENDER_VERSION: "quote-v1",
+        QUOTE_PDF_RENDER_TIMEOUT_MS: 15000
       });
       const restartedService = new QuoteService(
         new PostgresQuoteRepository(restartedDatabase)

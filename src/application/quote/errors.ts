@@ -4,7 +4,9 @@ export const APPLICATION_ERROR_CODES = {
   idempotencyKeyReusedWithDifferentPayload: "idempotency_key_reused_with_different_payload",
   idempotencyRequestInProgress: "idempotency_request_in_progress",
   quoteAlreadySuperseded: "quote_already_superseded",
-  documentIssuanceUnavailable: "document_issuance_unavailable"
+  documentIssuanceUnavailable: "document_issuance_unavailable",
+  documentGenerationFailed: "document_generation_failed",
+  documentStorageFailed: "document_storage_failed"
 } as const;
 
 export type ApplicationErrorCode =
