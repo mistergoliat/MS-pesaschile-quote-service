@@ -15,10 +15,14 @@ import {
   ApplicationError
 } from "./errors";
 import { createCanonicalRequestHash } from "./canonical-json";
+import type { DocumentIssuancePort } from "./ports/document-issuance-port";
 import type {
   IdempotencyCompletionInput,
+  QuoteAuditListInput,
+  QuoteAuditListResult,
   QuoteAuditEventRecord,
-  QuoteAuditEventSnapshot,
+  QuoteListFilters,
+  QuoteListResult,
   QuoteOperationResult,
   QuoteRepository,
   QuoteRevisionOperationResult
@@ -32,6 +36,7 @@ interface CommandMetadata {
   readonly actor: ActorRefInput;
   readonly source: SourceRefInput;
   readonly idempotencyKey: string;
+  readonly requestHashPayload?: unknown;
 }
 
 export interface CreateDraftQuoteCommand extends CommandMetadata {
@@ -143,6 +148,10 @@ function buildAuditEvent(
   return input;
 }
 
+function buildCommandRequestHash(command: CommandMetadata): string {
+  return createCanonicalRequestHash(command.requestHashPayload ?? command);
+}
+
 function buildIdempotencyCompletion(
   operationName: string,
   idempotencyKey: string,
@@ -190,7 +199,7 @@ export class QuoteService {
       const claim = await transaction.claimIdempotency({
         idempotencyKey: command.idempotencyKey,
         operationName,
-        requestHash: createCanonicalRequestHash(command),
+        requestHash: buildCommandRequestHash(command),
         expiresAt: new Date(Date.parse(command.createdAt) + 30 * 24 * 60 * 60 * 1000).toISOString()
       });
 
@@ -403,7 +412,7 @@ export class QuoteService {
       const claim = await transaction.claimIdempotency({
         idempotencyKey: command.idempotencyKey,
         operationName,
-        requestHash: createCanonicalRequestHash(command),
+        requestHash: buildCommandRequestHash(command),
         expiresAt: new Date(Date.parse(command.createdAt) + 30 * 24 * 60 * 60 * 1000).toISOString()
       });
 
@@ -502,8 +511,35 @@ export class QuoteService {
     return (await this.repository.findByQuoteNumber(quoteNumber))?.toSnapshot() ?? null;
   }
 
-  async listAuditEvents(quoteId: string): Promise<readonly QuoteAuditEventSnapshot[]> {
-    return this.repository.listAuditEvents(quoteId);
+  async listQuotes(filters: QuoteListFilters): Promise<QuoteListResult> {
+    return this.repository.listQuotes(filters);
+  }
+
+  async listAuditEvents(input: QuoteAuditListInput): Promise<QuoteAuditListResult> {
+    return this.repository.listAuditEvents(input);
+  }
+
+  async issueQuoteWithDocuments(
+    command: Omit<IssueQuoteCommand, "issuedDocument">,
+    documentIssuancePort: DocumentIssuancePort
+  ): Promise<QuoteOperationResult> {
+    const currentQuote = await this.findById(command.quoteId);
+
+    if (!currentQuote) {
+      throw new ApplicationError(APPLICATION_ERROR_CODES.quoteNotFound, "Quote not found", {
+        quoteId: command.quoteId
+      });
+    }
+
+    const issuedDocument = await documentIssuancePort.issueForQuote({
+      quote: currentQuote,
+      issuedAt: command.issuedAt
+    });
+
+    return this.issueQuote({
+      ...command,
+      issuedDocument
+    });
   }
 
   private async transitionQuote(input: {
@@ -558,7 +594,7 @@ export class QuoteService {
       const claim = await transaction.claimIdempotency({
         idempotencyKey: input.command.idempotencyKey,
         operationName: input.operationName,
-        requestHash: createCanonicalRequestHash(input.command),
+        requestHash: buildCommandRequestHash(input.command),
         expiresAt: new Date(Date.parse(input.loadTimestamp) + 30 * 24 * 60 * 60 * 1000).toISOString()
       });
 

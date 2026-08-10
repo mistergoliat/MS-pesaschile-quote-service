@@ -3,7 +3,8 @@ export const APPLICATION_ERROR_CODES = {
   optimisticConcurrencyConflict: "optimistic_concurrency_conflict",
   idempotencyKeyReusedWithDifferentPayload: "idempotency_key_reused_with_different_payload",
   idempotencyRequestInProgress: "idempotency_request_in_progress",
-  quoteAlreadySuperseded: "quote_already_superseded"
+  quoteAlreadySuperseded: "quote_already_superseded",
+  documentIssuanceUnavailable: "document_issuance_unavailable"
 } as const;
 
 export type ApplicationErrorCode =
