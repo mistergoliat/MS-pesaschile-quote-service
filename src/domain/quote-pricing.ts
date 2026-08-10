@@ -1,4 +1,5 @@
-import { sumMoney, type MoneyAmount, type SupportedCurrency } from "./money";
+import { DOMAIN_ERROR_CODES, DomainError } from "./errors";
+import { MoneyAmount, sumMoney, type SupportedCurrency } from "./money";
 import type { QuoteLine } from "./quote-line";
 
 export interface QuotePricingState {
@@ -40,6 +41,40 @@ export class QuotePricing {
       subtotal,
       taxAmount,
       total
+    });
+  }
+
+  static rehydrate(
+    currency: SupportedCurrency,
+    input: QuotePricingState,
+    lines: readonly QuoteLine[]
+  ): QuotePricing {
+    const reCalculated = QuotePricing.fromLines(currency, lines).toSnapshot();
+
+    if (
+      input.subtotal !== reCalculated.subtotal ||
+      input.taxAmount !== reCalculated.taxAmount ||
+      input.total !== reCalculated.total
+    ) {
+      throw new DomainError(
+        DOMAIN_ERROR_CODES.invalidQuoteReference,
+        "Persisted quote pricing does not reconcile with persisted lines"
+      );
+    }
+
+    return new QuotePricing({
+      subtotal: MoneyAmount.from(currency, input.subtotal, {
+        field: "pricing.subtotal",
+        code: DOMAIN_ERROR_CODES.invalidMoneyAmount
+      }),
+      taxAmount: MoneyAmount.from(currency, input.taxAmount, {
+        field: "pricing.taxAmount",
+        code: DOMAIN_ERROR_CODES.invalidMoneyAmount
+      }),
+      total: MoneyAmount.from(currency, input.total, {
+        field: "pricing.total",
+        code: DOMAIN_ERROR_CODES.invalidMoneyAmount
+      })
     });
   }
 

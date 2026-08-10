@@ -184,6 +184,67 @@ export class QuoteLine {
     });
   }
 
+  static rehydrate(input: QuoteLineState, currency: SupportedCurrency): QuoteLine {
+    const quantity = parseDecimalInput(input.quantity, {
+      field: "items.quantity",
+      code: DOMAIN_ERROR_CODES.invalidLineQuantity
+    });
+    const unitPrice = MoneyAmount.from(currency, input.unitPrice, {
+      field: "items.unitPrice",
+      code: DOMAIN_ERROR_CODES.invalidLinePrice
+    });
+    const taxRate = parseDecimalInput(input.taxRate, {
+      field: "items.taxRate",
+      code: DOMAIN_ERROR_CODES.invalidTaxRate
+    });
+
+    const hydrated = QuoteLine.create(
+      {
+        lineId: input.lineId,
+        type: input.type,
+        externalItemId: input.externalItemId,
+        sku: input.sku,
+        description: input.description,
+        quantity,
+        unitPrice: input.unitPrice,
+        taxIncluded: input.taxIncluded,
+        taxRate
+      },
+      currency
+    );
+
+    const snapshot = hydrated.toSnapshot();
+
+    if (
+      snapshot.lineSubtotal !== input.lineSubtotal ||
+      snapshot.lineTax !== input.lineTax ||
+      snapshot.lineTotal !== input.lineTotal
+    ) {
+      throw new DomainError(
+        DOMAIN_ERROR_CODES.invalidQuoteReference,
+        "Persisted quote line totals do not reconcile with their inputs",
+        {
+          lineId: input.lineId
+        }
+      );
+    }
+
+    return new QuoteLine({
+      lineId: snapshot.lineId,
+      type: snapshot.type,
+      externalItemId: snapshot.externalItemId,
+      sku: snapshot.sku,
+      description: snapshot.description,
+      quantity,
+      unitPrice,
+      taxIncluded: snapshot.taxIncluded,
+      taxRate,
+      lineSubtotal: MoneyAmount.from(currency, snapshot.lineSubtotal),
+      lineTax: MoneyAmount.from(currency, snapshot.lineTax),
+      lineTotal: MoneyAmount.from(currency, snapshot.lineTotal)
+    });
+  }
+
   static calculateAmounts(input: {
     currency: SupportedCurrency;
     quantity: Decimal;

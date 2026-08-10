@@ -20,7 +20,7 @@ describe("database migrations", () => {
     await testDatabase.dispose();
   });
 
-  it("applies the baseline migration", async () => {
+  it("applies the baseline and quote persistence migrations", async () => {
     await runMigrations({
       databaseUrl: testDatabase.connectionString,
       direction: "up"
@@ -39,9 +39,78 @@ describe("database migrations", () => {
       const extensionResult = await client.query<{ extname: string }>(
         "select extname from pg_extension where extname = 'pgcrypto'"
       );
+      const quotesTableResult = await client.query<{ table_name: string }>(
+        `
+          select table_name
+          from information_schema.tables
+          where table_schema = 'quote_service'
+            and table_name in ('quotes', 'quote_lines', 'idempotency_keys', 'quote_audit_events')
+          order by table_name asc
+        `
+      );
+      const sequenceResult = await client.query<{ sequence_name: string }>(
+        `
+          select sequence_name
+          from information_schema.sequences
+          where sequence_schema = 'quote_service'
+            and sequence_name = 'quote_number_seq'
+        `
+      );
 
       expect(schemaResult.rowCount).toBe(1);
       expect(extensionResult.rowCount).toBe(1);
+      expect(quotesTableResult.rows.map((row) => row.table_name)).toEqual([
+        "idempotency_keys",
+        "quote_audit_events",
+        "quote_lines",
+        "quotes"
+      ]);
+      expect(sequenceResult.rowCount).toBe(1);
+    } finally {
+      await client.end();
+    }
+  });
+
+  it("rolls back only the T03 migration on a disposable database", async () => {
+    await runMigrations({
+      databaseUrl: testDatabase.connectionString,
+      direction: "up"
+    });
+    await runMigrations({
+      databaseUrl: testDatabase.connectionString,
+      direction: "down"
+    });
+
+    const client = new Client({
+      connectionString: testDatabase.connectionString
+    });
+
+    await client.connect();
+
+    try {
+      const tableResult = await client.query<{ table_name: string }>(
+        `
+          select table_name
+          from information_schema.tables
+          where table_schema = 'quote_service'
+            and table_name in ('quotes', 'quote_lines', 'idempotency_keys', 'quote_audit_events')
+        `
+      );
+      const sequenceResult = await client.query<{ sequence_name: string }>(
+        `
+          select sequence_name
+          from information_schema.sequences
+          where sequence_schema = 'quote_service'
+            and sequence_name = 'quote_number_seq'
+        `
+      );
+      const schemaResult = await client.query<{ schema_name: string }>(
+        "select schema_name from information_schema.schemata where schema_name = 'quote_service'"
+      );
+
+      expect(tableResult.rowCount).toBe(0);
+      expect(sequenceResult.rowCount).toBe(0);
+      expect(schemaResult.rowCount).toBe(1);
     } finally {
       await client.end();
     }
