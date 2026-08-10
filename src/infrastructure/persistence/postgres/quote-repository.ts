@@ -13,8 +13,12 @@ import type {
   PersistExistingQuoteInput,
   PersistNewQuoteInput,
   PersistRevisionInput,
+  QuoteAuditListInput,
+  QuoteAuditListResult,
   QuoteAuditEventRecord,
   QuoteAuditEventSnapshot,
+  QuoteListFilters,
+  QuoteListResult,
   QuoteRepository,
   QuoteRepositoryTransaction
 } from "../../../application/quote/ports/quote-repository";
@@ -260,6 +264,150 @@ async function fetchQuoteByWhere(
   }
 
   return Quote.rehydrate(mapQuoteSnapshot(quoteRow));
+}
+
+async function listQuotesByFilters(
+  queryable: SqlQueryable,
+  filters: QuoteListFilters
+): Promise<QuoteListResult> {
+  const values: unknown[] = [];
+  const whereClauses: string[] = [];
+
+  if (filters.opportunityId) {
+    values.push(filters.opportunityId);
+    whereClauses.push(`q.opportunity_id = $${values.length}`);
+  }
+
+  if (filters.status) {
+    values.push(filters.status);
+    whereClauses.push(`q.status = $${values.length}`);
+  }
+
+  if (filters.revisionRootId) {
+    values.push(filters.revisionRootId);
+    whereClauses.push(`q.revision_root_id = $${values.length}::uuid`);
+  }
+
+  values.push(filters.limit);
+  const limitParameter = `$${values.length}`;
+  values.push(filters.offset);
+  const offsetParameter = `$${values.length}`;
+
+  const whereSql = whereClauses.length > 0 ? `where ${whereClauses.join(" and ")}` : "";
+
+  const result = await queryable.query<QuoteRow>(
+    `
+      select
+        q.quote_id,
+        q.quote_number,
+        q.opportunity_id,
+        q.customer_id,
+        q.conversation_id,
+        q.actor_type,
+        q.actor_id,
+        q.source_system,
+        q.source_correlation_id,
+        q.status,
+        q.currency,
+        q.customer_snapshot,
+        q.subtotal::text as subtotal,
+        q.tax_amount::text as tax_amount,
+        q.total::text as total,
+        q.valid_until,
+        q.version,
+        q.revision_root_id,
+        q.previous_revision_id,
+        q.supersedes_quote_id,
+        q.superseded_by_quote_id,
+        q.issued_content_hash,
+        q.issued_render_version,
+        q.issued_pdf_storage_key,
+        q.issued_pdf_sha256,
+        q.issued_html_storage_key,
+        q.issued_html_sha256,
+        q.issued_document_generated_at,
+        q.created_at,
+        q.updated_at,
+        q.issued_at,
+        q.accepted_at,
+        q.paid_at,
+        q.cancelled_at,
+        q.expired_at,
+        coalesce(
+          jsonb_agg(
+            jsonb_build_object(
+              'lineId', ql.line_id::text,
+              'type', ql.type,
+              'externalItemId', ql.external_item_id,
+              'sku', ql.sku,
+              'description', ql.description,
+              'quantity', ql.quantity::text,
+              'unitPrice', ql.unit_price::text,
+              'taxIncluded', ql.tax_included,
+              'taxRate', ql.tax_rate::text,
+              'lineSubtotal', ql.line_subtotal::text,
+              'lineTax', ql.line_tax::text,
+              'lineTotal', ql.line_total::text
+            )
+            order by ql.display_order asc
+          ) filter (where ql.line_id is not null),
+          '[]'::jsonb
+        ) as items
+      from quote_service.quotes q
+      left join quote_service.quote_lines ql
+        on ql.quote_id = q.quote_id
+      ${whereSql}
+      group by
+        q.quote_id,
+        q.quote_number,
+        q.opportunity_id,
+        q.customer_id,
+        q.conversation_id,
+        q.actor_type,
+        q.actor_id,
+        q.source_system,
+        q.source_correlation_id,
+        q.status,
+        q.currency,
+        q.customer_snapshot,
+        q.subtotal,
+        q.tax_amount,
+        q.total,
+        q.valid_until,
+        q.version,
+        q.revision_root_id,
+        q.previous_revision_id,
+        q.supersedes_quote_id,
+        q.superseded_by_quote_id,
+        q.issued_content_hash,
+        q.issued_render_version,
+        q.issued_pdf_storage_key,
+        q.issued_pdf_sha256,
+        q.issued_html_storage_key,
+        q.issued_html_sha256,
+        q.issued_document_generated_at,
+        q.created_at,
+        q.updated_at,
+        q.issued_at,
+        q.accepted_at,
+        q.paid_at,
+        q.cancelled_at,
+        q.expired_at
+      order by q.created_at desc, q.quote_id desc
+      limit ${limitParameter}
+      offset ${offsetParameter}
+    `,
+    values
+  );
+
+  return {
+    items: result.rows.map((row) => Quote.rehydrate(mapQuoteSnapshot(row)).toSnapshot()),
+    pagination: {
+      limit: filters.limit,
+      offset: filters.offset,
+      count: result.rows.length
+    }
+  };
 }
 
 async function insertAuditEvents(
@@ -825,7 +973,11 @@ export class PostgresQuoteRepository implements QuoteRepository {
     return fetchQuoteByWhere(this.database, "q.quote_number = $1", quoteNumber);
   }
 
-  async listAuditEvents(quoteId: string): Promise<readonly QuoteAuditEventSnapshot[]> {
+  async listQuotes(filters: QuoteListFilters): Promise<QuoteListResult> {
+    return listQuotesByFilters(this.database, filters);
+  }
+
+  async listAuditEvents(input: QuoteAuditListInput): Promise<QuoteAuditListResult> {
     const result = await this.database.query<AuditEventRow>(
       `
         select
@@ -845,25 +997,34 @@ export class PostgresQuoteRepository implements QuoteRepository {
         from quote_service.quote_audit_events
         where quote_id = $1::uuid
         order by event_at asc, audit_event_id asc
+        limit $2
+        offset $3
       `,
-      [quoteId]
+      [input.quoteId, input.limit, input.offset]
     );
 
-    return result.rows.map((row) => ({
-      auditEventId: row.audit_event_id,
-      quoteId: row.quote_id,
-      quoteNumber: row.quote_number,
-      action: row.action,
-      fromStatus: row.from_status,
-      toStatus: row.to_status,
-      actorType: row.actor_type,
-      actorId: row.actor_id,
-      sourceSystem: row.source_system,
-      correlationId: row.correlation_id,
-      idempotencyKey: row.idempotency_key,
-      eventAt: row.event_at.toISOString(),
-      payloadSnapshot: row.payload_snapshot
-    }));
+    return {
+      items: result.rows.map((row) => ({
+        auditEventId: row.audit_event_id,
+        quoteId: row.quote_id,
+        quoteNumber: row.quote_number,
+        action: row.action,
+        fromStatus: row.from_status,
+        toStatus: row.to_status,
+        actorType: row.actor_type,
+        actorId: row.actor_id,
+        sourceSystem: row.source_system,
+        correlationId: row.correlation_id,
+        idempotencyKey: row.idempotency_key,
+        eventAt: row.event_at.toISOString(),
+        payloadSnapshot: row.payload_snapshot
+      })),
+      pagination: {
+        limit: input.limit,
+        offset: input.offset,
+        count: result.rows.length
+      }
+    };
   }
 
   async withTransaction<T>(

@@ -287,11 +287,15 @@ describe("PostgreSQL quote persistence", () => {
         ).rejects.toThrow("audit failure");
 
         const persisted = await context.service.findById(created.quote.quoteId);
-        const auditEvents = await context.service.listAuditEvents(created.quote.quoteId);
+        const auditEvents = await context.service.listAuditEvents({
+          quoteId: created.quote.quoteId,
+          limit: 50,
+          offset: 0
+        });
 
         expect(persisted?.version).toBe(1);
         expect(persisted?.customerSnapshot.name).toBe("Jane Doe");
-        expect(auditEvents).toHaveLength(1);
+        expect(auditEvents.items).toHaveLength(1);
       } finally {
         await client.end();
       }
@@ -448,13 +452,19 @@ describe("PostgreSQL quote persistence", () => {
 
       const predecessor = await context.service.findById(issued.quote.quoteId);
       const persistedRevision = await context.service.findById(revision.quote.quoteId);
-      const predecessorAudit = await context.service.listAuditEvents(issued.quote.quoteId);
+      const predecessorAudit = await context.service.listAuditEvents({
+        quoteId: issued.quote.quoteId,
+        limit: 50,
+        offset: 0
+      });
 
       expect(predecessor?.supersededByQuoteId).toBe(revision.quote.quoteId);
       expect(predecessor?.version).toBe(3);
       expect(persistedRevision?.status).toBe("draft");
       expect(persistedRevision?.previousRevisionId).toBe(issued.quote.quoteId);
-      expect(predecessorAudit.some((event) => event.action === "revision_created")).toBe(true);
+      expect(predecessorAudit.items.some((event) => event.action === "revision_created")).toBe(
+        true
+      );
     });
   });
 
@@ -564,11 +574,15 @@ describe("PostgreSQL quote persistence", () => {
       try {
         const replayed = await restartedService.createDraft(command);
         const recovered = await restartedService.findById(created.quote.quoteId);
-        const auditEvents = await restartedService.listAuditEvents(created.quote.quoteId);
+        const auditEvents = await restartedService.listAuditEvents({
+          quoteId: created.quote.quoteId,
+          limit: 50,
+          offset: 0
+        });
 
         expect(replayed).toEqual(created);
         expect(recovered).toEqual(created.quote);
-        expect(auditEvents).toHaveLength(1);
+        expect(auditEvents.items).toHaveLength(1);
       } finally {
         await restartedDatabase.close();
       }

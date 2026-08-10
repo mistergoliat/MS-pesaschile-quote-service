@@ -36,6 +36,35 @@ export interface QuoteAuditEventSnapshot extends QuoteAuditEventRecord {
   readonly auditEventId: string;
 }
 
+export interface OffsetPaginationInput {
+  readonly limit: number;
+  readonly offset: number;
+}
+
+export interface QuoteListFilters extends OffsetPaginationInput {
+  readonly opportunityId?: string;
+  readonly status?: QuoteStatus;
+  readonly revisionRootId?: string;
+}
+
+export interface QuoteListResult {
+  readonly items: readonly QuoteSnapshot[];
+  readonly pagination: OffsetPaginationInput & {
+    readonly count: number;
+  };
+}
+
+export interface QuoteAuditListInput extends OffsetPaginationInput {
+  readonly quoteId: string;
+}
+
+export interface QuoteAuditListResult {
+  readonly items: readonly QuoteAuditEventSnapshot[];
+  readonly pagination: OffsetPaginationInput & {
+    readonly count: number;
+  };
+}
+
 export interface IdempotencyClaimInput {
   readonly idempotencyKey: string;
   readonly operationName: string;
@@ -97,7 +126,8 @@ export interface QuoteRepositoryTransaction {
 export interface QuoteRepository {
   findById(quoteId: string): Promise<Quote | null>;
   findByQuoteNumber(quoteNumber: string): Promise<Quote | null>;
-  listAuditEvents(quoteId: string): Promise<readonly QuoteAuditEventSnapshot[]>;
+  listQuotes(filters: QuoteListFilters): Promise<QuoteListResult>;
+  listAuditEvents(input: QuoteAuditListInput): Promise<QuoteAuditListResult>;
   withTransaction<T>(work: (transaction: QuoteRepositoryTransaction) => Promise<T>): Promise<T>;
 }
 
