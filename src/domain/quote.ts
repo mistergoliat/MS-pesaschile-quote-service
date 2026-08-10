@@ -446,6 +446,85 @@ export class Quote {
     });
   }
 
+  static rehydrate(input: QuoteSnapshot): Quote {
+    if (!isSupportedCurrency(input.currency)) {
+      throw new DomainError(DOMAIN_ERROR_CODES.invalidCurrency, "Unsupported currency", {
+        currency: input.currency
+      });
+    }
+
+    const items = input.items.map((item) => QuoteLine.rehydrate(item, input.currency));
+    const pricing = QuotePricing.rehydrate(input.currency, input.pricing, items);
+
+    return new Quote({
+      quoteId: validateReference(input.quoteId, "quoteId"),
+      quoteNumber: validateQuoteNumber(input.quoteNumber),
+      opportunityId: validateReference(input.opportunityId, "opportunityId"),
+      customerId: validateOptionalReference(input.customerId, "customerId"),
+      conversationId: validateOptionalReference(input.conversationId, "conversationId"),
+      actor: ActorRef.create(input.actor),
+      source: SourceRef.create(input.source),
+      status: input.status,
+      currency: input.currency,
+      customerSnapshot: CustomerSnapshot.create(input.customerSnapshot),
+      items,
+      pricing,
+      validUntil: parseTimestamp(input.validUntil, {
+        field: "validUntil",
+        code: DOMAIN_ERROR_CODES.invalidValidUntil
+      }),
+      version: input.version,
+      revisionRootId: validateReference(input.revisionRootId, "revisionRootId"),
+      previousRevisionId: validateOptionalReference(input.previousRevisionId, "previousRevisionId"),
+      supersedesQuoteId: validateOptionalReference(input.supersedesQuoteId, "supersedesQuoteId"),
+      supersededByQuoteId: validateOptionalReference(
+        input.supersededByQuoteId,
+        "supersededByQuoteId"
+      ),
+      issuedDocument: input.issuedDocument ? IssuedDocumentSet.create(input.issuedDocument) : null,
+      timestamps: {
+        createdAt: parseTimestamp(input.timestamps.createdAt, {
+          field: "createdAt",
+          code: DOMAIN_ERROR_CODES.invalidQuoteReference
+        }),
+        updatedAt: parseTimestamp(input.timestamps.updatedAt, {
+          field: "updatedAt",
+          code: DOMAIN_ERROR_CODES.invalidQuoteReference
+        }),
+        issuedAt: input.timestamps.issuedAt
+          ? parseTimestamp(input.timestamps.issuedAt, {
+              field: "issuedAt",
+              code: DOMAIN_ERROR_CODES.invalidQuoteReference
+            })
+          : null,
+        acceptedAt: input.timestamps.acceptedAt
+          ? parseTimestamp(input.timestamps.acceptedAt, {
+              field: "acceptedAt",
+              code: DOMAIN_ERROR_CODES.invalidQuoteReference
+            })
+          : null,
+        paidAt: input.timestamps.paidAt
+          ? parseTimestamp(input.timestamps.paidAt, {
+              field: "paidAt",
+              code: DOMAIN_ERROR_CODES.invalidQuoteReference
+            })
+          : null,
+        cancelledAt: input.timestamps.cancelledAt
+          ? parseTimestamp(input.timestamps.cancelledAt, {
+              field: "cancelledAt",
+              code: DOMAIN_ERROR_CODES.invalidQuoteReference
+            })
+          : null,
+        expiredAt: input.timestamps.expiredAt
+          ? parseTimestamp(input.timestamps.expiredAt, {
+              field: "expiredAt",
+              code: DOMAIN_ERROR_CODES.invalidQuoteReference
+            })
+          : null
+      }
+    });
+  }
+
   get quoteId(): string {
     return this.#state.quoteId;
   }

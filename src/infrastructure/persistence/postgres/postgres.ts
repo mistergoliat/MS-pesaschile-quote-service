@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { Pool, type QueryResult, type QueryResultRow } from "pg";
+import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 
 import type {
   DatabaseHealthPort,
@@ -22,6 +22,22 @@ export class PostgresDatabase implements DatabaseHealthPort {
     values?: unknown[]
   ): Promise<QueryResult<T>> {
     return this.pool.query<T>(text, values);
+  }
+
+  public async withTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+
+    try {
+      await client.query("begin");
+      const result = await work(client);
+      await client.query("commit");
+      return result;
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   public async checkHealth(timeoutMs: number): Promise<DatabaseHealthStatus> {
@@ -52,4 +68,8 @@ export class PostgresDatabase implements DatabaseHealthPort {
   public async close(): Promise<void> {
     await this.pool.end();
   }
+}
+
+export interface SqlQueryable {
+  query<T extends QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<T>>;
 }

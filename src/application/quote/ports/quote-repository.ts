@@ -1,0 +1,112 @@
+import type {
+  ActorType,
+  Quote,
+  QuoteSnapshot,
+  QuoteStatus,
+  QuoteSupersessionLink,
+  SourceSystem
+} from "../../../domain";
+
+export type QuoteAuditAction =
+  | "draft_created"
+  | "draft_updated"
+  | "issued"
+  | "accepted"
+  | "paid"
+  | "cancelled"
+  | "expired"
+  | "revision_created";
+
+export interface QuoteAuditEventRecord {
+  readonly quoteId: string;
+  readonly quoteNumber: string;
+  readonly action: QuoteAuditAction;
+  readonly fromStatus: QuoteStatus | null;
+  readonly toStatus: QuoteStatus | null;
+  readonly actorType: ActorType;
+  readonly actorId: string;
+  readonly sourceSystem: SourceSystem;
+  readonly correlationId: string | null;
+  readonly idempotencyKey: string | null;
+  readonly eventAt: string;
+  readonly payloadSnapshot: Record<string, unknown>;
+}
+
+export interface QuoteAuditEventSnapshot extends QuoteAuditEventRecord {
+  readonly auditEventId: string;
+}
+
+export interface IdempotencyClaimInput {
+  readonly idempotencyKey: string;
+  readonly operationName: string;
+  readonly requestHash: string;
+  readonly expiresAt: string;
+}
+
+export type IdempotencyClaimResult =
+  | {
+      readonly kind: "claimed";
+    }
+  | {
+      readonly kind: "replay";
+      readonly responseCode: string;
+      readonly responseBodySnapshot: unknown;
+    };
+
+export interface IdempotencyCompletionInput {
+  readonly idempotencyKey: string;
+  readonly operationName: string;
+  readonly resourceType: "quote";
+  readonly resourceId: string;
+  readonly responseCode: string;
+  readonly responseBodySnapshot: unknown;
+  readonly completedAt: string;
+}
+
+export interface PersistNewQuoteInput {
+  readonly quote: Quote;
+  readonly auditEvents: readonly QuoteAuditEventRecord[];
+  readonly idempotencyCompletion: IdempotencyCompletionInput;
+}
+
+export interface PersistExistingQuoteInput {
+  readonly quote: Quote;
+  readonly expectedVersion: number;
+  readonly auditEvents: readonly QuoteAuditEventRecord[];
+  readonly idempotencyCompletion: IdempotencyCompletionInput;
+}
+
+export interface PersistRevisionInput {
+  readonly revision: Quote;
+  readonly predecessorLink: QuoteSupersessionLink;
+  readonly predecessorExpectedVersion: number;
+  readonly auditEvents: readonly QuoteAuditEventRecord[];
+  readonly idempotencyCompletion: IdempotencyCompletionInput;
+}
+
+export interface QuoteRepositoryTransaction {
+  allocateNextQuoteNumber(): Promise<string>;
+  findById(quoteId: string): Promise<Quote | null>;
+  findByQuoteNumber(quoteNumber: string): Promise<Quote | null>;
+  claimIdempotency(input: IdempotencyClaimInput): Promise<IdempotencyClaimResult>;
+  persistNewQuote(input: PersistNewQuoteInput): Promise<void>;
+  persistExistingQuote(input: PersistExistingQuoteInput): Promise<void>;
+  persistRevisionAtomically(input: PersistRevisionInput): Promise<void>;
+}
+
+export interface QuoteRepository {
+  findById(quoteId: string): Promise<Quote | null>;
+  findByQuoteNumber(quoteNumber: string): Promise<Quote | null>;
+  listAuditEvents(quoteId: string): Promise<readonly QuoteAuditEventSnapshot[]>;
+  withTransaction<T>(work: (transaction: QuoteRepositoryTransaction) => Promise<T>): Promise<T>;
+}
+
+export interface QuoteOperationResult {
+  readonly quote: QuoteSnapshot;
+}
+
+export interface QuoteRevisionOperationResult {
+  readonly quote: QuoteSnapshot;
+  readonly predecessorLink: QuoteSupersessionLink;
+}
+
