@@ -3,13 +3,20 @@ import os from "node:os";
 import path from "node:path";
 
 import type { ClockPort } from "../../src/application/ports/clock-port";
-import type { AppEnv } from "../../src/infrastructure/config/env";
-import { buildApplication, type ApplicationContext } from "../../src/app";
+import { loadEnv, type AppEnv } from "../../src/infrastructure/config/env";
+import {
+  buildApplication,
+  type ApplicationContext,
+  type BuildApplicationOverrides
+} from "../../src/app";
 import { runMigrations } from "../../src/infrastructure/persistence/postgres/migrator";
 import {
   createTestDatabase,
   type TestDatabaseHandle
 } from "./test-database";
+import { resolveTestBrowserExecutablePath } from "./browser-executable-path";
+
+export type TestClock = IncrementingClock | MutableClock;
 
 export class IncrementingClock implements ClockPort {
   private currentMs: number;
@@ -24,6 +31,26 @@ export class IncrementingClock implements ClockPort {
     const current = new Date(this.currentMs);
     this.currentMs += this.stepMs;
     return current;
+  }
+}
+
+export class MutableClock implements ClockPort {
+  private currentMs: number;
+
+  constructor(startIso: string) {
+    this.currentMs = Date.parse(startIso);
+  }
+
+  now(): Date {
+    return new Date(this.currentMs);
+  }
+
+  set(iso: string): void {
+    this.currentMs = Date.parse(iso);
+  }
+
+  advanceMs(milliseconds: number): void {
+    this.currentMs += milliseconds;
   }
 }
 
@@ -44,8 +71,9 @@ export interface CreateHttpQuoteTestContextOptions {
   readonly storageRoot?: string;
   readonly preserveDatabaseOnDispose?: boolean;
   readonly preserveStorageOnDispose?: boolean;
-  readonly clock?: IncrementingClock;
+  readonly clock?: TestClock;
   readonly envOverrides?: Partial<AppEnv>;
+  readonly applicationOverrides?: Omit<BuildApplicationOverrides, "clock">;
 }
 
 export interface HttpQuoteTestContext {
@@ -53,7 +81,7 @@ export interface HttpQuoteTestContext {
   readonly appContext: ApplicationContext;
   readonly baseUrl: string;
   readonly authToken: string;
-  readonly clock: IncrementingClock;
+  readonly clock: TestClock;
   readonly storageRoot: string;
   request<T = unknown>(input: {
     method: "GET" | "POST" | "PUT";
@@ -72,6 +100,22 @@ export interface HttpQuoteTestContext {
   dispose(): Promise<void>;
 }
 
+function toRawEnvOverrides(overrides?: Partial<AppEnv>): Record<string, string> {
+  if (!overrides) {
+    return {};
+  }
+
+  const entries = Object.entries(overrides).flatMap(([key, value]) => {
+    if (value === undefined) {
+      return [];
+    }
+
+    return [[key, String(value)] as const];
+  });
+
+  return Object.fromEntries(entries);
+}
+
 export async function createHttpQuoteTestContext(
   options: CreateHttpQuoteTestContextOptions = {}
 ): Promise<HttpQuoteTestContext> {
@@ -83,36 +127,38 @@ export async function createHttpQuoteTestContext(
   const storageRoot =
     options.storageRoot ??
     (await fsPromises.mkdtemp(path.join(os.tmpdir(), "quote-documents-http-")));
+  const browserExecutablePath = resolveTestBrowserExecutablePath();
 
   await runMigrations({
     databaseUrl: databaseHandle.connectionString,
     direction: "up"
   });
 
-  const env = {
+  const env = loadEnv({
     NODE_ENV: "test" as const,
     HOST: "127.0.0.1",
-    PORT: 0,
+    PORT: "0",
     LOG_LEVEL: "silent" as const,
     DATABASE_URL: databaseHandle.connectionString,
     DATABASE_SSL_MODE: "disable" as const,
     SERVICE_NAME: "pesaschile-quote-service",
     SERVICE_VERSION: "0.1.0-test",
     SERVICE_AUTH_TOKEN: authToken,
-    HEALTHCHECK_DATABASE_TIMEOUT_MS: 1000,
+    HEALTHCHECK_DATABASE_TIMEOUT_MS: "1000",
     QUOTE_COMPANY_NAME: "Pesas Chile SPA",
     QUOTE_DOCUMENT_STORAGE_ROOT: storageRoot,
     QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
     QUOTE_RENDER_VERSION: "quote-v1",
-    QUOTE_PDF_RENDER_TIMEOUT_MS: 15000,
-    ...(process.env.QUOTE_PDF_EXECUTABLE_PATH
-      ? { QUOTE_PDF_EXECUTABLE_PATH: process.env.QUOTE_PDF_EXECUTABLE_PATH }
+    QUOTE_PDF_RENDER_TIMEOUT_MS: "15000",
+    ...(browserExecutablePath
+      ? { QUOTE_PDF_EXECUTABLE_PATH: browserExecutablePath }
       : {}),
-    ...options.envOverrides
-  } satisfies AppEnv;
+    ...toRawEnvOverrides(options.envOverrides)
+  });
 
   const appContext = buildApplication(env, {
-    clock
+    clock,
+    ...options.applicationOverrides
   });
 
   const baseUrl = await appContext.app.listen({

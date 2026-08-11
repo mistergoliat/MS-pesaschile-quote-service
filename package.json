@@ -18,10 +18,15 @@
     "db:compose:up": "docker compose up -d postgres",
     "db:compose:down": "docker compose down",
     "db:migrate": "tsx src/scripts/migrate.ts up",
+    "db:migrate:runtime": "node dist/scripts/migrate.js up",
     "db:migrate:down": "tsx src/scripts/migrate.ts down",
+    "db:migrate:down:runtime": "node dist/scripts/migrate.js down",
     "db:check": "tsx src/scripts/db-check.ts",
+    "db:check:runtime": "node dist/scripts/db-check.js",
     "documents:cleanup": "tsx src/scripts/cleanup-orphan-documents.ts",
-    "pdf:install-browser": "npx puppeteer browsers install chrome-headless-shell@stable"
+    "documents:cleanup:runtime": "node dist/scripts/cleanup-orphan-documents.js",
+    "pdf:install-browser": "npx puppeteer browsers install chrome-headless-shell@stable",
+    "smoke:docker": "node scripts/docker-smoke.mjs"
   },
   "engines": {
     "node": ">=20.0.0"

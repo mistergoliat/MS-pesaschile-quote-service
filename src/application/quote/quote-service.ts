@@ -17,6 +17,8 @@ import {
 import { createCanonicalRequestHash } from "./canonical-json";
 import type { DocumentIssuancePort } from "./ports/document-issuance-port";
 import type {
+  ExpiredIssuedQuoteCandidateInput,
+  IssuedDocumentArtifactRecord,
   IdempotencyCompletionInput,
   QuoteAuditListInput,
   QuoteAuditListResult,
@@ -95,6 +97,23 @@ export interface CreateQuoteRevisionCommand extends CommandMetadata {
   readonly expectedVersion: number;
   readonly createdAt: string;
   readonly validUntil?: string;
+}
+
+export interface ExpireQuotesBatchCommand {
+  readonly now: string;
+  readonly limit: number;
+  readonly actor: {
+    readonly type: "system" | "service";
+    readonly id: string;
+  };
+  readonly source: SourceRefInput & {
+    readonly system: "scheduler";
+  };
+}
+
+export interface ExpireQuotesBatchResult {
+  readonly processedCount: number;
+  readonly quoteIds: readonly string[];
 }
 
 function withGeneratedLineIds(items: readonly ItemDraftInput[]): QuoteLineInput[] {
@@ -533,6 +552,57 @@ export class QuoteService {
 
   async listAuditEvents(input: QuoteAuditListInput): Promise<QuoteAuditListResult> {
     return this.repository.listAuditEvents(input);
+  }
+
+  async listIssuedDocumentArtifacts(): Promise<readonly IssuedDocumentArtifactRecord[]> {
+    return this.repository.listIssuedDocumentArtifacts();
+  }
+
+  async expireQuotesBatch(command: ExpireQuotesBatchCommand): Promise<ExpireQuotesBatchResult> {
+    return this.repository.withTransaction(async (transaction) => {
+      const candidates = await transaction.findExpiredIssuedCandidates({
+        now: command.now,
+        limit: command.limit
+      } satisfies ExpiredIssuedQuoteCandidateInput);
+      const quoteIds: string[] = [];
+
+      for (const candidate of candidates) {
+        const updated = candidate.expire({
+          now: command.now,
+          expectedVersion: candidate.version
+        });
+
+        await transaction.persistExistingQuote({
+          quote: updated,
+          expectedVersion: candidate.version,
+          auditEvents: [
+            buildAuditEvent({
+              quoteId: updated.quoteId,
+              quoteNumber: updated.quoteNumber,
+              action: "expired",
+              fromStatus: candidate.status,
+              toStatus: updated.status,
+              actorType: command.actor.type,
+              actorId: command.actor.id,
+              sourceSystem: command.source.system,
+              correlationId: command.source.correlationId ?? null,
+              idempotencyKey: null,
+              eventAt: command.now,
+              payloadSnapshot: {
+                expiredAt: command.now
+              }
+            })
+          ]
+        });
+
+        quoteIds.push(updated.quoteId);
+      }
+
+      return {
+        processedCount: quoteIds.length,
+        quoteIds
+      };
+    });
   }
 
   async issueQuoteWithDocuments(

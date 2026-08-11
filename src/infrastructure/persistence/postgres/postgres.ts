@@ -13,7 +13,13 @@ export class PostgresDatabase implements DatabaseHealthPort {
   public constructor(env: AppEnv) {
     this.pool = new Pool({
       connectionString: env.DATABASE_URL,
-      ssl: env.DATABASE_SSL_MODE === "require" ? { rejectUnauthorized: false } : false
+      ssl: env.DATABASE_SSL_MODE === "require" ? { rejectUnauthorized: false } : false,
+      max: env.DB_POOL_MAX,
+      idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT_MS,
+      connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT_MS,
+      query_timeout: env.DB_QUERY_TIMEOUT_MS,
+      statement_timeout: env.DB_QUERY_TIMEOUT_MS,
+      application_name: env.SERVICE_NAME
     });
   }
 
@@ -67,6 +73,39 @@ export class PostgresDatabase implements DatabaseHealthPort {
 
   public async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  public async withAdvisoryLock<T>(
+    lockKey: number,
+    work: () => Promise<T>
+  ): Promise<{ readonly acquired: boolean; readonly result?: T }> {
+    const client = await this.pool.connect();
+
+    try {
+      const lockResult = await client.query<{ acquired: boolean }>(
+        "select pg_try_advisory_lock($1) as acquired",
+        [lockKey]
+      );
+
+      if (!lockResult.rows[0]?.acquired) {
+        return {
+          acquired: false
+        };
+      }
+
+      try {
+        return {
+          acquired: true,
+          result: await work()
+        };
+      } finally {
+        await client
+          .query("select pg_advisory_unlock($1)", [lockKey])
+          .catch(() => undefined);
+      }
+    } finally {
+      client.release();
+    }
   }
 }
 

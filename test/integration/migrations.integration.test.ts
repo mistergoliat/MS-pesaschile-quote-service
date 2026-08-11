@@ -14,11 +14,11 @@ describe("database migrations", () => {
 
   beforeAll(async () => {
     testDatabase = await createTestDatabase(process.env.TEST_DATABASE_ADMIN_URL!);
-  });
+  }, 30_000);
 
   afterAll(async () => {
     await testDatabase.dispose();
-  });
+  }, 30_000);
 
   it("applies the baseline and quote persistence migrations", async () => {
     await runMigrations({

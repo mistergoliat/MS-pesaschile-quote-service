@@ -4,6 +4,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["test/**/*.test.ts"],
-    globalSetup: ["./test/global/global-setup.ts"]
+    globalSetup: ["./test/global/global-setup.ts"],
+    maxWorkers: 1,
+    maxConcurrency: 1
   }
 });

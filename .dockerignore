@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.gitignore
+.env
+.env.*
+coverage
+var
+tmp
+.tmp-puppeteer
+*.log
+docker-compose.override.yml

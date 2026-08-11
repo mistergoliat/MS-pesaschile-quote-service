@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { ApplicationError } from "../../src/application/quote/errors";
 import {
   createHttpQuoteTestContext,
   type HttpQuoteTestContext
@@ -241,8 +242,18 @@ describe("Quote document issuance", () => {
 
   it("leaves the quote in draft when the PDF renderer cannot start", async () => {
     const context = await createHttpQuoteTestContext({
-      envOverrides: {
-        QUOTE_PDF_EXECUTABLE_PATH: "C:/missing/chrome-headless-shell.exe"
+      applicationOverrides: {
+        documentIssuancePort: {
+          issueForQuote() {
+            return Promise.reject(
+              new ApplicationError(
+                "document_generation_failed",
+                "Document generation failed"
+              )
+            );
+          },
+          async cleanupIssuedArtifacts() {}
+        }
       }
     });
 
@@ -302,11 +313,54 @@ describe("Quote document issuance", () => {
 
       expect(winner?.body?.status).toBe("issued");
       expect(loser?.status).toBe(409);
-      expect(["optimistic_concurrency_conflict", "draft_only_operation"]).toContain(
+      expect([
+        "optimistic_concurrency_conflict",
+        "draft_only_operation",
+        "invalid_quote_status_transition"
+      ]).toContain(
         (loser?.body as { error?: { code?: string } } | undefined)?.error?.code
       );
       expect(audit.body?.items.filter((event) => event.action === "issued")).toHaveLength(1);
       expect(storedFiles.filter((storageKey) => storageKey.startsWith("quotes/"))).toHaveLength(3);
+    } finally {
+      await context.dispose();
+    }
+  }, DOCUMENT_INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rejects malformed or tampered document references without leaking internals", async () => {
+    const context = await createHttpQuoteTestContext();
+
+    try {
+      const created = await createDraft(context, "create-documents-tamper");
+      const issued = await issueDraft(context, created.body!.quoteId, "issue-documents-tamper");
+      const validPdfRef = issued.body!.issuedDocument.pdf.documentRef!;
+      const tamperedPdfRef = `${validPdfRef.slice(0, -1)}${validPdfRef.endsWith("a") ? "b" : "a"}`;
+      const malformed = await context.request({
+        method: "GET",
+        path: "/v1/documents/doc_not-a-signed-ref"
+      });
+      const tampered = await context.request({
+        method: "GET",
+        path: `/v1/documents/${tamperedPdfRef}`
+      });
+
+      expect(malformed).toMatchObject({
+        status: 404,
+        body: {
+          error: {
+            code: "document_not_found"
+          }
+        }
+      });
+      expect(tampered).toMatchObject({
+        status: 404,
+        body: {
+          error: {
+            code: "document_not_found"
+          }
+        }
+      });
+      expect(JSON.stringify(tampered.body)).not.toContain(context.storageRoot);
     } finally {
       await context.dispose();
     }

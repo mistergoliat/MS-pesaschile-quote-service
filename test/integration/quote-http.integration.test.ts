@@ -348,6 +348,36 @@ describe("Quote HTTP API", () => {
     });
   }, HTTP_INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("enforces the configured HTTP body limit", async () => {
+    const context = await createHttpQuoteTestContext({
+      envOverrides: {
+        HTTP_BODY_LIMIT_BYTES: 1_024
+      }
+    });
+
+    try {
+      const response = await context.requestRaw({
+        method: "POST",
+        path: "/v1/quotes",
+        headers: {
+          "Idempotency-Key": "body-too-large"
+        },
+        body: {
+          ...buildCreateQuoteBody(),
+          customerSnapshot: {
+            ...buildCreateQuoteBody().customerSnapshot,
+            address: "X".repeat(5_000)
+          }
+        }
+      });
+
+      expect(response.status).toBe(413);
+      expect(response.bodyText).toContain("Request body is too large");
+    } finally {
+      await context.dispose();
+    }
+  }, HTTP_INTEGRATION_TEST_TIMEOUT_MS);
+
   it("reads quotes by id and by number and exposes documents safely", async () => {
     await withContext(async (context) => {
       const created = await createDraftViaHttp(context);
