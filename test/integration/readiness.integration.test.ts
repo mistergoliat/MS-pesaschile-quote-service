@@ -143,4 +143,24 @@ describe("Readiness operations", () => {
       })
     ).rejects.toThrow(/PDF renderer/i);
   }, 30_000);
+
+  it("fails fast on startup when the configured renderer path exists but cannot render PDFs", async () => {
+    const { env } = await createBaseEnv();
+    const appContext = buildApplication(
+      loadEnv({
+        ...toRawEnv(env),
+        QUOTE_PDF_EXECUTABLE_PATH: process.execPath
+      })
+    );
+    managedApps.push({
+      close: () => appContext.app.close()
+    });
+
+    await expect(
+      appContext.app.listen({
+        host: env.HOST,
+        port: env.PORT
+      })
+    ).rejects.toThrow(/PDF renderer/i);
+  }, 30_000);
 });
