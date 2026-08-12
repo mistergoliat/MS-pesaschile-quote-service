@@ -61,9 +61,42 @@ const envSchema = z
   QUOTE_EXPIRATION_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(25),
   QUOTE_DOCUMENT_CLEANUP_ENABLED: booleanEnvSchema(false),
   QUOTE_DOCUMENT_CLEANUP_INTERVAL_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
-  QUOTE_DOCUMENT_ORPHAN_MIN_AGE_MS: z.coerce.number().int().min(1_000).max(86_400_000).default(300_000)
+  QUOTE_DOCUMENT_ORPHAN_MIN_AGE_MS: z.coerce.number().int().min(1_000).max(86_400_000).default(300_000),
+  QUOTE_EMAIL_PROVIDER: z.enum(["disabled", "gmail"]).default("disabled"),
+  QUOTE_EMAIL_DELIVERY_INTERVAL_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(30_000),
+  QUOTE_EMAIL_DELIVERY_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(25),
+  QUOTE_EMAIL_DELIVERY_LEASE_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(120_000),
+  QUOTE_EMAIL_DELIVERY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  QUOTE_EMAIL_FROM_ADDRESS: z.string().trim().min(1).optional(),
+  QUOTE_EMAIL_FROM_NAME: z.string().trim().min(1).optional(),
+  QUOTE_EMAIL_REPLY_TO: z.string().trim().min(1).optional(),
+  GOOGLE_GMAIL_CLIENT_ID: z.string().trim().min(1).optional(),
+  GOOGLE_GMAIL_CLIENT_SECRET: z.string().trim().min(1).optional(),
+  GOOGLE_GMAIL_REFRESH_TOKEN: z.string().trim().min(1).optional(),
+  GOOGLE_GMAIL_USER: z.string().trim().min(1).optional()
 })
   .superRefine((env, context) => {
+    if (env.QUOTE_EMAIL_PROVIDER === "gmail") {
+      const requiredKeys = [
+        "GOOGLE_GMAIL_CLIENT_ID",
+        "GOOGLE_GMAIL_CLIENT_SECRET",
+        "GOOGLE_GMAIL_REFRESH_TOKEN",
+        "GOOGLE_GMAIL_USER",
+        "QUOTE_EMAIL_FROM_ADDRESS",
+        "QUOTE_EMAIL_FROM_NAME"
+      ] as const;
+
+      for (const key of requiredKeys) {
+        if (env[key] === undefined) {
+          context.addIssue({
+            code: "custom",
+            path: [key],
+            message: `${key} is required when QUOTE_EMAIL_PROVIDER=gmail`
+          });
+        }
+      }
+    }
+
     if (env.NODE_ENV !== "production") {
       return;
     }

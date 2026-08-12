@@ -44,7 +44,14 @@ describe("database migrations", () => {
           select table_name
           from information_schema.tables
           where table_schema = 'quote_service'
-            and table_name in ('quotes', 'quote_lines', 'idempotency_keys', 'quote_audit_events')
+            and table_name in (
+              'quotes',
+              'quote_lines',
+              'idempotency_keys',
+              'quote_audit_events',
+              'quote_deliveries',
+              'quote_email_outbox'
+            )
           order by table_name asc
         `
       );
@@ -62,6 +69,8 @@ describe("database migrations", () => {
       expect(quotesTableResult.rows.map((row) => row.table_name)).toEqual([
         "idempotency_keys",
         "quote_audit_events",
+        "quote_deliveries",
+        "quote_email_outbox",
         "quote_lines",
         "quotes"
       ]);
@@ -71,7 +80,7 @@ describe("database migrations", () => {
     }
   });
 
-  it("rolls back only the T03 migration on a disposable database", async () => {
+  it("rolls back only the latest delivery migration on a disposable database", async () => {
     await runMigrations({
       databaseUrl: testDatabase.connectionString,
       direction: "up"
@@ -93,7 +102,14 @@ describe("database migrations", () => {
           select table_name
           from information_schema.tables
           where table_schema = 'quote_service'
-            and table_name in ('quotes', 'quote_lines', 'idempotency_keys', 'quote_audit_events')
+            and table_name in (
+              'quotes',
+              'quote_lines',
+              'idempotency_keys',
+              'quote_audit_events',
+              'quote_deliveries',
+              'quote_email_outbox'
+            )
         `
       );
       const sequenceResult = await client.query<{ sequence_name: string }>(
@@ -108,8 +124,13 @@ describe("database migrations", () => {
         "select schema_name from information_schema.schemata where schema_name = 'quote_service'"
       );
 
-      expect(tableResult.rowCount).toBe(0);
-      expect(sequenceResult.rowCount).toBe(0);
+      expect(tableResult.rows.map((row) => row.table_name).sort()).toEqual([
+        "idempotency_keys",
+        "quote_audit_events",
+        "quote_lines",
+        "quotes"
+      ]);
+      expect(sequenceResult.rowCount).toBe(1);
       expect(schemaResult.rowCount).toBe(1);
     } finally {
       await client.end();

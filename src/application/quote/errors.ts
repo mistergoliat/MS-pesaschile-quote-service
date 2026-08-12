@@ -6,7 +6,12 @@ export const APPLICATION_ERROR_CODES = {
   quoteAlreadySuperseded: "quote_already_superseded",
   documentIssuanceUnavailable: "document_issuance_unavailable",
   documentGenerationFailed: "document_generation_failed",
-  documentStorageFailed: "document_storage_failed"
+  documentStorageFailed: "document_storage_failed",
+  emailDeliveryUnavailable: "email_delivery_unavailable",
+  quoteEmailDeliveryNotAllowed: "quote_email_delivery_not_allowed",
+  quoteEmailRecipientMissing: "quote_email_recipient_missing",
+  invalidEmailRecipient: "invalid_email_recipient",
+  quoteDeliveryNotFound: "quote_delivery_not_found"
 } as const;
 
 export type ApplicationErrorCode =

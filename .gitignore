@@ -6,3 +6,5 @@ coverage/
 *.log
 .tmp-puppeteer/
 .tmp-previews/
+
+var/

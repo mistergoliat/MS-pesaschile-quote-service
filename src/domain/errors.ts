@@ -16,6 +16,8 @@ export const DOMAIN_ERROR_CODES = {
   invalidQuoteNumber: "invalid_quote_number",
   invalidQuoteReference: "invalid_quote_reference",
   invalidMoneyAmount: "invalid_money_amount",
+  invalidEmailAddress: "invalid_email_address",
+  invalidQuoteDelivery: "invalid_quote_delivery",
   optimisticConcurrencyConflict: "optimistic_concurrency_conflict",
   quoteAlreadySuperseded: "quote_already_superseded"
 } as const;

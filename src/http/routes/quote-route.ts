@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import type { ClockPort } from "../../application/ports/clock-port";
+import type { QuoteDeliveryService } from "../../application/quote-delivery/quote-delivery-service";
 import type { DocumentIssuancePort } from "../../application/quote/ports/document-issuance-port";
 import type { QuoteService } from "../../application/quote/quote-service";
 import {
@@ -14,6 +15,10 @@ import {
 import type { AppEnv } from "../../infrastructure/config/env";
 import type { QuoteDocumentAccessService } from "../../infrastructure/documents/document-access-service";
 import { HttpError, createValidationError } from "../errors";
+import {
+  toPublicQuoteDeliveryDto,
+  toPublicQuoteDeliveryListDto
+} from "../quote-delivery-presenter";
 import {
   toPublicQuoteAuditListDto,
   toPublicQuoteDto,
@@ -109,8 +114,19 @@ const revisionBodySchema = z.object({
   newValidUntil: z.string().datetime({ offset: true }).optional()
 });
 
+const sendQuoteEmailBodySchema = z.object({
+  recipient: z.string().trim().max(DOMAIN_LIMITS.delivery.maxRecipientLength).optional(),
+  actor: actorSchema,
+  source: sourceSchema
+});
+
 const quoteIdParamsSchema = z.object({
   quoteId: UUID_SCHEMA
+});
+
+const quoteDeliveryParamsSchema = z.object({
+  quoteId: UUID_SCHEMA,
+  deliveryId: UUID_SCHEMA
 });
 
 const quoteNumberParamsSchema = z.object({
@@ -128,6 +144,12 @@ const listQuotesQuerySchema = z.object({
 });
 
 const paginatedAuditQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0)
+});
+
+const quoteDeliveryListQuerySchema = z.object({
+  channel: z.enum(["email"]).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0)
 });
@@ -196,6 +218,7 @@ export function registerQuoteRoute(
   app: FastifyInstance,
   env: AppEnv,
   quoteService: QuoteService,
+  quoteDeliveryService: QuoteDeliveryService,
   clock: ClockPort,
   documentIssuancePort: DocumentIssuancePort,
   documentAccessService: QuoteDocumentAccessService
@@ -559,6 +582,83 @@ export function registerQuoteRoute(
         });
 
         return reply.send(toPublicQuoteAuditListDto(auditResult));
+      });
+
+      quoteApp.post("/:quoteId/send-email", async (request, reply) => {
+        const idempotencyKey = requireIdempotencyKey(request);
+        const params = parseSchema(quoteIdParamsSchema, request.params, "Invalid quoteId parameter");
+        const body = parseSchema(
+          sendQuoteEmailBodySchema,
+          request.body,
+          "Invalid send quote email body"
+        );
+        const requestedAt = clock.now().toISOString();
+        const result = await quoteDeliveryService.requestQuoteEmailDelivery({
+          quoteId: params.quoteId,
+          ...(body.recipient !== undefined ? { recipient: body.recipient } : {}),
+          actor: body.actor,
+          source: toSourceInput(body.source),
+          requestedAt,
+          idempotencyKey
+        });
+
+        return reply.status(202).send(toPublicQuoteDeliveryDto(result.delivery));
+      });
+
+      quoteApp.get("/:quoteId/deliveries", async (request, reply) => {
+        const params = parseSchema(quoteIdParamsSchema, request.params, "Invalid quoteId parameter");
+        const query = parseSchema(
+          quoteDeliveryListQuerySchema,
+          request.query,
+          "Invalid quote delivery list query"
+        );
+        const quote = await quoteService.findById(params.quoteId);
+
+        if (!quote) {
+          throw new HttpError({
+            statusCode: 404,
+            code: "quote_not_found",
+            message: "Quote not found"
+          });
+        }
+
+        const result = await quoteDeliveryService.listDeliveries({
+          quoteId: params.quoteId,
+          ...(query.channel ? { channel: query.channel } : {}),
+          limit: query.limit,
+          offset: query.offset
+        });
+
+        return reply.send(toPublicQuoteDeliveryListDto(result));
+      });
+
+      quoteApp.get("/:quoteId/deliveries/:deliveryId", async (request, reply) => {
+        const params = parseSchema(
+          quoteDeliveryParamsSchema,
+          request.params,
+          "Invalid quote delivery parameters"
+        );
+        const quote = await quoteService.findById(params.quoteId);
+
+        if (!quote) {
+          throw new HttpError({
+            statusCode: 404,
+            code: "quote_not_found",
+            message: "Quote not found"
+          });
+        }
+
+        const delivery = await quoteDeliveryService.findDelivery(params.quoteId, params.deliveryId);
+
+        if (!delivery) {
+          throw new HttpError({
+            statusCode: 404,
+            code: "quote_delivery_not_found",
+            message: "Quote delivery not found"
+          });
+        }
+
+        return reply.send(toPublicQuoteDeliveryDto(delivery));
       });
 
       quoteApp.get("/:quoteId", async (request, reply) => {
