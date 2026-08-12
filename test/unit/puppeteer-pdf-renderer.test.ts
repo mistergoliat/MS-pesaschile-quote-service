@@ -43,7 +43,8 @@ describe("PuppeteerPdfRenderer", () => {
     expect(launchMock).toHaveBeenCalledWith({
       headless: true,
       executablePath: "/custom/chrome",
-      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      timeout: 1_500
     });
     expect(page.setContent).toHaveBeenCalled();
     expect(page.pdf).toHaveBeenCalled();
