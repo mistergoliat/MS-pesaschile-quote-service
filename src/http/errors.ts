@@ -70,6 +70,10 @@ function inferValidationCode(issues: readonly ZodIssue[]): HttpErrorCode {
     return "invalid_customer_snapshot";
   }
 
+  if (hasPath(issues, "recipient")) {
+    return "invalid_email_recipient";
+  }
+
   if (hasPath(issues, "quantity")) {
     return "invalid_line_quantity";
   }
@@ -137,11 +141,16 @@ export function toHttpError(error: unknown): HttpError {
     return new HttpError({
       statusCode:
         error.code === "quote_not_found"
+          || error.code === "quote_delivery_not_found"
           ? 404
-          : error.code === "document_generation_failed" || error.code === "document_storage_failed"
+        : error.code === "document_generation_failed" || error.code === "document_storage_failed"
             ? 503
-          : error.code === "document_issuance_unavailable"
+          : error.code === "document_issuance_unavailable" ||
+              error.code === "email_delivery_unavailable"
             ? 503
+          : error.code === "invalid_email_recipient" ||
+              error.code === "quote_email_recipient_missing"
+            ? 400
             : 409,
       code: error.code,
       message: error.message,

@@ -1,6 +1,9 @@
 import Fastify, { type FastifyInstance } from "fastify";
 
 import type { ClockPort } from "./application/ports/clock-port";
+import type { EmailSenderPort } from "./application/quote-delivery/ports/email-sender-port";
+import { QuoteDeliveryService } from "./application/quote-delivery/quote-delivery-service";
+import { QuoteEmailWorker } from "./application/quote-delivery/quote-email-worker";
 import type { DocumentIssuancePort } from "./application/quote/ports/document-issuance-port";
 import { QuoteService } from "./application/quote/quote-service";
 import type { AppEnv } from "./infrastructure/config/env";
@@ -10,12 +13,14 @@ import { FilesystemDocumentArtifactStorage } from "./infrastructure/documents/fi
 import { OrphanDocumentCleanupService } from "./infrastructure/documents/orphan-document-cleanup-service";
 import { PuppeteerPdfRenderer } from "./infrastructure/documents/puppeteer-pdf-renderer";
 import { RealDocumentIssuanceAdapter } from "./infrastructure/documents/real-document-issuance";
+import { GmailEmailSender } from "./infrastructure/email/gmail-email-sender";
 import {
   createDefaultPesasChileSenderSignatureV1,
   createPesasChileBrandV1,
   QUOTE_EMAIL_TEMPLATE_VERSION
 } from "./infrastructure/branding/pesaschile-brand-v1";
 import { PostgresDatabase } from "./infrastructure/persistence/postgres/postgres";
+import { PostgresQuoteDeliveryRepository } from "./infrastructure/persistence/postgres/quote-delivery-repository";
 import { PostgresQuoteRepository } from "./infrastructure/persistence/postgres/quote-repository";
 import { ApplicationLifecycleState } from "./infrastructure/runtime/application-lifecycle-state";
 import { BackgroundJobManager } from "./infrastructure/runtime/background-job-manager";
@@ -28,6 +33,8 @@ export interface ApplicationContext {
   app: FastifyInstance;
   database: PostgresDatabase;
   quoteService: QuoteService;
+  quoteDeliveryService: QuoteDeliveryService;
+  quoteEmailWorker: QuoteEmailWorker | null;
   clock: ClockPort;
   documentIssuancePort: DocumentIssuancePort;
   documentAccessService: QuoteDocumentAccessService;
@@ -38,6 +45,7 @@ export interface ApplicationContext {
 export interface BuildApplicationOverrides {
   readonly clock?: ClockPort;
   readonly documentIssuancePort?: DocumentIssuancePort;
+  readonly emailSenderPort?: EmailSenderPort;
 }
 
 export function buildApplication(
@@ -59,7 +67,12 @@ export function buildApplication(
 
   const database = new PostgresDatabase(env);
   const quoteRepository = new PostgresQuoteRepository(database);
+  const quoteDeliveryRepository = new PostgresQuoteDeliveryRepository(database);
   const quoteService = new QuoteService(quoteRepository);
+  const quoteDeliveryService = new QuoteDeliveryService(
+    quoteDeliveryRepository,
+    env.QUOTE_EMAIL_PROVIDER !== "disabled"
+  );
   const clock = overrides.clock ?? new SystemClock();
   const brandTheme = createPesasChileBrandV1({
     legalName: env.QUOTE_COMPANY_NAME
@@ -86,10 +99,35 @@ export function buildApplication(
   const lifecycleState = new ApplicationLifecycleState();
   const cleanupService = new OrphanDocumentCleanupService(artifactStorage, quoteService);
   const startupValidator = new StartupValidator(env, database, artifactStorage, pdfRenderer);
+  const emailSenderPort =
+    overrides.emailSenderPort ??
+    (env.QUOTE_EMAIL_PROVIDER === "gmail"
+      ? new GmailEmailSender({
+          clientId: env.GOOGLE_GMAIL_CLIENT_ID!,
+          clientSecret: env.GOOGLE_GMAIL_CLIENT_SECRET!,
+          refreshToken: env.GOOGLE_GMAIL_REFRESH_TOKEN!,
+          user: env.GOOGLE_GMAIL_USER!
+        })
+      : undefined);
+  const quoteEmailWorker =
+    emailSenderPort && env.QUOTE_EMAIL_PROVIDER !== "disabled"
+      ? new QuoteEmailWorker(
+          quoteDeliveryRepository,
+          artifactStorage,
+          emailSenderPort,
+          {
+            address: env.QUOTE_EMAIL_FROM_ADDRESS!,
+            name: env.QUOTE_EMAIL_FROM_NAME!
+          },
+          env.QUOTE_EMAIL_REPLY_TO ?? null,
+          env.QUOTE_EMAIL_DELIVERY_MAX_ATTEMPTS
+        )
+      : null;
   const backgroundJobs = new BackgroundJobManager({
     env,
     clock,
     quoteService,
+    quoteEmailWorker,
     cleanupService,
     database,
     logger: app.log
@@ -128,6 +166,7 @@ export function buildApplication(
     pdfRenderer,
     lifecycleState,
     quoteService,
+    quoteDeliveryService,
     clock,
     documentIssuancePort,
     documentAccessService
@@ -137,6 +176,8 @@ export function buildApplication(
     app,
     database,
     quoteService,
+    quoteDeliveryService,
+    quoteEmailWorker,
     clock,
     documentIssuancePort,
     documentAccessService,

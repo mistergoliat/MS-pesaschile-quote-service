@@ -26,6 +26,12 @@ export const DOMAIN_LIMITS = Object.freeze({
   references: {
     maxReferenceIdLength: 200
   },
+  delivery: {
+    maxRecipientLength: 320,
+    maxProviderMessageIdLength: 500,
+    maxFailureCodeLength: 100,
+    maxFailureMessageLength: 500
+  },
   document: {
     maxRenderVersionLength: 100,
     maxStorageKeyLength: 500,
@@ -51,3 +57,6 @@ export const ACTOR_TYPES = ["sales_agent", "operator", "system", "service"] as c
 export const SOURCE_SYSTEMS = ["crm_customer_360", "manual", "api", "scheduler"] as const;
 
 export const SUPPORTED_CURRENCIES = ["CLP"] as const;
+
+export const QUOTE_DELIVERY_CHANNELS = ["email"] as const;
+export const QUOTE_DELIVERY_STATUSES = ["pending", "processing", "sent", "failed"] as const;

@@ -15,7 +15,11 @@ export type QuoteAuditAction =
   | "paid"
   | "cancelled"
   | "expired"
-  | "revision_created";
+  | "revision_created"
+  | "email_delivery_requested"
+  | "email_delivery_sent"
+  | "email_delivery_failed"
+  | "email_delivery_retry_scheduled";
 
 export interface QuoteAuditEventRecord {
   readonly quoteId: string;
@@ -99,7 +103,7 @@ export type IdempotencyClaimResult =
 export interface IdempotencyCompletionInput {
   readonly idempotencyKey: string;
   readonly operationName: string;
-  readonly resourceType: "quote";
+  readonly resourceType: "quote" | "quote_delivery";
   readonly resourceId: string;
   readonly responseCode: string;
   readonly responseBodySnapshot: unknown;

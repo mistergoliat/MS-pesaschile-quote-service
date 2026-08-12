@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import type { ClockPort } from "../../application/ports/clock-port";
+import type { QuoteDeliveryService } from "../../application/quote-delivery/quote-delivery-service";
 import type { DocumentIssuancePort } from "../../application/quote/ports/document-issuance-port";
 import type { QuoteService } from "../../application/quote/quote-service";
 import type { AppEnv } from "../../infrastructure/config/env";
@@ -21,11 +22,20 @@ export function registerRoutes(
   pdfRenderer: PuppeteerPdfRenderer,
   lifecycleState: ApplicationLifecycleState,
   quoteService: QuoteService,
+  quoteDeliveryService: QuoteDeliveryService,
   clock: ClockPort,
   documentIssuancePort: DocumentIssuancePort,
   documentAccessService: QuoteDocumentAccessService
 ): void {
   registerHealthRoute(app, env, database, storage, pdfRenderer, lifecycleState);
-  registerQuoteRoute(app, env, quoteService, clock, documentIssuancePort, documentAccessService);
+  registerQuoteRoute(
+    app,
+    env,
+    quoteService,
+    quoteDeliveryService,
+    clock,
+    documentIssuancePort,
+    documentAccessService
+  );
   registerDocumentRoute(app, env, quoteService, documentAccessService);
 }

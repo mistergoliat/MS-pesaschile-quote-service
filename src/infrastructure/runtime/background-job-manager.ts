@@ -1,4 +1,5 @@
 import type { QuoteService } from "../../application/quote/quote-service";
+import type { QuoteEmailWorker } from "../../application/quote-delivery/quote-email-worker";
 import type { ClockPort } from "../../application/ports/clock-port";
 import type { AppEnv } from "../config/env";
 import type { PostgresDatabase } from "../persistence/postgres/postgres";
@@ -16,11 +17,13 @@ type Logger = {
 export class BackgroundJobManager {
   private readonly expirationRunner: PeriodicJobRunner | null;
   private readonly cleanupRunner: PeriodicJobRunner | null;
+  private readonly emailDeliveryRunner: PeriodicJobRunner | null;
 
   constructor(input: {
     readonly env: AppEnv;
     readonly clock: ClockPort;
     readonly quoteService: QuoteService;
+    readonly quoteEmailWorker: QuoteEmailWorker | null;
     readonly cleanupService: OrphanDocumentCleanupService;
     readonly database: PostgresDatabase;
     readonly logger: Logger;
@@ -52,6 +55,36 @@ export class BackgroundJobManager {
                 quoteIds: result.quoteIds
               },
               "Expiration iteration completed"
+            );
+          }
+        })
+      : null;
+    this.emailDeliveryRunner = input.quoteEmailWorker
+      ? new PeriodicJobRunner({
+          name: "quote-email-delivery",
+          intervalMs: input.env.QUOTE_EMAIL_DELIVERY_INTERVAL_MS,
+          logger: input.logger,
+          execute: async () => {
+            const quoteEmailWorker = input.quoteEmailWorker;
+
+            if (!quoteEmailWorker) {
+              return;
+            }
+
+            const now = input.clock.now().toISOString();
+            const result = await quoteEmailWorker.runPendingDeliveries({
+              now,
+              limit: input.env.QUOTE_EMAIL_DELIVERY_BATCH_SIZE,
+              leaseMs: input.env.QUOTE_EMAIL_DELIVERY_LEASE_MS
+            });
+
+            input.logger.info(
+              {
+                job: "quote-email-delivery",
+                processedCount: result.processedCount,
+                deliveryIds: result.deliveryIds
+              },
+              "Email delivery iteration completed"
             );
           }
         })
@@ -95,11 +128,16 @@ export class BackgroundJobManager {
 
   start(): void {
     this.expirationRunner?.start();
+    this.emailDeliveryRunner?.start();
     this.cleanupRunner?.start();
   }
 
   async stop(): Promise<void> {
-    await Promise.all([this.expirationRunner?.stop(), this.cleanupRunner?.stop()]);
+    await Promise.all([
+      this.expirationRunner?.stop(),
+      this.emailDeliveryRunner?.stop(),
+      this.cleanupRunner?.stop()
+    ]);
   }
 
   async runExpirationNow(): Promise<void> {
@@ -108,5 +146,9 @@ export class BackgroundJobManager {
 
   async runCleanupNow(): Promise<void> {
     await this.cleanupRunner?.runNow();
+  }
+
+  async runEmailDeliveryNow(): Promise<void> {
+    await this.emailDeliveryRunner?.runNow();
   }
 }

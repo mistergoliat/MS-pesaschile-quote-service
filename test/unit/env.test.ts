@@ -19,11 +19,19 @@ describe("loadEnv", () => {
       QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
       QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
       QUOTE_RENDER_VERSION: "quote-v1",
-      QUOTE_PDF_RENDER_TIMEOUT_MS: "15000"
+      QUOTE_PDF_RENDER_TIMEOUT_MS: "15000",
+      QUOTE_EMAIL_PROVIDER: "gmail",
+      GOOGLE_GMAIL_CLIENT_ID: "gmail-client-id",
+      GOOGLE_GMAIL_CLIENT_SECRET: "gmail-client-secret",
+      GOOGLE_GMAIL_REFRESH_TOKEN: "gmail-refresh-token",
+      GOOGLE_GMAIL_USER: "quotes@pesaschile.cl",
+      QUOTE_EMAIL_FROM_ADDRESS: "quotes@pesaschile.cl",
+      QUOTE_EMAIL_FROM_NAME: "Pesas Chile"
     });
 
     expect(env.PORT).toBe(3001);
     expect(env.DATABASE_SSL_MODE).toBe("disable");
+    expect(env.QUOTE_EMAIL_PROVIDER).toBe("gmail");
   });
 
   it("rejects an invalid database url", () => {
