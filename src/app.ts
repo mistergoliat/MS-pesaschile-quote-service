@@ -10,6 +10,11 @@ import { FilesystemDocumentArtifactStorage } from "./infrastructure/documents/fi
 import { OrphanDocumentCleanupService } from "./infrastructure/documents/orphan-document-cleanup-service";
 import { PuppeteerPdfRenderer } from "./infrastructure/documents/puppeteer-pdf-renderer";
 import { RealDocumentIssuanceAdapter } from "./infrastructure/documents/real-document-issuance";
+import {
+  createDefaultPesasChileSenderSignatureV1,
+  createPesasChileBrandV1,
+  QUOTE_EMAIL_TEMPLATE_VERSION
+} from "./infrastructure/branding/pesaschile-brand-v1";
 import { PostgresDatabase } from "./infrastructure/persistence/postgres/postgres";
 import { PostgresQuoteRepository } from "./infrastructure/persistence/postgres/quote-repository";
 import { ApplicationLifecycleState } from "./infrastructure/runtime/application-lifecycle-state";
@@ -56,6 +61,9 @@ export function buildApplication(
   const quoteRepository = new PostgresQuoteRepository(database);
   const quoteService = new QuoteService(quoteRepository);
   const clock = overrides.clock ?? new SystemClock();
+  const brandTheme = createPesasChileBrandV1({
+    legalName: env.QUOTE_COMPANY_NAME
+  });
   const artifactStorage = new FilesystemDocumentArtifactStorage(env.QUOTE_DOCUMENT_STORAGE_ROOT);
   const documentReferenceCodec = new DocumentReferenceCodec(env.QUOTE_DOCUMENT_REF_SECRET);
   const pdfRenderer = new PuppeteerPdfRenderer({
@@ -65,8 +73,10 @@ export function buildApplication(
       : {})
   });
   const realDocumentIssuanceAdapter = new RealDocumentIssuanceAdapter(artifactStorage, pdfRenderer, {
-    companyName: env.QUOTE_COMPANY_NAME,
-    renderVersion: env.QUOTE_RENDER_VERSION
+    renderVersion: env.QUOTE_RENDER_VERSION,
+    emailTemplateVersion: QUOTE_EMAIL_TEMPLATE_VERSION,
+    brandTheme,
+    senderSignature: createDefaultPesasChileSenderSignatureV1()
   });
   const documentIssuancePort = overrides.documentIssuancePort ?? realDocumentIssuanceAdapter;
   const documentAccessService = new QuoteDocumentAccessService(

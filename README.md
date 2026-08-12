@@ -41,6 +41,7 @@ Production does not assume a host-installed browser. The supported V1 strategy i
 - `npm run test`
 - `npm run test:unit`
 - `npm run verify`
+- `npm run email:preview`
 
 ## Authentication
 
@@ -414,6 +415,7 @@ Operational commands:
 
 - Install the PDF browser: `npm run pdf:install-browser`
 - Clean orphaned artifacts: `npm run documents:cleanup`
+- Generate a local email preview: `npm run email:preview`
 
 ## T06 Operational Hardening
 
@@ -520,6 +522,43 @@ docker run --rm \
 - Filesystem storage is durable only if backed by a persistent volume.
 - Multiple instances that serve document downloads need shared durable storage.
 - Email and WhatsApp delivery remain out of scope; T05/T06 only produce and retain the document artifacts.
+
+## T07A Brand System And Email Template
+
+T07A introduces a versioned PesasChile brand system and a reusable production email HTML template without adding any sender/delivery implementation.
+
+Branding:
+
+- Brand version: `pesaschile-brand-v1`
+- Email template version: `quote-email-v1`
+- Primary colors: Raspberry `#E62158`, Gunmetal `#1D2B35`, Anti-Flash White `#ECF0F1`
+- Secondary accents: Caribbean Current `#01665F`, Pear `#CCD619`, Ash Grey `#A5BAB7`
+- Typography declaration: `Poppins Black`, `Poppins SemiBold`, `Poppins Light`
+- Email-safe fallback: `"Poppins", Arial, Helvetica, sans-serif`
+
+Implementation notes:
+
+- Brand theme and local assets live under `src/infrastructure/branding`.
+- The email template uses a dedicated email view model instead of passing `Quote` or canonical snapshots directly into HTML.
+- Brand assets are repo-controlled and resolved locally. No CDN, Google Fonts, or mandatory remote assets are required.
+- The HTML email is table-based and aimed at Gmail, Outlook, and Apple Mail compatibility.
+- The future sender work remains out of scope. T07A only produces the HTML artifact that T07B will later send.
+
+Sender signature:
+
+- Default signature is configured in code, not hardcoded inside the HTML string.
+- The current default uses PesasChile customer service contact data.
+- Future sender logic can inject a salesperson or sales-agent identity without rewriting the template.
+
+Validity note:
+
+- The email template always states the approved 5-day policy text and shows the persisted `validUntil` date from the quote snapshot.
+- T07A does not enforce the 5-day policy in the domain lifecycle. If stricter enforcement is needed, it should be added in application/config work rather than inside the template.
+
+Preview:
+
+- `npm run email:preview` writes a local HTML preview to `.tmp-previews/quote-email-v1-preview.html`.
+- The preview is offline and does not require external fonts or remote image hosting.
 
 ## Testing
 

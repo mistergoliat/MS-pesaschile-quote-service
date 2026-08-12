@@ -1,5 +1,10 @@
 import type { QuoteSnapshot } from "../../../domain";
 import { createCanonicalRequestHash } from "../canonical-json";
+import {
+  formatClpMoney,
+  formatQuantityDisplay,
+  formatUtcDateDisplay
+} from "./document-formatting";
 
 export interface CanonicalIssuedQuoteLineSnapshot {
   readonly lineId: string;
@@ -63,32 +68,6 @@ export interface IssuedQuoteDocumentViewModel {
     readonly taxAmountDisplay: string;
     readonly totalDisplay: string;
   };
-}
-
-function formatClpMoney(value: string): string {
-  const normalized = value.trim();
-  const isNegative = normalized.startsWith("-");
-  const digits = isNegative ? normalized.slice(1) : normalized;
-  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-
-  return `${isNegative ? "-" : ""}$${grouped}`;
-}
-
-function formatQuantityDisplay(value: string): string {
-  if (!value.includes(".")) {
-    return value;
-  }
-
-  return value.replace(/\.?0+$/, "");
-}
-
-function formatUtcDateDisplay(value: string): string {
-  const date = new Date(value);
-  const year = date.getUTCFullYear().toString().padStart(4, "0");
-  const month = (date.getUTCMonth() + 1).toString().padStart(2, "0");
-  const day = date.getUTCDate().toString().padStart(2, "0");
-
-  return `${day}/${month}/${year}`;
 }
 
 export function buildCanonicalIssuedQuoteSnapshot(

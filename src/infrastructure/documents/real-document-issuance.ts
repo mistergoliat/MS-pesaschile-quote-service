@@ -15,14 +15,18 @@ import type {
   DocumentIssuancePort,
   IssueQuoteDocumentsInput
 } from "../../application/quote/ports/document-issuance-port";
+import type { BrandTheme, SenderSignature } from "../branding/brand-theme";
 import type { FilesystemDocumentArtifactStorage } from "./filesystem-document-artifact-storage";
 import { buildDocumentDirectoryKey, buildQuoteDocumentStorageKeys } from "./document-paths";
 import { renderQuoteEmailHtml, renderQuotePrintableHtml } from "./document-templates";
 import type { PdfRendererPort } from "./puppeteer-pdf-renderer";
+import { buildQuoteEmailViewModel } from "./quote-email-view-model";
 
 export interface QuoteDocumentIssuanceConfig {
-  readonly companyName: string;
   readonly renderVersion: string;
+  readonly emailTemplateVersion: string;
+  readonly brandTheme: BrandTheme;
+  readonly senderSignature: SenderSignature;
 }
 
 export class RealDocumentIssuanceAdapter implements DocumentIssuancePort {
@@ -38,12 +42,18 @@ export class RealDocumentIssuanceAdapter implements DocumentIssuancePort {
     const viewModel = buildIssuedQuoteDocumentViewModel({
       snapshot,
       renderVersion: this.config.renderVersion,
-      companyName: this.config.companyName
+      companyName: this.config.brandTheme.company.legalName
+    });
+    const emailViewModel = buildQuoteEmailViewModel({
+      snapshot,
+      brand: this.config.brandTheme,
+      emailTemplateVersion: this.config.emailTemplateVersion,
+      senderSignature: this.config.senderSignature
     });
     const directoryKey = buildDocumentDirectoryKey(input.quote.quoteId, { contentHash });
 
     try {
-      const emailHtml = renderQuoteEmailHtml(viewModel);
+      const emailHtml = renderQuoteEmailHtml(emailViewModel);
       const printableHtml = renderQuotePrintableHtml(viewModel);
       const pdf = await this.pdfRenderer.renderPdf(printableHtml);
       const htmlSha256 = crypto.createHash("sha256").update(printableHtml, "utf8").digest("hex");

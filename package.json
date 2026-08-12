@@ -25,6 +25,7 @@
     "db:check:runtime": "node dist/scripts/db-check.js",
     "documents:cleanup": "tsx src/scripts/cleanup-orphan-documents.ts",
     "documents:cleanup:runtime": "node dist/scripts/cleanup-orphan-documents.js",
+    "email:preview": "tsx src/scripts/preview-quote-email.ts",
     "pdf:install-browser": "npx puppeteer browsers install chrome-headless-shell@stable",
     "smoke:docker": "node scripts/docker-smoke.mjs"
   },
