@@ -51,7 +51,7 @@ const phaseDefinitions = [
   { key: "restart", label: "PHASE 17 restart" },
   { key: "persistence", label: "PHASE 18 persistence check" },
   { key: "expiration", label: "PHASE 19 expiration" },
-  { key: "cleanupOrphan", label: "PHASE 20 cleanup" },
+  { key: "cleanupOrphan", label: "PHASE 20 orphan cleanup" },
   { key: "gracefulShutdown", label: "PHASE 21 graceful shutdown" }
 ];
 
@@ -580,6 +580,34 @@ async function waitForReadiness(timeoutMs) {
   throw new Error(`Readiness did not become green within ${timeoutMs}ms; lastStatus=${lastStatus}; lastError=${lastError}`);
 }
 
+async function waitForHealth(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = "none";
+  let lastStatus = "none";
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetchJson("/health", {
+        timeoutMs: 5_000
+      });
+      lastStatus = String(response.status);
+
+      if (response.status === 200) {
+        assert(response.body?.status === "ok", "Health body did not report ok");
+        return response.body;
+      }
+
+      lastError = response.text;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+
+    await sleep(POLL_INTERVAL_MS);
+  }
+
+  throw new Error(`Health did not become green within ${timeoutMs}ms; lastStatus=${lastStatus}; lastError=${lastError}`);
+}
+
 async function waitForQuoteStatus(quoteId, expectedStatus, authHeader, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastStatus = "unknown";
@@ -967,10 +995,7 @@ async function runSmoke() {
   });
 
   await runPhase("health", PHASE_TIMEOUT_MS.health, async () => {
-    const response = await fetchJson("/health", {
-      timeoutMs: 5_000
-    });
-    assert(response.status === 200, `Expected /health 200, got ${response.status}`);
+    await waitForHealth(PHASE_TIMEOUT_MS.health);
   });
 
   await runPhase("readiness", PHASE_TIMEOUT_MS.readiness, async () => {
