@@ -66,10 +66,12 @@ export class PuppeteerPdfRenderer implements PdfRendererPort {
   }
 
   async checkReadiness(): Promise<DependencyReadinessStatus> {
+    let browser: Browser | null = null;
+
     try {
       const executablePath = this.resolveExecutablePath();
       await fsPromises.access(executablePath);
-      const browser = await this.getBrowser();
+      browser = await this.launchBrowser();
       const page = await browser.newPage();
 
       try {
@@ -94,17 +96,14 @@ export class PuppeteerPdfRenderer implements PdfRendererPort {
         status: "down",
         details: error instanceof Error ? error.message : "pdf renderer is unavailable"
       };
+    } finally {
+      await browser?.close().catch(() => undefined);
     }
   }
 
   private async getBrowser(): Promise<Browser> {
     if (!this.browserPromise) {
-      this.browserPromise = puppeteer
-        .launch({
-          headless: true,
-          args: CHROMIUM_LAUNCH_ARGS,
-          ...(this.config.executablePath ? { executablePath: this.config.executablePath } : {})
-        })
+      this.browserPromise = this.launchBrowser()
         .catch((error: unknown) => {
           this.browserPromise = null;
           throw error;
@@ -112,6 +111,15 @@ export class PuppeteerPdfRenderer implements PdfRendererPort {
     }
 
     return this.browserPromise;
+  }
+
+  private launchBrowser(): Promise<Browser> {
+    return puppeteer.launch({
+      headless: true,
+      args: CHROMIUM_LAUNCH_ARGS,
+      timeout: this.config.timeoutMs,
+      ...(this.config.executablePath ? { executablePath: this.config.executablePath } : {})
+    });
   }
 
   private resolveExecutablePath(): string {
