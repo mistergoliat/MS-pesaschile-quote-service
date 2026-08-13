@@ -127,8 +127,8 @@ export function renderQuotePrintableHtml(model: IssuedQuoteDocumentViewModel): s
         </div>
         <div>
           <div class="section-title">Documento</div>
-          <div>Version de render: ${escapeHtml(model.renderVersion)}</div>
           <div>Moneda: ${escapeHtml(model.currency)}</div>
+          <div>Precios incluyen IVA</div>
         </div>
       </div>
 
@@ -168,12 +168,8 @@ export function renderQuotePrintableHtml(model: IssuedQuoteDocumentViewModel): s
 
       <table class="totals">
         <tr>
-          <td class="muted">Subtotal</td>
-          <td class="numeric">${escapeHtml(model.pricing.subtotalDisplay)}</td>
-        </tr>
-        <tr>
-          <td class="muted">IVA</td>
-          <td class="numeric">${escapeHtml(model.pricing.taxAmountDisplay)}</td>
+          <td class="muted">${escapeHtml(model.pricing.pricingNote)}</td>
+          <td class="numeric">${escapeHtml(model.pricing.totalDisplay)}</td>
         </tr>
         <tr class="grand-total">
           <td>Total</td>
@@ -182,7 +178,7 @@ export function renderQuotePrintableHtml(model: IssuedQuoteDocumentViewModel): s
       </table>
 
       <div class="footer">
-        Documento generado por ${escapeHtml(model.companyName)} para la cotizacion ${escapeHtml(model.quoteNumber)}.
+        Cotización comercial emitida por ${escapeHtml(model.companyName)} para ${escapeHtml(model.quoteNumber)}.
       </div>
     </div>
   </body>

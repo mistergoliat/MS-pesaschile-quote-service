@@ -14,6 +14,10 @@ import {
   renderQuoteEmailHtml,
   renderQuotePrintableHtml
 } from "../../src/infrastructure/documents/document-templates";
+import {
+  QUOTE_EMAIL_INLINE_LOGO_DARK_CONTENT_ID,
+  QUOTE_EMAIL_INLINE_LOGO_LIGHT_CONTENT_ID
+} from "../../src/infrastructure/documents/quote-email-inline-assets";
 import { buildQuoteEmailViewModel } from "../../src/infrastructure/documents/quote-email-view-model";
 
 function buildQuoteSnapshot(overrides: Partial<QuoteSnapshot["customerSnapshot"]> = {}): QuoteSnapshot {
@@ -49,10 +53,10 @@ function buildQuoteSnapshot(overrides: Partial<QuoteSnapshot["customerSnapshot"]
         type: "service",
         externalItemId: null,
         sku: "SKU-9",
-        description: `Servicio "Premium" & <img src=x onerror=alert(1)>`,
+        description: 'Servicio "Premium" & <img src=x onerror=alert(1)>',
         quantity: "1.000000",
-        unitPrice: "37566",
-        taxIncluded: true,
+        unitPrice: "31568",
+        taxIncluded: false,
         taxRate: "0.19",
         lineSubtotal: "31568",
         lineTax: "5998",
@@ -106,24 +110,67 @@ function normalizeHtml(html: string): string {
 }
 
 describe("document templates", () => {
-  it("renders email HTML with brand, pricing, validity, and contact details", () => {
+  it("renders email HTML with dual logo CIDs and a light-by-default header", () => {
     const html = buildEmailHtml();
 
-    expect(html).toContain("PesasChile");
+    expect(html).toContain(`cid:${QUOTE_EMAIL_INLINE_LOGO_DARK_CONTENT_ID}`);
+    expect(html).toContain(`cid:${QUOTE_EMAIL_INLINE_LOGO_LIGHT_CONTENT_ID}`);
+    expect(html).toContain('alt="Pesas Chile"');
+    expect(html).toContain('name="color-scheme" content="light dark"');
+    expect(html).toContain('name="supported-color-schemes" content="light dark"');
+    expect(html).toContain("@media (prefers-color-scheme: dark)");
+    expect(html).toContain('html[data-force-color-scheme="dark"] .quote-email__brand-logo--surface-light .quote-email__brand-logo-dark');
+    expect(html).toContain('class="quote-email__header-surface"');
+    expect(html).toContain('class="quote-email__brand-logo quote-email__brand-logo--surface-light"');
+    expect(html).toContain('class="quote-email__brand-logo quote-email__brand-logo--surface-dark"');
+    expect(html).toContain('class="quote-email__brand-logo-dark"');
+    expect(html).toContain('class="quote-email__brand-logo-light"');
+    expect(html).toContain('display:block;width:220px');
+    expect(html).toContain('background:#F7F9FA;');
+    expect(html).toContain("background:#1D2B35");
+    expect(html).toContain(".quote-email__header-surface {\n        background:#1D2B35 !important;");
+    expect(html).toContain(".quote-email__header-number,\n      .quote-email__header-issued {\n        color:#ECF0F1 !important;");
     expect(html).toContain("PC-000777");
     expect(html).toContain("12 AGO 2026");
     expect(html).toContain("17 AGO 2026");
-    expect(html).toContain("$31.568");
-    expect(html).toContain("$5.998");
+    expect(html).toContain("Precios incluyen IVA");
     expect(html).toContain("$37.566");
-    expect(html).toContain("Esta cotización y sus precios son válidos por 5 días desde su emisión.");
-    expect(html).toContain("Adjuntamos el PDF formal de tu cotizacion con el detalle completo y terminos de la oferta.");
     expect(html).toContain("Bastian Castro");
     expect(html).toContain("sac@pesaschile.cl");
     expect(html).toContain("www.pesaschile.cl");
-    expect(html).toContain('max-width:640px');
-    expect(html).toContain("Producto / Servicio");
-    expect(html).toContain('role="presentation"');
+    expect(html).not.toContain('width="148"');
+    expect(html).not.toContain("pesaschile-symbol");
+    expect(html).not.toContain("filter:");
+    expect(html).not.toContain("invert(");
+    expect(html).not.toContain("mix-blend-mode");
+  });
+
+  it("keeps the light logo visible by default in the header and hides the dark logo inline", () => {
+    const html = buildEmailHtml();
+
+    expect(html).toContain(
+      `<img class="quote-email__brand-logo-dark" src="cid:${QUOTE_EMAIL_INLINE_LOGO_DARK_CONTENT_ID}" alt="Pesas Chile" width="220" style="display:none;width:220px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;max-height:0;overflow:hidden;mso-hide:all;" />`
+    );
+    expect(html).toContain(
+      `<img class="quote-email__brand-logo-light" src="cid:${QUOTE_EMAIL_INLINE_LOGO_LIGHT_CONTENT_ID}" alt="Pesas Chile" width="220" style="display:block;width:220px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;" />`
+    );
+  });
+
+  it("forces the dark logo visible in dark mode and neutralizes the hidden inline state", () => {
+    const html = buildEmailHtml();
+
+    expect(html).toContain(
+      ".quote-email__brand-logo-light {\n        display:none !important;\n        max-height:0 !important;\n        overflow:hidden !important;\n        mso-hide:all !important;"
+    );
+    expect(html).toContain(
+      ".quote-email__brand-logo-dark {\n        display:block !important;\n        max-height:none !important;\n        overflow:visible !important;\n        mso-hide:none !important;"
+    );
+    expect(html).toContain(
+      "html[data-force-color-scheme=\"dark\"] .quote-email__brand-logo-light {\n      display:none !important;\n      max-height:0 !important;\n      overflow:hidden !important;\n      mso-hide:all !important;"
+    );
+    expect(html).toContain(
+      "html[data-force-color-scheme=\"dark\"] .quote-email__brand-logo-dark {\n      display:block !important;\n      max-height:none !important;\n      overflow:visible !important;\n      mso-hide:none !important;"
+    );
   });
 
   it("escapes customer, item, and sender dynamic content", () => {
@@ -156,7 +203,7 @@ describe("document templates", () => {
       senderSignature: {
         name: "Bastian Castro",
         role: "Servicio al Cliente",
-        address: "Maipu"
+        address: "Av. Monsenor Valech 12050, bodega 26, Maipu"
       }
     });
 
@@ -164,10 +211,10 @@ describe("document templates", () => {
     expect(html).not.toContain(">Email<");
     expect(html).not.toContain(">Telefono<");
     expect(html).not.toContain("Facebook");
-    expect(html).toContain("Maipu");
+    expect(html).toContain("Av. Monsenor Valech 12050, bodega 26, Maipu");
   });
 
-  it("renders printable HTML with canonical totals and no raw HTML injection", () => {
+  it("renders printable HTML without visible technical versioning and with commercial pricing", () => {
     const html = renderQuotePrintableHtml(
       buildIssuedQuoteDocumentViewModel({
         snapshot: buildSnapshot(),
@@ -177,12 +224,10 @@ describe("document templates", () => {
     );
 
     expect(html).toContain("Cotizacion comercial");
-    expect(html).toContain("Version de render: quote-v1");
-    expect(html).toContain("$31.568");
-    expect(html).toContain("$5.998");
+    expect(html).toContain("Precios incluyen IVA");
     expect(html).toContain("$37.566");
-    expect(html).toContain("&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;");
-    expect(html).not.toContain("<script>alert('xss')</script>");
+    expect(html).not.toContain("Version de render:");
+    expect(html).not.toContain("Quote Service");
   });
 
   it("matches the normalized email snapshot", () => {

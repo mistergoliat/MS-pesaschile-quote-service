@@ -164,6 +164,7 @@ describe("issued quote documents", () => {
       lineTotalDisplay: "$9.980"
     });
     expect(viewModel.pricing).toEqual({
+      pricingNote: "Precios incluyen IVA",
       subtotalDisplay: "$8.387",
       taxAmountDisplay: "$1.593",
       totalDisplay: "$9.980"

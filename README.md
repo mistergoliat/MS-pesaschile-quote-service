@@ -1,13 +1,13 @@
-# MS PesasChile Quote Service
+# MS PesasChile Quotes API
 
-Quote Service V1 for PesasChile. `T01`, `T02`, `T03`, and `T04` are implemented in this repository:
+PesasChile quotes API. `T01`, `T02`, `T03`, and `T04` are implemented in this repository:
 
 - bootstrap, configuration, health, and migrations;
 - Quote domain and lifecycle;
 - PostgreSQL persistence, audit, idempotency, and optimistic concurrency;
 - HTTP application API with auth, validation, canonical DTOs, and real HTTP integration tests.
 
-The governing design remains [docs/quote-service-v1-technical-design.md](/C:/Users/Goli/Pesas%20Chile/MS/MS-pesaschile-quote-service/docs/quote-service-v1-technical-design.md).
+The governing design remains [technical design](/C:/Users/Goli/Pesas%20Chile/MS/MS-pesaschile-quote-service/docs/quote-service-v1-technical-design.md).
 
 ## Stack
 
@@ -530,7 +530,7 @@ T07A introduces a versioned PesasChile brand system and a reusable production em
 Branding:
 
 - Brand version: `pesaschile-brand-v1`
-- Email template version: `quote-email-v1`
+- Email template version: `quote-email-v2`
 - Primary colors: Raspberry `#E62158`, Gunmetal `#1D2B35`, Anti-Flash White `#ECF0F1`
 - Secondary accents: Caribbean Current `#01665F`, Pear `#CCD619`, Ash Grey `#A5BAB7`
 - Typography declaration: `Poppins Black`, `Poppins SemiBold`, `Poppins Light`
@@ -557,7 +557,7 @@ Validity note:
 
 Preview:
 
-- `npm run email:preview` writes a local HTML preview to `.tmp-previews/quote-email-v1-preview.html`.
+- `npm run email:preview` writes a local HTML preview to `.tmp-previews/quote-email-v2-preview.html`.
 - The preview is offline and does not require external fonts or remote image hosting.
 
 ## Testing

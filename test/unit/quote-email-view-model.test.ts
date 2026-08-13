@@ -43,8 +43,8 @@ function buildQuoteSnapshot(): QuoteSnapshot {
         sku: "SKU-9",
         description: "Servicio Premium",
         quantity: "1.000000",
-        unitPrice: "37566",
-        taxIncluded: true,
+        unitPrice: "31568",
+        taxIncluded: false,
         taxRate: "0.19",
         lineSubtotal: "31568",
         lineTax: "5998",
@@ -76,7 +76,7 @@ function buildQuoteSnapshot(): QuoteSnapshot {
 }
 
 describe("quote email view model", () => {
-  it("maps formatted values and configurable sender signature", () => {
+  it("maps commercial pricing, template version, and configurable sender signature", () => {
     const viewModel = buildQuoteEmailViewModel({
       snapshot: buildCanonicalIssuedQuoteSnapshot(
         buildQuoteSnapshot(),
@@ -92,7 +92,7 @@ describe("quote email view model", () => {
     });
 
     expect(viewModel.brandVersion).toBe("pesaschile-brand-v1");
-    expect(viewModel.emailTemplateVersion).toBe("quote-email-v1");
+    expect(viewModel.emailTemplateVersion).toBe("quote-email-v2");
     expect(viewModel.quote.issuedAtFormatted).toBe("12 AGO 2026");
     expect(viewModel.quote.validUntilFormatted).toBe("17 AGO 2026");
     expect(viewModel.items[0]).toEqual({
@@ -105,6 +105,7 @@ describe("quote email view model", () => {
       lineTotalFormatted: "$37.566"
     });
     expect(viewModel.pricing).toEqual({
+      pricingNote: "Precios incluyen IVA",
       subtotalFormatted: "$31.568",
       taxFormatted: "$5.998",
       totalFormatted: "$37.566"

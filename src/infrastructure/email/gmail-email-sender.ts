@@ -1,20 +1,25 @@
 import crypto from "node:crypto";
 
-import {
-  normalizeEmailAddress,
-  sanitizeHeaderText
-} from "../../domain";
 import { EmailSendError } from "../../application/quote-delivery/retry-policy";
 import type {
   EmailAddress,
   EmailAttachment,
   EmailSenderPort
 } from "../../application/quote-delivery/ports/email-sender-port";
+import { normalizeEmailAddress, sanitizeHeaderText } from "../../domain";
+import { resolveQuoteEmailInlineAssets } from "../documents/quote-email-inline-assets";
 
 const GMAIL_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const GMAIL_SEND_ENDPOINT = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
 
 type FetchLike = typeof fetch;
+
+interface GmailInlineAsset {
+  readonly contentId: string;
+  readonly filename: string;
+  readonly contentType: string;
+  readonly content: Buffer;
+}
 
 export interface GmailEmailSenderConfig {
   readonly clientId: string;
@@ -89,7 +94,8 @@ export class GmailEmailSender implements EmailSenderPort {
           ...(input.replyTo ? { replyTo: input.replyTo } : {}),
           subject: input.subject,
           html: input.html,
-          attachments: input.attachments
+          attachments: input.attachments,
+          inlineAssets: resolveQuoteEmailInlineAssets(input.html)
         })
       );
       const response = await this.fetchImpl(GMAIL_SEND_ENDPOINT, {
@@ -175,6 +181,7 @@ export function buildGmailMimeMessage(input: {
   readonly subject: string;
   readonly html: string;
   readonly attachments: readonly EmailAttachment[];
+  readonly inlineAssets?: readonly GmailInlineAsset[];
 }): string {
   const to = normalizeEmailAddress(input.to, "to");
   const fromAddress = normalizeEmailAddress(input.from.address, "from.address");
@@ -188,7 +195,9 @@ export function buildGmailMimeMessage(input: {
       : normalizeEmailAddress(input.replyTo, "replyTo");
   const subject = sanitizeHeaderText(input.subject, "subject", 200);
   const htmlBody = input.html;
-  const boundary = `quote-email-${crypto.randomUUID()}`;
+  const inlineAssets = input.inlineAssets ?? [];
+  const hasInlineAssets = inlineAssets.length > 0;
+  const hasAttachments = input.attachments.length > 0;
   const headers = [
     `From: ${formatMailbox({ address: fromAddress, ...(fromName ? { name: fromName } : {}) })}`,
     `To: ${formatMailbox({ address: to })}`,
@@ -197,7 +206,7 @@ export function buildGmailMimeMessage(input: {
     "MIME-Version: 1.0"
   ];
 
-  if (input.attachments.length === 0) {
+  if (!hasInlineAssets && !hasAttachments) {
     return [
       ...headers,
       'Content-Type: text/html; charset="UTF-8"',
@@ -208,39 +217,49 @@ export function buildGmailMimeMessage(input: {
     ].join("\r\n");
   }
 
-  const parts = [
-    `--${boundary}`,
-    'Content-Type: text/html; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
-    "",
-    wrapBase64(Buffer.from(htmlBody, "utf8").toString("base64")),
-    ""
-  ];
+  if (hasInlineAssets && !hasAttachments) {
+    const relatedBoundary = `quote-email-related-${crypto.randomUUID()}`;
+    const parts = buildRelatedParts(relatedBoundary, htmlBody, inlineAssets);
 
-  for (const attachment of input.attachments) {
-    const filename = sanitizeHeaderText(attachment.filename, "attachment.filename", 255);
-    const contentType = sanitizeHeaderText(
-      attachment.contentType,
-      "attachment.contentType",
-      255
-    );
-
-    parts.push(
-      `--${boundary}`,
-      `Content-Type: ${contentType}; name="${escapeQuotedHeaderValue(filename)}"`,
-      "Content-Transfer-Encoding: base64",
-      `Content-Disposition: attachment; filename="${escapeQuotedHeaderValue(filename)}"`,
+    return [
+      ...headers,
+      `Content-Type: multipart/related; boundary="${relatedBoundary}"`,
       "",
-      wrapBase64(attachment.content.toString("base64")),
+      ...parts
+    ].join("\r\n");
+  }
+
+  const mixedBoundary = `quote-email-mixed-${crypto.randomUUID()}`;
+  const parts: string[] = [];
+
+  if (hasInlineAssets) {
+    const relatedBoundary = `quote-email-related-${crypto.randomUUID()}`;
+    parts.push(
+      `--${mixedBoundary}`,
+      `Content-Type: multipart/related; boundary="${relatedBoundary}"`,
+      "",
+      ...buildRelatedParts(relatedBoundary, htmlBody, inlineAssets)
+    );
+  } else {
+    parts.push(
+      `--${mixedBoundary}`,
+      'Content-Type: text/html; charset="UTF-8"',
+      "Content-Transfer-Encoding: base64",
+      "",
+      wrapBase64(Buffer.from(htmlBody, "utf8").toString("base64")),
       ""
     );
   }
 
-  parts.push(`--${boundary}--`, "");
+  for (const attachment of input.attachments) {
+    parts.push(...buildAttachmentPart(mixedBoundary, attachment));
+  }
+
+  parts.push(`--${mixedBoundary}--`, "");
 
   return [
     ...headers,
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
     "",
     ...parts
   ].join("\r\n");
@@ -252,6 +271,66 @@ export function encodeBase64Url(value: string): string {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
+}
+
+function buildRelatedParts(
+  boundary: string,
+  htmlBody: string,
+  inlineAssets: readonly GmailInlineAsset[]
+): string[] {
+  const parts = [
+    `--${boundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    wrapBase64(Buffer.from(htmlBody, "utf8").toString("base64")),
+    ""
+  ];
+
+  for (const inlineAsset of inlineAssets) {
+    parts.push(...buildInlineAssetPart(boundary, inlineAsset));
+  }
+
+  parts.push(`--${boundary}--`, "");
+  return parts;
+}
+
+function buildInlineAssetPart(boundary: string, asset: GmailInlineAsset): string[] {
+  const filename = sanitizeHeaderText(asset.filename, "inlineAsset.filename", 255);
+  const contentType = sanitizeHeaderText(asset.contentType, "inlineAsset.contentType", 255);
+  const contentId = sanitizeHeaderText(asset.contentId, "inlineAsset.contentId", 255);
+
+  return [
+    `--${boundary}`,
+    `Content-Type: ${contentType}; name="${escapeQuotedHeaderValue(filename)}"`,
+    "Content-Transfer-Encoding: base64",
+    `Content-ID: <${escapeQuotedHeaderValue(contentId)}>`,
+    `X-Attachment-Id: ${escapeQuotedHeaderValue(contentId)}`,
+    `Content-Location: ${escapeQuotedHeaderValue(filename)}`,
+    `Content-Disposition: inline; filename="${escapeQuotedHeaderValue(filename)}"`,
+    "",
+    wrapBase64(asset.content.toString("base64")),
+    ""
+  ];
+}
+
+function buildAttachmentPart(boundary: string, attachment: EmailAttachment): string[] {
+  const filename = sanitizeHeaderText(attachment.filename, "attachment.filename", 255);
+  const contentType = sanitizeHeaderText(
+    attachment.contentType,
+    "attachment.contentType",
+    255
+  );
+
+  return [
+    `--${boundary}`,
+    `Content-Type: ${contentType}; name="${escapeQuotedHeaderValue(filename)}"`,
+    "Content-Transfer-Encoding: base64",
+    `Content-Disposition: attachment; filename="${escapeQuotedHeaderValue(filename)}"`,
+    "",
+    wrapBase64(attachment.content.toString("base64")),
+    ""
+  ];
 }
 
 function formatMailbox(input: EmailAddress): string {
