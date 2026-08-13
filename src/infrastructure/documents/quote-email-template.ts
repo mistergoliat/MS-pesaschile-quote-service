@@ -1,23 +1,195 @@
 import { resolveBrandAsset } from "../branding/brand-asset-resolver";
+import {
+  QUOTE_EMAIL_INLINE_LOGO_DARK_CONTENT_ID,
+  QUOTE_EMAIL_INLINE_LOGO_LIGHT_CONTENT_ID
+} from "./quote-email-inline-assets";
 import type { QuoteEmailViewModel } from "./quote-email-view-model";
 import { escapeHtml, sanitizeHref } from "./html-escaping";
 
-function renderBrandSymbol(model: QuoteEmailViewModel): string {
-  const resolved = resolveBrandAsset(model.brand.assets.symbol);
+type BrandLogoSurface = "light" | "dark";
 
-  if (!resolved) {
+function renderBrandLogo(
+  model: QuoteEmailViewModel,
+  surface: BrandLogoSurface,
+  width: number
+): string {
+  const resolvedDarkLogo = resolveBrandAsset(model.brand.assets.logoDark);
+  const resolvedLightLogo = resolveBrandAsset(model.brand.assets.logoLight);
+
+  if (!resolvedDarkLogo || !resolvedLightLogo) {
     return [
-      '<div style="width:44px;height:44px;border-radius:12px;background:',
-      model.brand.colors.primary,
-      ";color:",
-      model.brand.colors.light,
-      ";font-family:",
+      '<div style="font-family:',
       escapeHtml(model.brand.typography.fallback),
-      ';font-size:18px;font-weight:700;line-height:44px;text-align:center;">PC</div>'
+      ";font-size:28px;line-height:32px;font-weight:800;color:",
+      surface === "dark" ? model.brand.colors.light : model.brand.colors.dark,
+      ';">Pesas Chile</div>'
     ].join("");
   }
 
-  return resolved.content;
+  return [
+    `<div class="quote-email__brand-logo quote-email__brand-logo--surface-${surface}" style="display:block;">`,
+    `<img class="quote-email__brand-logo-dark" src="cid:${QUOTE_EMAIL_INLINE_LOGO_DARK_CONTENT_ID}"`,
+    ' alt="Pesas Chile"',
+    ` width="${width}"`,
+    ` style="display:${surface === "dark" ? "block" : "none"};width:${width}px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;${surface === "light" ? "max-height:0;overflow:hidden;mso-hide:all;" : ""}" />`,
+    `<img class="quote-email__brand-logo-light" src="cid:${QUOTE_EMAIL_INLINE_LOGO_LIGHT_CONTENT_ID}"`,
+    ' alt="Pesas Chile"',
+    ` width="${width}"`,
+    ` style="display:${surface === "light" ? "block" : "none"};width:${width}px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;${surface === "dark" ? "max-height:0;overflow:hidden;mso-hide:all;" : ""}" />`,
+    "</div>"
+  ].join("");
+}
+
+function renderEmailStyleBlock(model: QuoteEmailViewModel): string {
+  return `<style>
+    .quote-email__header-surface {
+      background:#F7F9FA !important;
+      color:${model.brand.colors.dark} !important;
+    }
+    .quote-email__surface-dark {
+      background:${model.brand.colors.dark} !important;
+      color:${model.brand.colors.light} !important;
+    }
+    .quote-email__surface-light {
+      background:#F7F9FA !important;
+      color:${model.brand.colors.dark} !important;
+    }
+    .quote-email__header-label {
+      color:#6B7B85 !important;
+    }
+    .quote-email__header-number,
+    .quote-email__header-issued {
+      color:${model.brand.colors.dark} !important;
+    }
+    .quote-email__signature-name {
+      color:${model.brand.colors.dark} !important;
+    }
+    .quote-email__signature-role {
+      color:${model.brand.colors.primary} !important;
+    }
+    .quote-email__signature-label {
+      color:#5B6C75 !important;
+    }
+    .quote-email__signature-value,
+    .quote-email__signature-value a {
+      color:${model.brand.colors.dark} !important;
+    }
+    .quote-email__footer-meta {
+      color:#6B7B85 !important;
+    }
+    .quote-email__brand-logo--surface-light .quote-email__brand-logo-dark {
+      display:none !important;
+      max-height:0 !important;
+      overflow:hidden !important;
+      mso-hide:all !important;
+    }
+    .quote-email__brand-logo--surface-light .quote-email__brand-logo-light {
+      display:block !important;
+      max-height:none !important;
+      overflow:visible !important;
+      mso-hide:none !important;
+    }
+    .quote-email__brand-logo--surface-dark .quote-email__brand-logo-dark {
+      display:block !important;
+      max-height:none !important;
+      overflow:visible !important;
+      mso-hide:none !important;
+    }
+    .quote-email__brand-logo--surface-dark .quote-email__brand-logo-light {
+      display:none !important;
+      max-height:0 !important;
+      overflow:hidden !important;
+      mso-hide:all !important;
+    }
+    @media (prefers-color-scheme: dark) {
+      .quote-email__header-surface {
+        background:${model.brand.colors.dark} !important;
+        color:${model.brand.colors.light} !important;
+      }
+      .quote-email__header-label {
+        color:#A5BAB7 !important;
+      }
+      .quote-email__header-number,
+      .quote-email__header-issued {
+        color:${model.brand.colors.light} !important;
+      }
+      .quote-email__surface-dark {
+        background:${model.brand.colors.dark} !important;
+        color:${model.brand.colors.light} !important;
+      }
+      .quote-email__surface-light {
+        background:#F7F9FA !important;
+        color:${model.brand.colors.dark} !important;
+      }
+      .quote-email__brand-logo-light {
+        display:none !important;
+        max-height:0 !important;
+        overflow:hidden !important;
+        mso-hide:all !important;
+      }
+      .quote-email__brand-logo-dark {
+        display:block !important;
+        max-height:none !important;
+        overflow:visible !important;
+        mso-hide:none !important;
+      }
+      .quote-email__brand-logo--surface-light .quote-email__brand-logo-dark {
+        display:block !important;
+        max-height:none !important;
+        overflow:visible !important;
+        mso-hide:none !important;
+      }
+      .quote-email__brand-logo--surface-light .quote-email__brand-logo-light {
+        display:none !important;
+        max-height:0 !important;
+        overflow:hidden !important;
+        mso-hide:all !important;
+      }
+    }
+    html[data-force-color-scheme="dark"] .quote-email__header-surface {
+      background:${model.brand.colors.dark} !important;
+      color:${model.brand.colors.light} !important;
+    }
+    html[data-force-color-scheme="dark"] .quote-email__header-label {
+      color:#A5BAB7 !important;
+    }
+    html[data-force-color-scheme="dark"] .quote-email__header-number,
+    html[data-force-color-scheme="dark"] .quote-email__header-issued {
+      color:${model.brand.colors.light} !important;
+    }
+    html[data-force-color-scheme="dark"] .quote-email__surface-dark {
+      background:${model.brand.colors.dark} !important;
+      color:${model.brand.colors.light} !important;
+    }
+    html[data-force-color-scheme="dark"] .quote-email__surface-light {
+      background:#F7F9FA !important;
+      color:${model.brand.colors.dark} !important;
+    }
+    html[data-force-color-scheme="dark"] .quote-email__brand-logo-light {
+      display:none !important;
+      max-height:0 !important;
+      overflow:hidden !important;
+      mso-hide:all !important;
+    }
+    html[data-force-color-scheme="dark"] .quote-email__brand-logo-dark {
+      display:block !important;
+      max-height:none !important;
+      overflow:visible !important;
+      mso-hide:none !important;
+    }
+    html[data-force-color-scheme="dark"] .quote-email__brand-logo--surface-light .quote-email__brand-logo-dark {
+      display:block !important;
+      max-height:none !important;
+      overflow:visible !important;
+      mso-hide:none !important;
+    }
+    html[data-force-color-scheme="dark"] .quote-email__brand-logo--surface-light .quote-email__brand-logo-light {
+      display:none !important;
+      max-height:0 !important;
+      overflow:hidden !important;
+      mso-hide:all !important;
+    }
+  </style>`;
 }
 
 function renderCustomerRow(label: string, value: string | null): string {
@@ -38,7 +210,7 @@ function renderCustomerRow(label: string, value: string | null): string {
 function renderItemRows(model: QuoteEmailViewModel): string {
   return model.items
     .map((item) => {
-      const detail = `${item.typeLabel}${item.sku ? ` · SKU ${item.sku}` : ""}`;
+      const detail = `${item.typeLabel}${item.sku ? ` - SKU ${item.sku}` : ""}`;
 
       return [
         "<tr>",
@@ -62,10 +234,10 @@ function renderContactValue(label: string, value: string | null, href: string | 
 
   return [
     "<tr>",
-    '<td style="padding:0 0 8px 0;font-size:13px;line-height:20px;color:#ECF0F1;">',
-    `<strong style="color:#A5BAB7;">${escapeHtml(label)}:</strong> `,
+    '<td class="quote-email__signature-value" style="padding:0 0 8px 0;font-size:13px;line-height:20px;color:#1D2B35;">',
+    `<strong class="quote-email__signature-label" style="color:#5B6C75;">${escapeHtml(label)}:</strong> `,
     href
-      ? `<a href="${escapeHtml(href)}" style="color:#ECF0F1;text-decoration:none;">${escapeHtml(value)}</a>`
+      ? `<a href="${escapeHtml(href)}" style="color:#1D2B35;text-decoration:none;">${escapeHtml(value)}</a>`
       : escapeHtml(value),
     "</td>",
     "</tr>"
@@ -98,7 +270,7 @@ function renderSocialLinks(model: QuoteEmailViewModel): string {
         return "";
       }
 
-      return `<a href="${escapeHtml(safeHref)}" style="display:inline-block;padding:6px 10px;margin:0 6px 6px 0;border:1px solid #51636E;border-radius:999px;font-size:11px;line-height:14px;color:#ECF0F1;text-decoration:none;">${escapeHtml(label)}</a>`;
+      return `<a href="${escapeHtml(safeHref)}" style="display:inline-block;padding:6px 10px;margin:0 6px 6px 0;border:1px solid #B7C3C8;border-radius:999px;font-size:11px;line-height:14px;color:#1D2B35;text-decoration:none;">${escapeHtml(label)}</a>`;
     })
     .filter((value) => value.length > 0)
     .join("");
@@ -127,9 +299,12 @@ export function renderQuoteEmailHtml(model: QuoteEmailViewModel): string {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="supported-color-schemes" content="light dark" />
     <meta name="x-brand-version" content="${escapeHtml(model.brandVersion)}" />
     <meta name="x-email-template-version" content="${escapeHtml(model.emailTemplateVersion)}" />
-    <title>Cotizacion ${escapeHtml(model.quote.quoteNumber)}</title>
+    ${renderEmailStyleBlock(model)}
+    <title>Cotizaci&oacute;n ${escapeHtml(model.quote.quoteNumber)}</title>
   </head>
   <body style="margin:0;padding:0;background:${model.brand.colors.light};font-family:${typography};">
     <!-- brandVersion=${escapeHtml(model.brandVersion)} emailTemplateVersion=${escapeHtml(model.emailTemplateVersion)} -->
@@ -141,24 +316,14 @@ export function renderQuoteEmailHtml(model: QuoteEmailViewModel): string {
               <td style="height:6px;line-height:6px;font-size:0;background:${model.brand.colors.primary};">&nbsp;</td>
             </tr>
             <tr>
-              <td style="padding:28px 28px 24px 28px;background:${model.brand.colors.dark};">
+              <td class="quote-email__header-surface" style="padding:28px 28px 24px 28px;background:#F7F9FA;">
                 <table role="presentation" width="100%" style="width:100%;border-collapse:collapse;">
                   <tr>
-                    <td style="vertical-align:top;padding:0 12px 16px 0;">
-                      <table role="presentation" style="border-collapse:collapse;">
-                        <tr>
-                          <td style="vertical-align:middle;padding:0 14px 0 0;">${renderBrandSymbol(model)}</td>
-                          <td style="vertical-align:middle;">
-                            <div style="font-family:${typography};font-size:28px;line-height:30px;font-weight:800;color:${model.brand.colors.light};">${escapeHtml(model.brand.company.displayName)}</div>
-                            <div style="font-family:${typography};font-size:12px;line-height:18px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:${model.brand.colors.primary};">Quote Service V1</div>
-                          </td>
-                        </tr>
-                      </table>
-                    </td>
-                    <td align="right" style="vertical-align:top;padding:0;color:${model.brand.colors.light};">
-                      <div style="font-size:12px;line-height:18px;letter-spacing:0.08em;text-transform:uppercase;color:#A5BAB7;">Cotizacion</div>
-                      <div style="font-size:24px;line-height:28px;font-weight:800;color:${model.brand.colors.light};">${escapeHtml(model.quote.quoteNumber)}</div>
-                      <div style="padding-top:8px;font-size:13px;line-height:20px;color:${model.brand.colors.light};">Emitida: ${escapeHtml(model.quote.issuedAtFormatted)}</div>
+                    <td style="vertical-align:middle;padding:0 12px 16px 0;">${renderBrandLogo(model, "light", 220)}</td>
+                    <td align="right" style="vertical-align:middle;padding:0;color:${model.brand.colors.dark};">
+                      <div class="quote-email__header-label" style="font-size:12px;line-height:18px;letter-spacing:0.08em;text-transform:uppercase;color:#6B7B85;">Cotizaci&oacute;n</div>
+                      <div class="quote-email__header-number" style="font-size:24px;line-height:28px;font-weight:800;color:${model.brand.colors.dark};">${escapeHtml(model.quote.quoteNumber)}</div>
+                      <div class="quote-email__header-issued" style="padding-top:8px;font-size:13px;line-height:20px;color:${model.brand.colors.dark};">Emitida: ${escapeHtml(model.quote.issuedAtFormatted)}</div>
                     </td>
                   </tr>
                 </table>
@@ -174,7 +339,7 @@ export function renderQuoteEmailHtml(model: QuoteEmailViewModel): string {
                   </tr>
                   <tr>
                     <td style="padding:0 0 22px 0;font-size:15px;line-height:24px;color:${model.brand.colors.dark};">
-                      Te compartimos tu cotizacion comercial de ${escapeHtml(model.brand.company.displayName)} con el resumen de productos y servicios solicitados.
+                      Te compartimos tu cotizaci&oacute;n comercial de ${escapeHtml(model.brand.company.displayName)} con el resumen de productos y servicios solicitados.
                     </td>
                   </tr>
                   <tr>
@@ -199,8 +364,13 @@ export function renderQuoteEmailHtml(model: QuoteEmailViewModel): string {
                     </td>
                   </tr>
                   <tr>
-                    <td style="padding:0 0 12px 0;font-size:12px;line-height:18px;letter-spacing:0.08em;text-transform:uppercase;font-weight:700;color:#6B7B85;">
+                    <td style="padding:0 0 10px 0;font-size:12px;line-height:18px;letter-spacing:0.08em;text-transform:uppercase;font-weight:700;color:#6B7B85;">
                       Productos y servicios
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:0 0 12px 0;font-size:13px;line-height:20px;color:#5B6C75;">
+                      ${escapeHtml(model.pricing.pricingNote)}
                     </td>
                   </tr>
                   <tr>
@@ -230,17 +400,14 @@ export function renderQuoteEmailHtml(model: QuoteEmailViewModel): string {
                         </tr>
                         <tr>
                           <td align="right">
-                            <table role="presentation" style="width:100%;max-width:300px;border-collapse:collapse;">
+                            <table role="presentation" style="width:100%;max-width:320px;border-collapse:collapse;">
                               <tr>
-                                <td style="padding:6px 0;font-size:14px;line-height:20px;color:#5B6C75;">Subtotal</td>
-                                <td style="padding:6px 0;font-size:14px;line-height:20px;color:${model.brand.colors.dark};text-align:right;">${escapeHtml(model.pricing.subtotalFormatted)}</td>
+                                <td colspan="2" style="padding:0 0 10px 0;font-size:13px;line-height:20px;color:#5B6C75;text-align:right;">
+                                  ${escapeHtml(model.pricing.pricingNote)}
+                                </td>
                               </tr>
                               <tr>
-                                <td style="padding:6px 0;font-size:14px;line-height:20px;color:#5B6C75;">IVA</td>
-                                <td style="padding:6px 0;font-size:14px;line-height:20px;color:${model.brand.colors.dark};text-align:right;">${escapeHtml(model.pricing.taxFormatted)}</td>
-                              </tr>
-                              <tr>
-                                <td colspan="2" style="padding:8px 0 0 0;">
+                                <td colspan="2" style="padding:0;">
                                   <table role="presentation" width="100%" style="width:100%;border-collapse:collapse;background:#FFF4F7;border:1px solid #F5C3D2;">
                                     <tr>
                                       <td style="padding:14px 16px;font-size:13px;line-height:18px;letter-spacing:0.08em;text-transform:uppercase;font-weight:700;color:${model.brand.colors.dark};">Total</td>
@@ -278,29 +445,26 @@ export function renderQuoteEmailHtml(model: QuoteEmailViewModel): string {
                   </tr>
                   <tr>
                     <td style="padding:0 0 24px 0;font-size:14px;line-height:22px;color:${model.brand.colors.dark};">
-                      Adjuntamos el PDF formal de tu cotizacion con el detalle completo y terminos de la oferta.
+                      Adjuntamos el PDF formal de tu cotizaci&oacute;n con el detalle completo y terminos de la oferta.
                     </td>
                   </tr>
                   <tr>
                     <td style="padding:0;">
-                      <table role="presentation" width="100%" style="width:100%;border-collapse:collapse;background:${model.brand.colors.dark};">
+                      <table role="presentation" width="100%" style="width:100%;border-collapse:collapse;border:1px solid #D8E0E2;">
                         <tr>
-                          <td style="padding:22px 22px 0 22px;">
-                            <div style="height:4px;width:72px;background:${model.brand.colors.primary};font-size:0;line-height:0;">&nbsp;</div>
+                          <td class="quote-email__surface-dark" style="width:188px;padding:22px;background:${model.brand.colors.dark};vertical-align:top;">
+                            ${renderBrandLogo(model, "dark", 156)}
+                            <div style="padding-top:18px;">
+                              <div style="height:4px;width:72px;background:${model.brand.colors.primary};font-size:0;line-height:0;">&nbsp;</div>
+                            </div>
                           </td>
-                        </tr>
-                        <tr>
-                          <td style="padding:18px 22px 8px 22px;font-size:24px;line-height:28px;font-weight:800;color:${model.brand.colors.light};">
-                            ${escapeHtml(model.senderSignature.name)}
-                          </td>
-                        </tr>
-                        <tr>
-                          <td style="padding:0 22px 14px 22px;font-size:14px;line-height:20px;font-weight:700;color:${model.brand.colors.primary};">
-                            ${escapeHtml(model.senderSignature.role)}
-                          </td>
-                        </tr>
-                        <tr>
-                          <td style="padding:0 22px 22px 22px;">
+                          <td class="quote-email__surface-light" style="padding:20px 22px;background:#F7F9FA;vertical-align:top;">
+                            <div class="quote-email__signature-name" style="padding:0 0 8px 0;font-size:24px;line-height:28px;font-weight:800;color:${model.brand.colors.dark};">
+                              ${escapeHtml(model.senderSignature.name)}
+                            </div>
+                            <div class="quote-email__signature-role" style="padding:0 0 14px 0;font-size:14px;line-height:20px;font-weight:700;color:${model.brand.colors.primary};">
+                              ${escapeHtml(model.senderSignature.role)}
+                            </div>
                             <table role="presentation" width="100%" style="width:100%;border-collapse:collapse;">
                               ${renderContactValue("Sitio web", model.senderSignature.website, websiteHref)}
                               ${renderContactValue("Email", model.senderSignature.email, emailHref)}
@@ -314,8 +478,10 @@ export function renderQuoteEmailHtml(model: QuoteEmailViewModel): string {
                     </td>
                   </tr>
                   <tr>
-                    <td style="padding:18px 0 0 0;font-size:12px;line-height:18px;color:#6B7B85;text-align:center;">
-                      ${escapeHtml(model.brand.company.legalName)}${model.brand.company.website ? ` · ${escapeHtml(model.brand.company.website)}` : ""} · ${escapeHtml(model.quote.currency)}
+                    <td style="padding:18px 0 0 0;text-align:center;">
+                      <div class="quote-email__footer-meta" style="font-size:12px;line-height:18px;color:#6B7B85;">
+                        ${escapeHtml(model.brand.company.legalName)}${model.brand.company.website ? ` &middot; ${escapeHtml(model.brand.company.website)}` : ""} &middot; ${escapeHtml(model.quote.currency)}
+                      </div>
                     </td>
                   </tr>
                 </table>

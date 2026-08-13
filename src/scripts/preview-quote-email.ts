@@ -91,6 +91,10 @@ function buildPreviewQuoteSnapshot(): QuoteSnapshot {
   };
 }
 
+function forceColorSchemePreviewHtml(html: string, scheme: "dark"): string {
+  return html.replace("<html lang=\"es\">", `<html lang="es" data-force-color-scheme="${scheme}">`);
+}
+
 async function main(): Promise<void> {
   const snapshot = buildCanonicalIssuedQuoteSnapshot(
     buildPreviewQuoteSnapshot(),
@@ -105,12 +109,20 @@ async function main(): Promise<void> {
     })
   );
   const outputDirectory = path.resolve(process.cwd(), ".tmp-previews");
-  const outputPath = path.join(outputDirectory, "quote-email-v1-preview.html");
+  const defaultOutputPath = path.join(outputDirectory, "quote-email-v2-preview.html");
+  const lightOutputPath = path.join(outputDirectory, "quote-email-v2-preview-light.html");
+  const darkOutputPath = path.join(outputDirectory, "quote-email-v2-preview-dark.html");
 
   await fsPromises.mkdir(outputDirectory, { recursive: true });
-  await fsPromises.writeFile(outputPath, html, "utf8");
+  await Promise.all([
+    fsPromises.writeFile(defaultOutputPath, html, "utf8"),
+    fsPromises.writeFile(lightOutputPath, html, "utf8"),
+    fsPromises.writeFile(darkOutputPath, forceColorSchemePreviewHtml(html, "dark"), "utf8")
+  ]);
 
-  console.log(outputPath);
+  console.log(defaultOutputPath);
+  console.log(lightOutputPath);
+  console.log(darkOutputPath);
 }
 
 void main();

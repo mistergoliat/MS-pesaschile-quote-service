@@ -1,6 +1,7 @@
 import type { QuoteSnapshot } from "../../../domain";
 import { createCanonicalRequestHash } from "../canonical-json";
 import {
+  formatCommercialUnitPriceDisplay,
   formatClpMoney,
   formatQuantityDisplay,
   formatUtcDateDisplay
@@ -64,6 +65,7 @@ export interface IssuedQuoteDocumentViewModel {
     readonly lineTotalDisplay: string;
   }>;
   readonly pricing: {
+    readonly pricingNote: string;
     readonly subtotalDisplay: string;
     readonly taxAmountDisplay: string;
     readonly totalDisplay: string;
@@ -137,12 +139,16 @@ export function buildIssuedQuoteDocumentViewModel(input: {
       description: item.description,
       sku: item.sku,
       quantityDisplay: formatQuantityDisplay(item.quantity),
-      unitPriceDisplay: formatClpMoney(item.unitPrice),
+      unitPriceDisplay: formatCommercialUnitPriceDisplay({
+        lineTotal: item.lineTotal,
+        quantity: item.quantity
+      }),
       lineSubtotalDisplay: formatClpMoney(item.lineSubtotal),
       lineTaxDisplay: formatClpMoney(item.lineTax),
       lineTotalDisplay: formatClpMoney(item.lineTotal)
     })),
     pricing: {
+      pricingNote: "Precios incluyen IVA",
       subtotalDisplay: formatClpMoney(input.snapshot.pricing.subtotal),
       taxAmountDisplay: formatClpMoney(input.snapshot.pricing.taxAmount),
       totalDisplay: formatClpMoney(input.snapshot.pricing.total)

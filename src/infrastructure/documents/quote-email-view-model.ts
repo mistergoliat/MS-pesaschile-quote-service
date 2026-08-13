@@ -1,5 +1,6 @@
 import type { CanonicalIssuedQuoteSnapshot } from "../../application/quote/documents/issued-quote-document";
 import {
+  formatCommercialUnitPriceDisplay,
   formatClpMoney,
   formatQuantityDisplay,
   formatUtcShortSpanishDateDisplay
@@ -35,6 +36,7 @@ export interface QuoteEmailViewModel {
     readonly lineTotalFormatted: string;
   }>;
   readonly pricing: {
+    readonly pricingNote: string;
     readonly subtotalFormatted: string;
     readonly taxFormatted: string;
     readonly totalFormatted: string;
@@ -87,10 +89,14 @@ export function buildQuoteEmailViewModel(input: {
       description: item.description,
       sku: item.sku,
       quantity: formatQuantityDisplay(item.quantity),
-      unitPriceFormatted: formatClpMoney(item.unitPrice),
+      unitPriceFormatted: formatCommercialUnitPriceDisplay({
+        lineTotal: item.lineTotal,
+        quantity: item.quantity
+      }),
       lineTotalFormatted: formatClpMoney(item.lineTotal)
     })),
     pricing: {
+      pricingNote: "Precios incluyen IVA",
       subtotalFormatted: formatClpMoney(input.snapshot.pricing.subtotal),
       taxFormatted: formatClpMoney(input.snapshot.pricing.taxAmount),
       totalFormatted: formatClpMoney(input.snapshot.pricing.total)

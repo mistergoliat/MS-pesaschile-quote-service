@@ -24,7 +24,8 @@ export interface BrandTheme {
   };
   readonly assets: {
     readonly primaryLogo: string;
-    readonly horizontalLogo: string;
+    readonly logoLight: string;
+    readonly logoDark: string;
     readonly symbol: string;
   };
 }

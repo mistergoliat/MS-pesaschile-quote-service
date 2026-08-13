@@ -2,7 +2,7 @@ import type { BrandTheme, SenderSignature } from "./brand-theme";
 import { PESASCHILE_BRAND_ASSET_IDS } from "./assets/pesaschile-brand-assets";
 
 export const PESASCHILE_BRAND_VERSION = "pesaschile-brand-v1";
-export const QUOTE_EMAIL_TEMPLATE_VERSION = "quote-email-v1";
+export const QUOTE_EMAIL_TEMPLATE_VERSION = "quote-email-v2";
 export const QUOTE_EMAIL_VALIDITY_POLICY_DAYS = 5;
 
 export function createPesasChileBrandV1(input: {
@@ -34,7 +34,8 @@ export function createPesasChileBrandV1(input: {
     },
     assets: {
       primaryLogo: PESASCHILE_BRAND_ASSET_IDS.primaryLogo,
-      horizontalLogo: PESASCHILE_BRAND_ASSET_IDS.horizontalLogo,
+      logoLight: PESASCHILE_BRAND_ASSET_IDS.logoLight,
+      logoDark: PESASCHILE_BRAND_ASSET_IDS.logoDark,
       symbol: PESASCHILE_BRAND_ASSET_IDS.symbol
     }
   };
@@ -47,6 +48,6 @@ export function createDefaultPesasChileSenderSignatureV1(): SenderSignature {
     website: "www.pesaschile.cl",
     email: "sac@pesaschile.cl",
     phone: "+56 9 4222 0146",
-    address: "Av. Monsenor Valech 2050, bod. 25, Maipu"
+    address: "Av. Monseñor Valech 12050, bodega 26, Maipú"
   };
 }

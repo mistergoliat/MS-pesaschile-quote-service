@@ -1,3 +1,5 @@
+import Decimal from "decimal.js";
+
 const SPANISH_SHORT_MONTHS = [
   "ENE",
   "FEB",
@@ -28,6 +30,16 @@ export function formatQuantityDisplay(value: string): string {
   }
 
   return value.replace(/\.?0+$/, "");
+}
+
+export function formatCommercialUnitPriceDisplay(input: {
+  readonly lineTotal: string;
+  readonly quantity: string;
+}): string {
+  const quantity = new Decimal(input.quantity);
+  const unitPrice = new Decimal(input.lineTotal).div(quantity).toDecimalPlaces(0, Decimal.ROUND_HALF_UP);
+
+  return formatClpMoney(unitPrice.toFixed(0));
 }
 
 export function formatUtcDateDisplay(value: string): string {
