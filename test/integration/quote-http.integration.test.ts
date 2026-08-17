@@ -15,7 +15,14 @@ type CreateQuoteHttpBody = Omit<
 interface PublicQuoteDto {
   readonly quoteId: string;
   readonly quoteNumber: string;
-  readonly items: Array<{ lineId: string; unitPrice: string; taxRate: string }>;
+  readonly items: Array<{
+    lineId: string;
+    unitPrice: string;
+    taxRate: string;
+    externalSource: string | null;
+    externalItemId: string | null;
+    externalVariantId: string | null;
+  }>;
   readonly pricing: { subtotal: string; taxAmount: string; total: string };
   readonly issuedDocument: {
     readonly available: boolean;
@@ -558,6 +565,239 @@ describe("Quote HTTP API", () => {
       expect(audit.items.filter((event) => event.action === "issued")).toHaveLength(1);
       expect(idempotencyRows.rows[0]?.count).toBe("1");
       expect(documents.body).toEqual(issueResponse.body?.issuedDocument);
+    });
+  }, HTTP_INTEGRATION_TEST_TIMEOUT_MS);
+
+  // SALES-AGENT-R1-T1.1: create -> read round trip preserves the three
+  // external identity fields exactly, through the real Fastify JSON
+  // response, the real Postgres persistence (jsonb_build_object), and
+  // Quote.rehydrate's own reconciliation check.
+  it("create -> read conserves externalSource/externalItemId/externalVariantId", async () => {
+    await withContext(async (context) => {
+      const created = await createDraftViaHttp(context, {
+        items: [
+          {
+            type: "product",
+            externalSource: "catalog_service",
+            externalItemId: "545",
+            externalVariantId: "31",
+            sku: "BAR-OLY-20",
+            description: "Barra olimpica 20 kg",
+            quantity: "1",
+            unitPrice: "99990",
+            taxIncluded: true,
+            taxRate: "0.19"
+          }
+        ]
+      });
+      const fetched = await context.request<PublicQuoteDto>({
+        method: "GET",
+        path: `/v1/quotes/${created.body!.quoteId}`
+      });
+
+      expect(created.status).toBe(201);
+      expect(created.body?.items[0]).toMatchObject({
+        externalSource: "catalog_service",
+        externalItemId: "545",
+        externalVariantId: "31"
+      });
+      expect(fetched.body?.items[0]).toMatchObject({
+        externalSource: "catalog_service",
+        externalItemId: "545",
+        externalVariantId: "31"
+      });
+    });
+  }, HTTP_INTEGRATION_TEST_TIMEOUT_MS);
+
+  // SALES-AGENT-R1-T1.1: a line with no catalog identity (legacy/manual,
+  // e.g. a service line) is still a valid quote - additive fields are never
+  // a universal requirement.
+  it("create -> read conserves null externalSource/externalItemId/externalVariantId for a line with no catalog identity", async () => {
+    await withContext(async (context) => {
+      const created = await createDraftViaHttp(context, {
+        items: [
+          {
+            type: "service",
+            description: "Servicio de instalacion",
+            quantity: "1",
+            unitPrice: "15000",
+            taxIncluded: true,
+            taxRate: "0.19"
+          }
+        ]
+      });
+
+      expect(created.status).toBe(201);
+      expect(created.body?.items[0]).toMatchObject({
+        externalSource: null,
+        externalItemId: null,
+        externalVariantId: null
+      });
+    });
+  }, HTTP_INTEGRATION_TEST_TIMEOUT_MS);
+
+  // SALES-AGENT-R1-T1.1: updateDraft can change the external identity
+  // (e.g. the customer switches product/variant before the quote is
+  // issued) - same "always the complete list, never a delta" replacement
+  // semantics as every other line field.
+  it("update draft changes externalItemId/externalVariantId to a different catalog product/variant", async () => {
+    await withContext(async (context) => {
+      const created = await createDraftViaHttp(context, {
+        items: [
+          {
+            type: "product",
+            externalSource: "catalog_service",
+            externalItemId: "545",
+            externalVariantId: "31",
+            sku: "BAR-OLY-20",
+            description: "Barra olimpica 20 kg",
+            quantity: "1",
+            unitPrice: "99990",
+            taxIncluded: true,
+            taxRate: "0.19"
+          }
+        ]
+      });
+      const updated = await context.request<PublicQuoteDto>({
+        method: "PUT",
+        path: `/v1/quotes/${created.body!.quoteId}/draft`,
+        headers: {
+          "Idempotency-Key": "update-draft-variant"
+        },
+        body: {
+          expectedVersion: 1,
+          actor: buildCreateQuoteBody().actor,
+          source: buildCreateQuoteBody().source,
+          customerSnapshot: buildCreateQuoteBody().customerSnapshot,
+          items: [
+            {
+              type: "product",
+              externalSource: "catalog_service",
+              externalItemId: "545",
+              externalVariantId: "32",
+              sku: "BAR-OLY-20-RED",
+              description: "Barra olimpica 20 kg - roja",
+              quantity: "1",
+              unitPrice: "99990",
+              taxIncluded: true,
+              taxRate: "0.19"
+            }
+          ],
+          validUntil: "2026-08-22T00:00:00.000Z"
+        }
+      });
+
+      expect(updated.status).toBe(200);
+      expect(updated.body?.items[0]).toMatchObject({
+        externalSource: "catalog_service",
+        externalItemId: "545",
+        externalVariantId: "32"
+      });
+    });
+  }, HTTP_INTEGRATION_TEST_TIMEOUT_MS);
+
+  // SALES-AGENT-R1-T1.1, task section 3: external identity is part of the
+  // line's commercial content, frozen at issue exactly like description/
+  // quantity/unitPrice - never reset, never dropped by the issue transition.
+  it("issue freezes externalSource/externalItemId/externalVariantId - they survive into the issued quote unchanged", async () => {
+    await withContext(async (context) => {
+      const created = await createDraftViaHttp(context, {
+        items: [
+          {
+            type: "product",
+            externalSource: "catalog_service",
+            externalItemId: "545",
+            externalVariantId: "31",
+            sku: "BAR-OLY-20",
+            description: "Barra olimpica 20 kg",
+            quantity: "1",
+            unitPrice: "99990",
+            taxIncluded: true,
+            taxRate: "0.19"
+          }
+        ]
+      });
+      const issueResponse = await context.request<PublicQuoteDto>({
+        method: "POST",
+        path: `/v1/quotes/${created.body!.quoteId}/issue`,
+        headers: {
+          "Idempotency-Key": "issue-preserves-identity"
+        },
+        body: {
+          expectedVersion: 1,
+          actor: buildCreateQuoteBody().actor,
+          source: buildCreateQuoteBody().source
+        }
+      });
+
+      expect(issueResponse.status).toBe(200);
+      expect(issueResponse.body?.status).toBe("issued");
+      expect(issueResponse.body?.items[0]).toMatchObject({
+        externalSource: "catalog_service",
+        externalItemId: "545",
+        externalVariantId: "31"
+      });
+    });
+  }, HTTP_INTEGRATION_TEST_TIMEOUT_MS);
+
+  // SALES-AGENT-R1-T1.1, task section 13.7: the idempotency request hash
+  // (createCanonicalRequestHash over requestHashPayload.items, which is the
+  // raw parsed body - see quote-route.ts) must treat two otherwise-identical
+  // payloads that differ only by externalVariantId as DIFFERENT payloads -
+  // never a false-positive replay across two real catalog variants.
+  it("idempotency hash distinguishes a create request for variant 31 from the same key reused for variant 32", async () => {
+    await withContext(async (context) => {
+      const key = "variant-distinguishing-key";
+      const withVariant31 = await createDraftViaHttp(
+        context,
+        {
+          items: [
+            {
+              type: "product",
+              externalSource: "catalog_service",
+              externalItemId: "545",
+              externalVariantId: "31",
+              sku: "BAR-OLY-20",
+              description: "Barra olimpica 20 kg",
+              quantity: "1",
+              unitPrice: "99990",
+              taxIncluded: true,
+              taxRate: "0.19"
+            }
+          ]
+        },
+        key
+      );
+      const withVariant32 = await createDraftViaHttp(
+        context,
+        {
+          items: [
+            {
+              type: "product",
+              externalSource: "catalog_service",
+              externalItemId: "545",
+              externalVariantId: "32",
+              sku: "BAR-OLY-20-RED",
+              description: "Barra olimpica 20 kg - roja",
+              quantity: "1",
+              unitPrice: "99990",
+              taxIncluded: true,
+              taxRate: "0.19"
+            }
+          ]
+        },
+        key
+      );
+
+      expect(withVariant31.status).toBe(201);
+      expect(withVariant32).toMatchObject({
+        status: 409,
+        body: {
+          error: {
+            code: "idempotency_key_reused_with_different_payload"
+          }
+        }
+      });
     });
   }, HTTP_INTEGRATION_TEST_TIMEOUT_MS);
 

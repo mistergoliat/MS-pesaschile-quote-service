@@ -51,7 +51,9 @@ function buildQuoteSnapshot(overrides: Partial<QuoteSnapshot["customerSnapshot"]
       {
         lineId: "daab167e-ca72-43bc-9677-5ecfbb7d19e6",
         type: "service",
+        externalSource: null,
         externalItemId: null,
+        externalVariantId: null,
         sku: "SKU-9",
         description: 'Servicio "Premium" & <img src=x onerror=alert(1)>',
         quantity: "1.000000",
