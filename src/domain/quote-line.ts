@@ -20,7 +20,17 @@ export type QuoteLineType = (typeof QUOTE_LINE_TYPES)[number];
 export interface QuoteLineInput {
   readonly lineId: string;
   readonly type: QuoteLineType;
+  /**
+   * SALES-AGENT-R1-T1.1. Generic external identity references, never a
+   * requirement for every line (type=service or a legacy/manual line may
+   * carry none of the three, all null). When present, they identify the
+   * exact same catalog product/variant CRM's own durable selection already
+   * resolved - never concatenated, never parsed heuristically here or
+   * anywhere downstream.
+   */
+  readonly externalSource?: string | null;
   readonly externalItemId?: string | null;
+  readonly externalVariantId?: string | null;
   readonly sku?: string | null;
   readonly description: string;
   readonly quantity: DecimalInput;
@@ -32,7 +42,9 @@ export interface QuoteLineInput {
 export interface QuoteLineState {
   readonly lineId: string;
   readonly type: QuoteLineType;
+  readonly externalSource: string | null;
   readonly externalItemId: string | null;
+  readonly externalVariantId: string | null;
   readonly sku: string | null;
   readonly description: string;
   readonly quantity: string;
@@ -47,7 +59,9 @@ export interface QuoteLineState {
 export class QuoteLine {
   readonly #lineId: string;
   readonly #type: QuoteLineType;
+  readonly #externalSource: string | null;
   readonly #externalItemId: string | null;
+  readonly #externalVariantId: string | null;
   readonly #sku: string | null;
   readonly #description: string;
   readonly #quantity: Decimal;
@@ -61,7 +75,9 @@ export class QuoteLine {
   private constructor(state: {
     lineId: string;
     type: QuoteLineType;
+    externalSource: string | null;
     externalItemId: string | null;
+    externalVariantId: string | null;
     sku: string | null;
     description: string;
     quantity: Decimal;
@@ -74,7 +90,9 @@ export class QuoteLine {
   }) {
     this.#lineId = state.lineId;
     this.#type = state.type;
+    this.#externalSource = state.externalSource;
     this.#externalItemId = state.externalItemId;
+    this.#externalVariantId = state.externalVariantId;
     this.#sku = state.sku;
     this.#description = state.description;
     this.#quantity = state.quantity;
@@ -159,10 +177,20 @@ export class QuoteLine {
     return new QuoteLine({
       lineId,
       type: input.type,
+      externalSource: normalizeOptionalText(input.externalSource, {
+        field: "items.externalSource",
+        code: DOMAIN_ERROR_CODES.invalidQuoteReference,
+        maxLength: DOMAIN_LIMITS.quoteLine.maxExternalSourceLength
+      }),
       externalItemId: normalizeOptionalText(input.externalItemId, {
         field: "items.externalItemId",
         code: DOMAIN_ERROR_CODES.invalidQuoteReference,
         maxLength: DOMAIN_LIMITS.quoteLine.maxExternalItemIdLength
+      }),
+      externalVariantId: normalizeOptionalText(input.externalVariantId, {
+        field: "items.externalVariantId",
+        code: DOMAIN_ERROR_CODES.invalidQuoteReference,
+        maxLength: DOMAIN_LIMITS.quoteLine.maxExternalVariantIdLength
       }),
       sku: normalizeOptionalText(input.sku, {
         field: "items.sku",
@@ -202,7 +230,9 @@ export class QuoteLine {
       {
         lineId: input.lineId,
         type: input.type,
+        externalSource: input.externalSource,
         externalItemId: input.externalItemId,
+        externalVariantId: input.externalVariantId,
         sku: input.sku,
         description: input.description,
         quantity,
@@ -232,7 +262,9 @@ export class QuoteLine {
     return new QuoteLine({
       lineId: snapshot.lineId,
       type: snapshot.type,
+      externalSource: snapshot.externalSource,
       externalItemId: snapshot.externalItemId,
+      externalVariantId: snapshot.externalVariantId,
       sku: snapshot.sku,
       description: snapshot.description,
       quantity,
@@ -302,7 +334,9 @@ export class QuoteLine {
     return {
       lineId: this.#lineId,
       type: this.#type,
+      externalSource: this.#externalSource,
       externalItemId: this.#externalItemId,
+      externalVariantId: this.#externalVariantId,
       sku: this.#sku,
       description: this.#description,
       quantity: serializeDecimal(this.#quantity),

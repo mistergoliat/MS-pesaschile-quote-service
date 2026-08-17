@@ -250,7 +250,9 @@ List responses are:
   "items": [
     {
       "type": "product",
-      "externalItemId": "sku-1",
+      "externalSource": "catalog_service",
+      "externalItemId": "545",
+      "externalVariantId": "31",
       "sku": "SKU-1",
       "description": "Line 1",
       "quantity": "2",
@@ -264,6 +266,8 @@ List responses are:
 ```
 
 Caller-controlled fields do not include `quoteId`, `quoteNumber`, `lineId`, pricing totals, timestamps, status, or revision metadata.
+
+`externalSource`/`externalItemId`/`externalVariantId` (added in migration `000004`) are generic, opaque external-identity references - never required on every line (a `type: "service"` line, or a legacy/manual line, may omit all three; `sku` is a separate, independent field). None of the three participates in pricing/lifecycle, none is a foreign key, and none is displayed in the issued PDF/email (only `description`/`sku`/quantities/totals are). They are frozen into the immutable issued-document content hash exactly like every other commercial field of the line, and persisted historically - a quote issued before this migration simply has `null` for both new columns.
 
 ### Update Draft
 

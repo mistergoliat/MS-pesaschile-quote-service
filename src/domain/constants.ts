@@ -6,7 +6,9 @@ export const DOMAIN_LIMITS = Object.freeze({
   quoteLine: {
     maxDescriptionLength: 500,
     maxSkuLength: 100,
-    maxExternalItemIdLength: 200
+    maxExternalItemIdLength: 200,
+    maxExternalSourceLength: 100,
+    maxExternalVariantIdLength: 200
   },
   customer: {
     maxNameLength: 200,
