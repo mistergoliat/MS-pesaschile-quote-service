@@ -10,7 +10,15 @@ import {
 export interface CanonicalIssuedQuoteLineSnapshot {
   readonly lineId: string;
   readonly type: QuoteSnapshot["items"][number]["type"];
+  /**
+   * SALES-AGENT-R1-T1.1: frozen into the immutable content hash exactly like
+   * every other commercial field of the line (description/quantity/price) -
+   * never surfaced in IssuedQuoteDocumentViewModel below, which is the only
+   * shape the PDF/email templates ever see.
+   */
+  readonly externalSource: string | null;
   readonly externalItemId: string | null;
+  readonly externalVariantId: string | null;
   readonly sku: string | null;
   readonly description: string;
   readonly quantity: string;
@@ -89,7 +97,9 @@ export function buildCanonicalIssuedQuoteSnapshot(
     items: quote.items.map((item) => ({
       lineId: item.lineId,
       type: item.type,
+      externalSource: item.externalSource,
       externalItemId: item.externalItemId,
+      externalVariantId: item.externalVariantId,
       sku: item.sku,
       description: item.description,
       quantity: item.quantity,

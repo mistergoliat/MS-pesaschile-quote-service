@@ -37,7 +37,9 @@ function buildQuoteSnapshot(overrides: Partial<QuoteSnapshot> = {}): QuoteSnapsh
       {
         lineId: "97686fc1-543f-4d83-b902-c0b1023e2bd8",
         type: "product",
+        externalSource: "catalog_service",
         externalItemId: "sku-1",
+        externalVariantId: null,
         sku: "SKU-1",
         description: "Mancuerna",
         quantity: "2.000000",
@@ -120,7 +122,9 @@ describe("issued quote documents", () => {
           {
             lineId: originalLine.lineId,
             type: originalLine.type,
+            externalSource: originalLine.externalSource,
             externalItemId: originalLine.externalItemId,
+            externalVariantId: originalLine.externalVariantId,
             sku: originalLine.sku,
             description: originalLine.description,
             quantity: "3.000000",
@@ -169,5 +173,114 @@ describe("issued quote documents", () => {
       taxAmountDisplay: "$1.593",
       totalDisplay: "$9.980"
     });
+  });
+
+  // SALES-AGENT-R1-T1.1, task section 5: PDF/email must never expose
+  // externalSource/externalItemId/externalVariantId - only description/sku
+  // (sku already a preexisting visual decision) reach the view model.
+  it("never exposes externalSource/externalItemId/externalVariantId in the document view model", () => {
+    const viewModel = buildIssuedQuoteDocumentViewModel({
+      snapshot: buildCanonicalIssuedQuoteSnapshot(buildQuoteSnapshot(), "2026-08-10T18:30:00.000Z"),
+      renderVersion: "quote-v1",
+      companyName: "Pesas Chile SPA"
+    });
+
+    expect(viewModel.items[0]).not.toHaveProperty("externalSource");
+    expect(viewModel.items[0]).not.toHaveProperty("externalItemId");
+    expect(viewModel.items[0]).not.toHaveProperty("externalVariantId");
+    expect(viewModel.items[0]).toHaveProperty("sku", "SKU-1");
+  });
+
+  // SALES-AGENT-R1-T1.1, task section 13.7: the content hash (the same
+  // mechanism idempotency request hashing already reuses via
+  // createCanonicalRequestHash) must distinguish two lines that differ ONLY
+  // by externalVariantId - never collapse two different catalog variants
+  // into the same commercial identity.
+  it("the content hash distinguishes two otherwise-identical lines that differ only by externalVariantId", () => {
+    const variant31 = buildCanonicalIssuedQuoteSnapshot(
+      buildQuoteSnapshot({
+        items: [
+          {
+            lineId: "97686fc1-543f-4d83-b902-c0b1023e2bd8",
+            type: "product",
+            externalSource: "catalog_service",
+            externalItemId: "545",
+            externalVariantId: "31",
+            sku: "SKU-1",
+            description: "Mancuerna",
+            quantity: "2.000000",
+            unitPrice: "4990",
+            taxIncluded: true,
+            taxRate: "0.19",
+            lineSubtotal: "8387",
+            lineTax: "1593",
+            lineTotal: "9980"
+          }
+        ]
+      }),
+      "2026-08-10T18:30:00.000Z"
+    );
+    const variant32 = buildCanonicalIssuedQuoteSnapshot(
+      buildQuoteSnapshot({
+        items: [
+          {
+            lineId: "97686fc1-543f-4d83-b902-c0b1023e2bd8",
+            type: "product",
+            externalSource: "catalog_service",
+            externalItemId: "545",
+            externalVariantId: "32",
+            sku: "SKU-1",
+            description: "Mancuerna",
+            quantity: "2.000000",
+            unitPrice: "4990",
+            taxIncluded: true,
+            taxRate: "0.19",
+            lineSubtotal: "8387",
+            lineTax: "1593",
+            lineTotal: "9980"
+          }
+        ]
+      }),
+      "2026-08-10T18:30:00.000Z"
+    );
+
+    expect(createIssuedQuoteContentHash(variant31)).not.toBe(createIssuedQuoteContentHash(variant32));
+  });
+
+  // SALES-AGENT-R1-T1.1, task section 3/13.9: a historical/legacy line with
+  // no catalog identity at all (all three external fields null) must still
+  // build a valid canonical snapshot and content hash - additive fields are
+  // never a universal requirement.
+  it("a historical line with null externalSource/externalItemId/externalVariantId builds a valid snapshot", () => {
+    const snapshot = buildCanonicalIssuedQuoteSnapshot(
+      buildQuoteSnapshot({
+        items: [
+          {
+            lineId: "97686fc1-543f-4d83-b902-c0b1023e2bd8",
+            type: "service",
+            externalSource: null,
+            externalItemId: null,
+            externalVariantId: null,
+            sku: null,
+            description: "Servicio de instalacion (linea historica, previa a T1.1)",
+            quantity: "1.000000",
+            unitPrice: "4990",
+            taxIncluded: true,
+            taxRate: "0.19",
+            lineSubtotal: "4193",
+            lineTax: "797",
+            lineTotal: "4990"
+          }
+        ]
+      }),
+      "2026-08-10T18:30:00.000Z"
+    );
+
+    expect(snapshot.items[0]).toMatchObject({
+      externalSource: null,
+      externalItemId: null,
+      externalVariantId: null
+    });
+    expect(() => createIssuedQuoteContentHash(snapshot)).not.toThrow();
   });
 });

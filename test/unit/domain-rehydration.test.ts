@@ -34,7 +34,9 @@ describe("Quote rehydration", () => {
         {
           lineId: "6d22cbc6-54ad-4956-b8b6-cd2743bf9e01",
           type: "product" as const,
+          externalSource: null,
           externalItemId: null,
+          externalVariantId: null,
           sku: null,
           description: "Product",
           quantity: "2",
@@ -114,7 +116,9 @@ describe("Quote rehydration", () => {
             {
               lineId: "6d22cbc6-54ad-4956-b8b6-cd2743bf9e01",
               type: "product",
+              externalSource: null,
               externalItemId: null,
+              externalVariantId: null,
               sku: null,
               description: "Product",
               quantity: "1",

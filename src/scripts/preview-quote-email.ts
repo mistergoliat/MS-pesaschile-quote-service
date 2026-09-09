@@ -41,7 +41,9 @@ function buildPreviewQuoteSnapshot(): QuoteSnapshot {
       {
         lineId: "preview-line-1",
         type: "product",
+        externalSource: "catalog_service",
         externalItemId: "sku-balanza-300",
+        externalVariantId: null,
         sku: "BAL-300",
         description: "Bascula industrial 300 kg con indicador digital",
         quantity: "2",
@@ -55,7 +57,9 @@ function buildPreviewQuoteSnapshot(): QuoteSnapshot {
       {
         lineId: "preview-line-2",
         type: "service",
+        externalSource: null,
         externalItemId: "svc-cal-01",
+        externalVariantId: null,
         sku: "SVC-CAL",
         description: "Servicio de calibracion y puesta en marcha",
         quantity: "1",

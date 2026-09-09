@@ -39,7 +39,9 @@ function buildQuoteSnapshot(): QuoteSnapshot {
       {
         lineId: "line-1",
         type: "service",
+        externalSource: null,
         externalItemId: null,
+        externalVariantId: null,
         sku: "SKU-9",
         description: "Servicio Premium",
         quantity: "1.000000",

@@ -57,10 +57,24 @@ const customerSnapshotSchema = z.object({
 
 const itemSchema = z.object({
   type: z.enum(QUOTE_LINE_TYPES),
+  // SALES-AGENT-R1-T1.1: generic external identity references (never a
+  // requirement for every line - a service line or a legacy/manual line may
+  // omit all three). No parsing/concatenation semantics here or anywhere
+  // downstream - each is an independent, opaque string.
+  externalSource: z
+    .string()
+    .trim()
+    .max(DOMAIN_LIMITS.quoteLine.maxExternalSourceLength)
+    .nullish(),
   externalItemId: z
     .string()
     .trim()
     .max(DOMAIN_LIMITS.quoteLine.maxExternalItemIdLength)
+    .nullish(),
+  externalVariantId: z
+    .string()
+    .trim()
+    .max(DOMAIN_LIMITS.quoteLine.maxExternalVariantIdLength)
     .nullish(),
   sku: z.string().trim().max(DOMAIN_LIMITS.quoteLine.maxSkuLength).nullish(),
   description: z.string().trim().min(1).max(DOMAIN_LIMITS.quoteLine.maxDescriptionLength),
@@ -207,8 +221,14 @@ function toItemInputs(items: readonly z.infer<typeof itemSchema>[]) {
     unitPrice: item.unitPrice,
     taxIncluded: item.taxIncluded,
     taxRate: item.taxRate,
+    ...(item.externalSource !== undefined
+      ? { externalSource: item.externalSource ?? null }
+      : {}),
     ...(item.externalItemId !== undefined
       ? { externalItemId: item.externalItemId ?? null }
+      : {}),
+    ...(item.externalVariantId !== undefined
+      ? { externalVariantId: item.externalVariantId ?? null }
       : {}),
     ...(item.sku !== undefined ? { sku: item.sku ?? null } : {})
   }));
