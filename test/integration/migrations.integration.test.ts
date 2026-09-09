@@ -80,7 +80,7 @@ describe("database migrations", () => {
     }
   });
 
-  it("rolls back only the latest delivery migration on a disposable database", async () => {
+  it("rolls back only the latest shipping-line migration on a disposable database", async () => {
     await runMigrations({
       databaseUrl: testDatabase.connectionString,
       direction: "up"
@@ -127,11 +127,25 @@ describe("database migrations", () => {
       expect(tableResult.rows.map((row) => row.table_name).sort()).toEqual([
         "idempotency_keys",
         "quote_audit_events",
+        "quote_deliveries",
+        "quote_email_outbox",
         "quote_lines",
         "quotes"
       ]);
       expect(sequenceResult.rowCount).toBe(1);
       expect(schemaResult.rowCount).toBe(1);
+
+      const constraintResult = await client.query<{ definition: string }>(
+        `
+          select pg_get_constraintdef(oid) as definition
+          from pg_constraint
+          where conrelid = 'quote_service.quote_lines'::regclass
+            and conname = 'quote_lines_type_check'
+        `
+      );
+      expect(constraintResult.rows[0]?.definition).toContain("'product'");
+      expect(constraintResult.rows[0]?.definition).toContain("'service'");
+      expect(constraintResult.rows[0]?.definition).not.toContain("'shipping'");
     } finally {
       await client.end();
     }

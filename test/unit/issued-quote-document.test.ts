@@ -175,6 +175,50 @@ describe("issued quote documents", () => {
     });
   });
 
+  it("preserves a shipping line in the issued snapshot and labels it for documents", () => {
+    const snapshot = buildCanonicalIssuedQuoteSnapshot(
+      buildQuoteSnapshot({
+        items: [
+          {
+            lineId: "shipping-line-1",
+            type: "shipping",
+            externalSource: null,
+            externalItemId: null,
+            externalVariantId: null,
+            sku: null,
+            description: "Despacho",
+            quantity: "1.000000",
+            unitPrice: "11900",
+            taxIncluded: true,
+            taxRate: "0.19",
+            lineSubtotal: "10000",
+            lineTax: "1900",
+            lineTotal: "11900"
+          }
+        ],
+        pricing: {
+          subtotal: "10000",
+          taxAmount: "1900",
+          total: "11900"
+        }
+      }),
+      "2026-08-10T18:30:00.000Z"
+    );
+
+    expect(snapshot.items[0]).toMatchObject({
+      type: "shipping",
+      unitPrice: "11900",
+      lineTotal: "11900"
+    });
+    expect(
+      buildIssuedQuoteDocumentViewModel({
+        snapshot,
+        renderVersion: "quote-pdf-v2-pdfmake",
+        companyName: "Pesas Chile SPA"
+      }).items[0]?.typeLabel
+    ).toBe("Despacho");
+  });
+
   // SALES-AGENT-R1-T1.1, task section 5: PDF/email must never expose
   // externalSource/externalItemId/externalVariantId - only description/sku
   // (sku already a preexisting visual decision) reach the view model.

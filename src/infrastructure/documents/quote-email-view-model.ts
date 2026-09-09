@@ -85,7 +85,8 @@ export function buildQuoteEmailViewModel(input: {
     },
     items: input.snapshot.items.map((item) => ({
       type: item.type,
-      typeLabel: item.type === "product" ? "Producto" : "Servicio",
+      typeLabel:
+        item.type === "product" ? "Producto" : item.type === "service" ? "Servicio" : "Despacho",
       description: item.description,
       sku: item.sku,
       quantity: formatQuantityDisplay(item.quantity),

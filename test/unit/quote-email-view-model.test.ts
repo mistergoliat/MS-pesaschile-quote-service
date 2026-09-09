@@ -120,4 +120,49 @@ describe("quote email view model", () => {
     expect(viewModel.senderSignature.name).toBe("Valentina Soto");
     expect(viewModel.senderSignature.role).toBe("Ejecutiva Comercial");
   });
+
+  it("labels shipping as Despacho without exposing logistics metadata", () => {
+    const quote = buildQuoteSnapshot();
+    const snapshot = buildCanonicalIssuedQuoteSnapshot(
+      {
+        ...quote,
+        items: [
+          {
+            ...quote.items[0]!,
+            type: "shipping",
+            externalSource: null,
+            externalItemId: null,
+            externalVariantId: null,
+            sku: null,
+            description: "Despacho",
+            quantity: "1.000000",
+            unitPrice: "11900",
+            taxIncluded: true,
+            lineSubtotal: "10000",
+            lineTax: "1900",
+            lineTotal: "11900"
+          }
+        ],
+        pricing: {
+          subtotal: "10000",
+          taxAmount: "1900",
+          total: "11900"
+        }
+      },
+      "2026-08-12T18:30:00.000Z"
+    );
+
+    const viewModel = buildQuoteEmailViewModel({
+      snapshot,
+      brand: createPesasChileBrandV1(),
+      emailTemplateVersion: QUOTE_EMAIL_TEMPLATE_VERSION,
+      senderSignature: createDefaultPesasChileSenderSignatureV1()
+    });
+
+    expect(viewModel.items[0]).toMatchObject({
+      type: "shipping",
+      typeLabel: "Despacho",
+      lineTotalFormatted: "$11.900"
+    });
+  });
 });

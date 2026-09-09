@@ -136,6 +136,35 @@ describe("QuoteLine", () => {
     expect(line.toSnapshot().type).toBe("service");
   });
 
+  it.each([
+    { unitPrice: "11900", lineSubtotal: "10000", lineTax: "1900", lineTotal: "11900" },
+    { unitPrice: "1", lineSubtotal: "1", lineTax: "0", lineTotal: "1" }
+  ])("reuses tax-included gross calculation for a shipping line at $unitPrice CLP", (amounts) => {
+    const line = QuoteLine.create(
+      {
+        lineId: "shipping-line-1",
+        type: "shipping",
+        description: "Despacho",
+        quantity: "1",
+        unitPrice: amounts.unitPrice,
+        taxIncluded: true,
+        taxRate: "0.19"
+      },
+      "CLP"
+    );
+
+    expect(line.toSnapshot()).toMatchObject({
+      type: "shipping",
+      quantity: "1",
+      unitPrice: amounts.unitPrice,
+      taxIncluded: true,
+      taxRate: "0.19",
+      lineSubtotal: amounts.lineSubtotal,
+      lineTax: amounts.lineTax,
+      lineTotal: amounts.lineTotal
+    });
+  });
+
   it("rejects zero quantity", () => {
     expectDomainError(
       () =>

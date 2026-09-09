@@ -145,7 +145,8 @@ export function buildIssuedQuoteDocumentViewModel(input: {
       region: input.snapshot.customerSnapshot.region
     },
     items: input.snapshot.items.map((item) => ({
-      typeLabel: item.type === "product" ? "Producto" : "Servicio",
+      typeLabel:
+        item.type === "product" ? "Producto" : item.type === "service" ? "Servicio" : "Despacho",
       description: item.description,
       sku: item.sku,
       quantityDisplay: formatQuantityDisplay(item.quantity),

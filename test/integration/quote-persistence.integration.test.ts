@@ -140,6 +140,38 @@ describe("PostgreSQL quote persistence", () => {
     });
   }, POSTGRES_INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("persists and rehydrates a shipping line without carrier metadata", async () => {
+    await withContext(async (context) => {
+      const created = await context.service.createDraft(
+        buildCreateDraftCommand({
+          items: [
+            {
+              type: "shipping",
+              description: "Despacho",
+              quantity: "1",
+              unitPrice: "11900",
+              taxIncluded: true,
+              taxRate: "0.19"
+            }
+          ],
+          idempotencyKey: "idem-shipping-persistence"
+        })
+      );
+      const rehydrated = await context.service.findById(created.quote.quoteId);
+
+      expect(rehydrated?.items[0]).toMatchObject({
+        type: "shipping",
+        externalSource: null,
+        externalItemId: null,
+        externalVariantId: null,
+        unitPrice: "11900",
+        lineSubtotal: "10000",
+        lineTax: "1900",
+        lineTotal: "11900"
+      });
+    });
+  }, POSTGRES_INTEGRATION_TEST_TIMEOUT_MS);
+
   it("generates concurrent-safe monotonic quote numbers", async () => {
     await withContext(async (context) => {
       const results = await Promise.all(

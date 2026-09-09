@@ -17,6 +17,7 @@ interface PublicQuoteDto {
   readonly quoteNumber: string;
   readonly items: Array<{
     lineId: string;
+    type: "product" | "service" | "shipping";
     unitPrice: string;
     taxRate: string;
     externalSource: string | null;
@@ -261,6 +262,35 @@ describe("Quote HTTP API", () => {
       expect(stored?.quoteNumber).toBe(response.body?.quoteNumber);
       expect(audit.items).toHaveLength(1);
       expect(audit.items[0]?.action).toBe("draft_created");
+    });
+  }, HTTP_INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("accepts a shipping line through the HTTP contract and preserves its gross amount", async () => {
+    await withContext(async (context) => {
+      const response = await createDraftViaHttp(context, {
+        items: [
+          {
+            type: "shipping",
+            description: "Despacho",
+            quantity: "1",
+            unitPrice: "11900",
+            taxIncluded: true,
+            taxRate: "0.19"
+          }
+        ]
+      }, "create-shipping-http");
+
+      expect(response.status).toBe(201);
+      expect(response.body?.items[0]).toMatchObject({
+        type: "shipping",
+        unitPrice: "11900",
+        taxRate: "0.19"
+      });
+      expect(response.body?.pricing).toEqual({
+        subtotal: "10000",
+        taxAmount: "1900",
+        total: "11900"
+      });
     });
   }, HTTP_INTEGRATION_TEST_TIMEOUT_MS);
 

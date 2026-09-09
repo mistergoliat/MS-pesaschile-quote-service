@@ -232,6 +232,55 @@ describe("document templates", () => {
     expect(html).not.toContain("Quote Service");
   });
 
+  it("renders Despacho in printable and email HTML", () => {
+    const quote = buildQuoteSnapshot();
+    const shippingSnapshot = buildCanonicalIssuedQuoteSnapshot(
+      {
+        ...quote,
+        items: [
+          {
+            ...quote.items[0]!,
+            type: "shipping",
+            externalSource: null,
+            externalItemId: null,
+            externalVariantId: null,
+            sku: null,
+            description: "Despacho",
+            quantity: "1.000000",
+            unitPrice: "11900",
+            taxIncluded: true,
+            lineSubtotal: "10000",
+            lineTax: "1900",
+            lineTotal: "11900"
+          }
+        ],
+        pricing: {
+          subtotal: "10000",
+          taxAmount: "1900",
+          total: "11900"
+        }
+      },
+      "2026-08-12T18:30:00.000Z"
+    );
+    const viewModel = buildIssuedQuoteDocumentViewModel({
+      snapshot: shippingSnapshot,
+      renderVersion: "quote-pdf-v2-pdfmake",
+      companyName: "Pesas Chile SPA"
+    });
+
+    expect(renderQuotePrintableHtml(viewModel)).toContain("Despacho");
+    expect(
+      renderQuoteEmailHtml(
+        buildQuoteEmailViewModel({
+          snapshot: shippingSnapshot,
+          brand: createPesasChileBrandV1(),
+          emailTemplateVersion: QUOTE_EMAIL_TEMPLATE_VERSION,
+          senderSignature: createDefaultPesasChileSenderSignatureV1()
+        })
+      )
+    ).toContain("Despacho");
+  });
+
   it("matches the normalized email snapshot", () => {
     expect(normalizeHtml(buildEmailHtml())).toMatchSnapshot();
   });

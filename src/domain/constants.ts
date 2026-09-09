@@ -52,7 +52,7 @@ export const QUOTE_STATUSES = [
 
 export const TERMINAL_QUOTE_STATUSES = ["paid", "cancelled", "expired"] as const;
 
-export const QUOTE_LINE_TYPES = ["product", "service"] as const;
+export const QUOTE_LINE_TYPES = ["product", "service", "shipping"] as const;
 
 export const ACTOR_TYPES = ["sales_agent", "operator", "system", "service"] as const;
 

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { inflateSync } from "node:zlib";
 
 import { describe, expect, it } from "vitest";
 
@@ -19,6 +20,38 @@ describe("NativePdfRenderer", () => {
     expect(output).not.toContain("benchmark-catalog");
     expect(output).not.toContain("external-item-1");
     expect(output).toContain("pdfmake");
+  });
+
+  it("renders the shipping line label as Despacho", async () => {
+    const fixture = createPdfFixture(1);
+    const shippingSnapshot = {
+      ...fixture,
+      items: [
+        {
+          ...fixture.items[0]!,
+          type: "shipping" as const,
+          externalSource: null,
+          externalItemId: null,
+          externalVariantId: null,
+          sku: null,
+          description: "Despacho"
+        }
+      ]
+    };
+    const pdf = await createPdfRenderer().renderPdf(shippingSnapshot);
+    const serialized = pdf.toString("latin1");
+    const streams = [...serialized.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)]
+      .map((match) => Buffer.from(match[1] ?? "", "latin1"))
+      .flatMap((stream) => {
+        try {
+          return [inflateSync(stream).toString("latin1")];
+        } catch {
+          return [];
+        }
+      })
+      .join("\n");
+
+    expect(streams).toContain("446573706163686f");
   });
 
   it("produces a stable hash for the same snapshot", async () => {
