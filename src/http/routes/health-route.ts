@@ -4,7 +4,7 @@ import { HealthService } from "../../application/health/health-service";
 import { ReadinessService } from "../../application/health/readiness-service";
 import type { AppEnv } from "../../infrastructure/config/env";
 import type { FilesystemDocumentArtifactStorage } from "../../infrastructure/documents/filesystem-document-artifact-storage";
-import type { PuppeteerPdfRenderer } from "../../infrastructure/documents/puppeteer-pdf-renderer";
+import type { PdfRendererPort } from "../../infrastructure/documents/native-pdf-renderer";
 import type { PostgresDatabase } from "../../infrastructure/persistence/postgres/postgres";
 import type { ApplicationLifecycleState } from "../../infrastructure/runtime/application-lifecycle-state";
 
@@ -13,7 +13,7 @@ export function registerHealthRoute(
   env: AppEnv,
   database: PostgresDatabase,
   storage: FilesystemDocumentArtifactStorage,
-  pdfRenderer: PuppeteerPdfRenderer,
+  pdfRenderer: PdfRendererPort,
   lifecycleState: ApplicationLifecycleState
 ): void {
   const healthService = new HealthService(database, {

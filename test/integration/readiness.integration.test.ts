@@ -5,13 +5,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApplication } from "../../src/app";
-import { loadEnv, type AppEnv } from "../../src/infrastructure/config/env";
+import { loadEnv } from "../../src/infrastructure/config/env";
 import { runMigrations } from "../../src/infrastructure/persistence/postgres/migrator";
 import {
   createTestDatabase,
   type TestDatabaseHandle
 } from "../helpers/test-database";
-import { resolveTestBrowserExecutablePath } from "../helpers/browser-executable-path";
 
 interface ManagedApp {
   readonly close: () => Promise<void>;
@@ -41,8 +40,6 @@ afterEach(async () => {
 async function createBaseEnv() {
   const databaseHandle = await createTestDatabase(process.env.TEST_DATABASE_ADMIN_URL!);
   const storageRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "quote-readiness-"));
-  const browserExecutablePath = resolveTestBrowserExecutablePath();
-
   managedDatabases.push(databaseHandle);
   managedPaths.push(storageRoot);
 
@@ -60,11 +57,7 @@ async function createBaseEnv() {
     QUOTE_COMPANY_NAME: "Pesas Chile SPA",
     QUOTE_DOCUMENT_STORAGE_ROOT: storageRoot,
     QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
-    QUOTE_RENDER_VERSION: "quote-v1",
-    QUOTE_PDF_RENDER_TIMEOUT_MS: "15000",
-    ...(browserExecutablePath
-      ? { QUOTE_PDF_EXECUTABLE_PATH: browserExecutablePath }
-      : {})
+    QUOTE_RENDER_VERSION: "quote-pdf-v2-pdfmake"
   });
 
   await runMigrations({
@@ -77,12 +70,6 @@ async function createBaseEnv() {
     databaseHandle,
     storageRoot
   };
-}
-
-function toRawEnv(overrides: Partial<AppEnv>): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(overrides).map(([key, value]) => [key, String(value)])
-  );
 }
 
 describe("Readiness operations", () => {
@@ -124,43 +111,21 @@ describe("Readiness operations", () => {
     });
   }, 30_000);
 
-  it("fails fast on startup when the PDF renderer runtime is unavailable", async () => {
+  it("reports the native PDF renderer as ready without a browser executable", async () => {
     const { env } = await createBaseEnv();
-    const appContext = buildApplication(
-      loadEnv({
-        ...toRawEnv(env),
-        QUOTE_PDF_EXECUTABLE_PATH: path.join(os.tmpdir(), "missing-headless-shell")
-      })
-    );
+    const appContext = buildApplication(env);
     managedApps.push({
       close: () => appContext.app.close()
     });
 
-    await expect(
-      appContext.app.listen({
-        host: env.HOST,
-        port: env.PORT
-      })
-    ).rejects.toThrow(/PDF renderer/i);
-  }, 30_000);
-
-  it("fails fast on startup when the configured renderer path exists but cannot render PDFs", async () => {
-    const { env } = await createBaseEnv();
-    const appContext = buildApplication(
-      loadEnv({
-        ...toRawEnv(env),
-        QUOTE_PDF_EXECUTABLE_PATH: process.execPath
-      })
-    );
-    managedApps.push({
-      close: () => appContext.app.close()
+    const baseUrl = await appContext.app.listen({
+      host: env.HOST,
+      port: env.PORT
     });
+    const response = await fetch(`${baseUrl}/health/ready`);
+    const body = (await response.json()) as { checks: { pdfRenderer: { status: string } } };
 
-    await expect(
-      appContext.app.listen({
-        host: env.HOST,
-        port: env.PORT
-      })
-    ).rejects.toThrow(/PDF renderer/i);
+    expect(response.status).toBe(200);
+    expect(body.checks.pdfRenderer.status).toBe("up");
   }, 30_000);
 });

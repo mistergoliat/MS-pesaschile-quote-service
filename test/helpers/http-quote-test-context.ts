@@ -14,7 +14,6 @@ import {
   createTestDatabase,
   type TestDatabaseHandle
 } from "./test-database";
-import { resolveTestBrowserExecutablePath } from "./browser-executable-path";
 
 export type TestClock = IncrementingClock | MutableClock;
 
@@ -127,8 +126,6 @@ export async function createHttpQuoteTestContext(
   const storageRoot =
     options.storageRoot ??
     (await fsPromises.mkdtemp(path.join(os.tmpdir(), "quote-documents-http-")));
-  const browserExecutablePath = resolveTestBrowserExecutablePath();
-
   await runMigrations({
     databaseUrl: databaseHandle.connectionString,
     direction: "up"
@@ -148,11 +145,7 @@ export async function createHttpQuoteTestContext(
     QUOTE_COMPANY_NAME: "Pesas Chile SPA",
     QUOTE_DOCUMENT_STORAGE_ROOT: storageRoot,
     QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
-    QUOTE_RENDER_VERSION: "quote-v1",
-    QUOTE_PDF_RENDER_TIMEOUT_MS: "15000",
-    ...(browserExecutablePath
-      ? { QUOTE_PDF_EXECUTABLE_PATH: browserExecutablePath }
-      : {}),
+    QUOTE_RENDER_VERSION: "quote-pdf-v2-pdfmake",
     ...toRawEnvOverrides(options.envOverrides)
   });
 

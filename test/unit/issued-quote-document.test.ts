@@ -154,7 +154,7 @@ describe("issued quote documents", () => {
         buildQuoteSnapshot(),
         "2026-08-10T18:30:00.000Z"
       ),
-      renderVersion: "quote-v1",
+      renderVersion: "quote-pdf-v2-pdfmake",
       companyName: "Pesas Chile SPA"
     });
 
@@ -181,7 +181,7 @@ describe("issued quote documents", () => {
   it("never exposes externalSource/externalItemId/externalVariantId in the document view model", () => {
     const viewModel = buildIssuedQuoteDocumentViewModel({
       snapshot: buildCanonicalIssuedQuoteSnapshot(buildQuoteSnapshot(), "2026-08-10T18:30:00.000Z"),
-      renderVersion: "quote-v1",
+      renderVersion: "quote-pdf-v2-pdfmake",
       companyName: "Pesas Chile SPA"
     });
 

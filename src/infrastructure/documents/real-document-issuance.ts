@@ -19,7 +19,7 @@ import type { BrandTheme, SenderSignature } from "../branding/brand-theme";
 import type { FilesystemDocumentArtifactStorage } from "./filesystem-document-artifact-storage";
 import { buildDocumentDirectoryKey, buildQuoteDocumentStorageKeys } from "./document-paths";
 import { renderQuoteEmailHtml, renderQuotePrintableHtml } from "./document-templates";
-import type { PdfRendererPort } from "./puppeteer-pdf-renderer";
+import type { PdfRendererPort } from "./native-pdf-renderer";
 import { buildQuoteEmailViewModel } from "./quote-email-view-model";
 
 export interface QuoteDocumentIssuanceConfig {
@@ -55,7 +55,7 @@ export class RealDocumentIssuanceAdapter implements DocumentIssuancePort {
     try {
       const emailHtml = renderQuoteEmailHtml(emailViewModel);
       const printableHtml = renderQuotePrintableHtml(viewModel);
-      const pdf = await this.pdfRenderer.renderPdf(printableHtml);
+      const pdf = await this.pdfRenderer.renderPdf(snapshot);
       const htmlSha256 = crypto.createHash("sha256").update(printableHtml, "utf8").digest("hex");
       const pdfSha256 = crypto.createHash("sha256").update(pdf).digest("hex");
       const storageKeys = buildQuoteDocumentStorageKeys(
@@ -91,9 +91,8 @@ export class RealDocumentIssuanceAdapter implements DocumentIssuancePort {
 
         if (
           error.name.toLowerCase().includes("timeout") ||
-          reason.includes("protocol error") ||
-          reason.includes("browser") ||
-          reason.includes("target closed")
+          reason.includes("pdf") ||
+          reason.includes("font")
         ) {
           throw new ApplicationError(
             APPLICATION_ERROR_CODES.documentGenerationFailed,

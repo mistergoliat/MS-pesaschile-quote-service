@@ -11,7 +11,6 @@ import {
   createTestDatabase,
   type TestDatabaseHandle
 } from "../helpers/test-database";
-import { resolveTestBrowserExecutablePath } from "../helpers/browser-executable-path";
 
 describe("GET /health", () => {
   let testDatabase: TestDatabaseHandle;
@@ -21,8 +20,6 @@ describe("GET /health", () => {
   beforeAll(async () => {
     testDatabase = await createTestDatabase(process.env.TEST_DATABASE_ADMIN_URL!);
     storageRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "quote-documents-health-"));
-    const browserExecutablePath = resolveTestBrowserExecutablePath();
-
     const env: AppEnv = loadEnv({
       NODE_ENV: "test",
       HOST: "127.0.0.1",
@@ -37,9 +34,7 @@ describe("GET /health", () => {
       QUOTE_COMPANY_NAME: "Pesas Chile SPA",
       QUOTE_DOCUMENT_STORAGE_ROOT: storageRoot,
       QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
-      QUOTE_RENDER_VERSION: "quote-v1",
-      QUOTE_PDF_RENDER_TIMEOUT_MS: "15000",
-      ...(browserExecutablePath ? { QUOTE_PDF_EXECUTABLE_PATH: browserExecutablePath } : {})
+      QUOTE_RENDER_VERSION: "quote-pdf-v2-pdfmake"
     });
 
     await runMigrations({

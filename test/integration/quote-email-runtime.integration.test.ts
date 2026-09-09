@@ -173,12 +173,14 @@ describe("quote email runtime", () => {
 
   it("processes queued quote emails and records sent audit", async () => {
     const sentMessages: string[] = [];
+    const sentAttachments: Buffer[] = [];
     context = await createHttpQuoteTestContext({
       envOverrides: buildGmailEnvOverrides(),
       applicationOverrides: {
         emailSenderPort: {
           send(input) {
             sentMessages.push(input.subject);
+            sentAttachments.push(input.attachments[0]!.content);
             return Promise.resolve({
               providerMessageId: "provider-msg-1"
             });
@@ -187,6 +189,12 @@ describe("quote email runtime", () => {
       }
     });
     const quoteId = await createIssuedQuote(context);
+    const documents = await context.request<{
+      readonly pdf: { readonly documentRef: string | null };
+    }>({
+      method: "GET",
+      path: `/v1/quotes/${quoteId}/documents`
+    });
     const delivery = await requestDelivery(context, quoteId);
 
     await context.appContext.backgroundJobs.runEmailDeliveryNow();
@@ -195,6 +203,12 @@ describe("quote email runtime", () => {
     const audit = await getAudit(context, quoteId);
 
     expect(sentMessages).toEqual([expect.stringContaining("PC-")]);
+    const durablePdf = await context.requestRaw({
+      method: "GET",
+      path: `/v1/documents/${documents.body!.pdf.documentRef!}`
+    });
+    expect(sentAttachments).toHaveLength(1);
+    expect(sentAttachments[0]).toEqual(durablePdf.bodyBuffer);
     expect(persisted.body).toMatchObject({
       status: "sent",
       attemptCount: 1,

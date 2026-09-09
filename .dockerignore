@@ -7,6 +7,5 @@ dist
 coverage
 var
 tmp
-.tmp-puppeteer
 *.log
 docker-compose.override.yml
