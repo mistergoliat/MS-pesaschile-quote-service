@@ -147,7 +147,7 @@ describe("Quote document issuance", () => {
       expect(issued.body?.status).toBe("issued");
       expect(issued.body?.issuedDocument).toMatchObject({
         available: true,
-        renderVersion: "quote-v1"
+        renderVersion: "quote-pdf-v2-pdfmake"
       });
 
       const pdfRef = issued.body?.issuedDocument.pdf.documentRef;

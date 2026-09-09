@@ -11,7 +11,7 @@ import { QuoteDocumentAccessService } from "./infrastructure/documents/document-
 import { DocumentReferenceCodec } from "./infrastructure/documents/document-reference";
 import { FilesystemDocumentArtifactStorage } from "./infrastructure/documents/filesystem-document-artifact-storage";
 import { OrphanDocumentCleanupService } from "./infrastructure/documents/orphan-document-cleanup-service";
-import { PuppeteerPdfRenderer } from "./infrastructure/documents/puppeteer-pdf-renderer";
+import { NativePdfRenderer } from "./infrastructure/documents/native-pdf-renderer";
 import { RealDocumentIssuanceAdapter } from "./infrastructure/documents/real-document-issuance";
 import { GmailEmailSender } from "./infrastructure/email/gmail-email-sender";
 import {
@@ -79,17 +79,17 @@ export function buildApplication(
   });
   const artifactStorage = new FilesystemDocumentArtifactStorage(env.QUOTE_DOCUMENT_STORAGE_ROOT);
   const documentReferenceCodec = new DocumentReferenceCodec(env.QUOTE_DOCUMENT_REF_SECRET);
-  const pdfRenderer = new PuppeteerPdfRenderer({
-    timeoutMs: env.QUOTE_PDF_RENDER_TIMEOUT_MS,
-    ...(env.QUOTE_PDF_EXECUTABLE_PATH
-      ? { executablePath: env.QUOTE_PDF_EXECUTABLE_PATH }
-      : {})
+  const senderSignature = createDefaultPesasChileSenderSignatureV1();
+  const pdfRenderer = new NativePdfRenderer({
+    renderVersion: env.QUOTE_RENDER_VERSION,
+    brand: brandTheme,
+    senderSignature
   });
   const realDocumentIssuanceAdapter = new RealDocumentIssuanceAdapter(artifactStorage, pdfRenderer, {
     renderVersion: env.QUOTE_RENDER_VERSION,
     emailTemplateVersion: QUOTE_EMAIL_TEMPLATE_VERSION,
     brandTheme,
-    senderSignature: createDefaultPesasChileSenderSignatureV1()
+    senderSignature
   });
   const documentIssuancePort = overrides.documentIssuancePort ?? realDocumentIssuanceAdapter;
   const documentAccessService = new QuoteDocumentAccessService(
@@ -153,9 +153,6 @@ export function buildApplication(
     await backgroundJobs.stop();
     await database.close();
 
-    if ("close" in pdfRenderer && typeof pdfRenderer.close === "function") {
-      await pdfRenderer.close();
-    }
   });
 
   registerRoutes(

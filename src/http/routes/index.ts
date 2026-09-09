@@ -7,7 +7,7 @@ import type { QuoteService } from "../../application/quote/quote-service";
 import type { AppEnv } from "../../infrastructure/config/env";
 import type { QuoteDocumentAccessService } from "../../infrastructure/documents/document-access-service";
 import type { FilesystemDocumentArtifactStorage } from "../../infrastructure/documents/filesystem-document-artifact-storage";
-import type { PuppeteerPdfRenderer } from "../../infrastructure/documents/puppeteer-pdf-renderer";
+import type { PdfRendererPort } from "../../infrastructure/documents/native-pdf-renderer";
 import type { PostgresDatabase } from "../../infrastructure/persistence/postgres/postgres";
 import type { ApplicationLifecycleState } from "../../infrastructure/runtime/application-lifecycle-state";
 import { registerDocumentRoute } from "./document-route";
@@ -19,7 +19,7 @@ export function registerRoutes(
   env: AppEnv,
   database: PostgresDatabase,
   storage: FilesystemDocumentArtifactStorage,
-  pdfRenderer: PuppeteerPdfRenderer,
+  pdfRenderer: PdfRendererPort,
   lifecycleState: ApplicationLifecycleState,
   quoteService: QuoteService,
   quoteDeliveryService: QuoteDeliveryService,

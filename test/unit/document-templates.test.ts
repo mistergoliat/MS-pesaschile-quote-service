@@ -220,7 +220,7 @@ describe("document templates", () => {
     const html = renderQuotePrintableHtml(
       buildIssuedQuoteDocumentViewModel({
         snapshot: buildSnapshot(),
-        renderVersion: "quote-v1",
+        renderVersion: "quote-pdf-v2-pdfmake",
         companyName: "Pesas Chile SPA"
       })
     );

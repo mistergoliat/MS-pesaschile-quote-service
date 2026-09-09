@@ -1,14 +1,14 @@
 import type { AppEnv } from "../config/env";
 import type { PostgresDatabase } from "../persistence/postgres/postgres";
 import type { FilesystemDocumentArtifactStorage } from "../documents/filesystem-document-artifact-storage";
-import type { PuppeteerPdfRenderer } from "../documents/puppeteer-pdf-renderer";
+import type { PdfRendererPort } from "../documents/native-pdf-renderer";
 
 export class StartupValidator {
   constructor(
     private readonly env: AppEnv,
     private readonly database: PostgresDatabase,
     private readonly storage: FilesystemDocumentArtifactStorage,
-    private readonly pdfRenderer: PuppeteerPdfRenderer
+    private readonly pdfRenderer: PdfRendererPort
   ) {}
 
   async validate(): Promise<void> {

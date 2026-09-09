@@ -17,6 +17,7 @@ The governing design remains [technical design](/C:/Users/Goli/Pesas%20Chile/MS/
 - Zod
 - PostgreSQL via `pg`
 - `node-pg-migrate`
+- `pdfmake` (native PDF renderer; no browser runtime)
 - Vitest
 - ESLint
 
@@ -24,14 +25,12 @@ The governing design remains [technical design](/C:/Users/Goli/Pesas%20Chile/MS/
 
 1. Copy `.env.example` to `.env`.
 2. Install dependencies with `npm install`.
-3. Install the PDF browser with `npm run pdf:install-browser`.
-4. If Chromium is not auto-discovered in your environment, set `QUOTE_PDF_EXECUTABLE_PATH` to the installed `chrome-headless-shell` executable.
-5. Start PostgreSQL with `npm run db:compose:up`.
-6. Run migrations with `npm run db:migrate`.
-7. Verify connectivity with `npm run db:check`.
-8. Start the server with `npm run dev`.
+3. Start PostgreSQL with `npm run db:compose:up`.
+4. Run migrations with `npm run db:migrate`.
+5. Verify connectivity with `npm run db:check`.
+6. Start the server with `npm run dev`.
 
-Production does not assume a host-installed browser. The supported V1 strategy is a reproducible runtime image that provisions `chrome-headless-shell` and points `QUOTE_PDF_EXECUTABLE_PATH` at an in-image path.
+PDF generation is native: `CanonicalIssuedQuoteSnapshot → pdfmake → PDF`. No external browser executable is required.
 
 ## Validation Commands
 
@@ -42,6 +41,9 @@ Production does not assume a host-installed browser. The supported V1 strategy i
 - `npm run test:unit`
 - `npm run verify`
 - `npm run email:preview`
+- `npm run pdf:preview`
+- `npm run pdf:benchmark`
+- `npm run pdf:concurrency-smoke`
 
 ## Authentication
 
@@ -391,7 +393,7 @@ Caller-controlled fields do not include `quoteId`, `quoteNumber`, `lineId`, pric
 
 1. Load the current draft and validate `expectedVersion`.
 2. Build a canonical immutable issuance snapshot.
-3. Render email HTML, printable HTML, and PDF outside SQL transactions.
+3. Render email HTML, printable HTML, and the native PDF outside SQL transactions.
 4. Compute `contentHash`, `htmlSha256`, and `pdfSha256`.
 5. Persist artifacts under deterministic storage keys rooted at `QUOTE_DOCUMENT_STORAGE_ROOT`.
 6. Open a short SQL transaction, revalidate state/version, persist the issued quote, audit, and idempotency completion, then commit.
@@ -417,9 +419,34 @@ Failure behavior:
 
 Operational commands:
 
-- Install the PDF browser: `npm run pdf:install-browser`
 - Clean orphaned artifacts: `npm run documents:cleanup`
 - Generate a local email preview: `npm run email:preview`
+
+### T07D Lightweight Native PDF Renderer
+
+The current renderer version is `quote-pdf-v2-pdfmake`. It consumes the immutable
+`CanonicalIssuedQuoteSnapshot` directly; it does not query PostgreSQL, rehydrate
+Catalog data, or recalculate pricing. The existing printable HTML artifact remains
+available for API compatibility, while email HTML remains unchanged.
+
+The renderer uses pdfmake tables, repeated headers, automatic pagination,
+`dontBreakRows`, a repository-owned SVG logo, and PDF-standard Helvetica faces.
+Poppins is not bundled because no safely redistributable local Poppins font exists
+in this repository. This avoids an operating-system font dependency.
+
+The generated `pdfSha256` is always the hash of the persisted PDF bytes. It is
+expected to differ from historical browser-rendered PDFs; the canonical snapshot
+`contentHash` remains independent of the renderer version. Historical issued
+documents are not regenerated.
+
+Preview and operational checks:
+
+- `npm run pdf:preview` writes short, long, and 100-line PDFs to `.tmp-pdf-previews/`.
+- `npm run pdf:benchmark` reports real pdfmake RSS, duration, and PDF size for 10/30 lines. A previous-browser baseline is unavailable after removal.
+- `npm run pdf:concurrency-smoke` renders 1/5/10 concurrent PDFs and validates `%PDF-` signatures.
+
+The runtime Docker image only installs the minimal init/CA packages and does not
+download or provision a browser.
 
 ## T06 Operational Hardening
 
@@ -460,9 +487,9 @@ Configuration:
 - lifecycle phase;
 - PostgreSQL connectivity;
 - document storage writability;
-- PDF renderer/browser availability.
+- Native PDF renderer availability.
 
-Startup now fails fast if the service cannot reach PostgreSQL, write to the configured storage root, or locate a working browser executable for PDF rendering.
+Startup now fails fast if the service cannot reach PostgreSQL or write to the configured storage root. The native PDF renderer has no external browser dependency.
 
 ### Timeouts And Limits
 
@@ -488,7 +515,7 @@ On `SIGINT` or `SIGTERM` the service:
 2. stops background schedulers;
 3. waits for Fastify shutdown within `APP_SHUTDOWN_TIMEOUT_MS`;
 4. closes the PostgreSQL pool;
-5. closes the PDF renderer/browser resources.
+5. closes the PostgreSQL pool; the native renderer has no child process to close.
 
 There is no forced `process.exit()` on the happy path.
 
@@ -497,7 +524,7 @@ There is no forced `process.exit()` on the happy path.
 This repository now includes a production-oriented `Dockerfile`.
 
 - Base runtime: Node.js 20 on Debian Bookworm slim.
-- Browser strategy: `chrome-headless-shell@stable` provisioned inside the image.
+- PDF strategy: pdfmake in-process rendering from the issued snapshot.
 - Runtime user: non-root `nodeapp`.
 - Persistent artifacts: mount `/var/lib/pesaschile/quote-documents`.
 - Healthcheck: `/health/ready`.

@@ -11,7 +11,6 @@ import {
   createTestDatabase,
   type TestDatabaseHandle
 } from "./test-database";
-import { resolveTestBrowserExecutablePath } from "./browser-executable-path";
 
 export interface PostgresQuoteTestContext {
   readonly databaseHandle: TestDatabaseHandle;
@@ -30,8 +29,6 @@ export async function createPostgresQuoteTestContext(): Promise<PostgresQuoteTes
     databaseUrl: databaseHandle.connectionString,
     direction: "up"
   });
-  const browserExecutablePath = resolveTestBrowserExecutablePath();
-
   const database = new PostgresDatabase(loadEnv({
     NODE_ENV: "test",
     HOST: "127.0.0.1",
@@ -46,11 +43,7 @@ export async function createPostgresQuoteTestContext(): Promise<PostgresQuoteTes
     QUOTE_COMPANY_NAME: "Pesas Chile SPA",
     QUOTE_DOCUMENT_STORAGE_ROOT: storageRoot,
     QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
-    QUOTE_RENDER_VERSION: "quote-v1",
-    QUOTE_PDF_RENDER_TIMEOUT_MS: "15000",
-    ...(browserExecutablePath
-      ? { QUOTE_PDF_EXECUTABLE_PATH: browserExecutablePath }
-      : {})
+    QUOTE_RENDER_VERSION: "quote-pdf-v2-pdfmake"
   }));
 
   const repository = new PostgresQuoteRepository(database);

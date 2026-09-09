@@ -71,8 +71,7 @@ const state = {
     appRestarted: `quote-smoke-app-b-${suffix}`
   },
   paths: {
-    storageRoot: "/var/lib/pesaschile/quote-documents",
-    browserPath: "/opt/pesaschile/bin/chrome-headless-shell"
+    storageRoot: "/var/lib/pesaschile/quote-documents"
   },
   credentials: {
     serviceAuthToken: `smoke-service-auth-${crypto.randomBytes(16).toString("hex")}`,
@@ -247,7 +246,7 @@ function buildAppEnv() {
     SERVICE_AUTH_TOKEN: state.credentials.serviceAuthToken,
     QUOTE_DOCUMENT_REF_SECRET: state.credentials.documentRefSecret,
     QUOTE_DOCUMENT_STORAGE_ROOT: state.paths.storageRoot,
-    QUOTE_PDF_EXECUTABLE_PATH: state.paths.browserPath,
+    QUOTE_RENDER_VERSION: "quote-pdf-v2-pdfmake",
     QUOTE_EXPIRATION_SCHEDULER_ENABLED: "true",
     QUOTE_EXPIRATION_INTERVAL_MS: "1000",
     QUOTE_EXPIRATION_BATCH_SIZE: "25",

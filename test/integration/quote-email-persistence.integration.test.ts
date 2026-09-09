@@ -81,7 +81,7 @@ async function createIssuedQuote(context: PostgresQuoteTestContext) {
     idempotencyKey: "idem-email-persistence-issue",
     issuedDocument: {
       contentHash: "content-hash-email-persistence",
-      renderVersion: "quote-v1",
+      renderVersion: "quote-pdf-v2-pdfmake",
       pdfStorageKey: "quotes/persistence/quote.pdf",
       pdfSha256: "a".repeat(64),
       htmlStorageKey: "quotes/persistence/quote.html",
