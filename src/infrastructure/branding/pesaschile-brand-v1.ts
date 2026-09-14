@@ -34,8 +34,8 @@ export function createPesasChileBrandV1(input: {
     },
     assets: {
       primaryLogo: PESASCHILE_BRAND_ASSET_IDS.primaryLogo,
-      logoLight: PESASCHILE_BRAND_ASSET_IDS.logoLight,
-      logoDark: PESASCHILE_BRAND_ASSET_IDS.logoDark,
+      logoOnLight: PESASCHILE_BRAND_ASSET_IDS.logoOnLight,
+      logoOnDark: PESASCHILE_BRAND_ASSET_IDS.logoOnDark,
       symbol: PESASCHILE_BRAND_ASSET_IDS.symbol
     }
   };

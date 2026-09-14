@@ -11,6 +11,7 @@ FROM deps AS build
 COPY tsconfig.json tsconfig.build.json eslint.config.mjs ./
 COPY src ./src
 COPY test ./test
+COPY scripts ./scripts
 RUN npm run build
 
 FROM node:20-bookworm-slim AS runtime

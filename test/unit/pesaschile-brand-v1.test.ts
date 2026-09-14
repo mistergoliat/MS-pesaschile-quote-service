@@ -37,8 +37,8 @@ describe("pesaschile brand v1", () => {
     });
     expect(brand.assets).toEqual({
       primaryLogo: PESASCHILE_BRAND_ASSET_IDS.primaryLogo,
-      logoLight: PESASCHILE_BRAND_ASSET_IDS.logoLight,
-      logoDark: PESASCHILE_BRAND_ASSET_IDS.logoDark,
+      logoOnLight: PESASCHILE_BRAND_ASSET_IDS.logoOnLight,
+      logoOnDark: PESASCHILE_BRAND_ASSET_IDS.logoOnDark,
       symbol: PESASCHILE_BRAND_ASSET_IDS.symbol
     });
   });
@@ -70,31 +70,39 @@ describe("pesaschile brand v1", () => {
     }
   });
 
-  it("stores the light logo, dark logo, and symbol PNG assets locally inside the brand system", () => {
-    const lightLogoAsset = PESASCHILE_BRAND_ASSETS[PESASCHILE_BRAND_ASSET_IDS.logoLight];
-    const darkLogoAsset = PESASCHILE_BRAND_ASSETS[PESASCHILE_BRAND_ASSET_IDS.logoDark];
+  it("maps semantic light and dark surface logos to versioned local PNG assets", () => {
+    const lightLogoAsset = PESASCHILE_BRAND_ASSETS[PESASCHILE_BRAND_ASSET_IDS.logoOnLight];
+    const darkLogoAsset = PESASCHILE_BRAND_ASSETS[PESASCHILE_BRAND_ASSET_IDS.logoOnDark];
     const symbolAsset = PESASCHILE_BRAND_ASSETS[PESASCHILE_BRAND_ASSET_IDS.symbol];
 
     expect(lightLogoAsset).toMatchObject({
       mediaType: "image/png",
-      encoding: "file"
+      encoding: "file",
+      content: "assets/files/logo-on-light.png"
     });
     expect(darkLogoAsset).toMatchObject({
       mediaType: "image/png",
-      encoding: "file"
+      encoding: "file",
+      content: "assets/files/logo-on-dark.png"
     });
     expect(symbolAsset).toMatchObject({
       mediaType: "image/png",
       encoding: "file"
     });
     expect(
-      fs.existsSync(path.resolve(process.cwd(), lightLogoAsset?.content ?? "missing-light-logo"))
+      fs.existsSync(
+        path.resolve(process.cwd(), "src/infrastructure/branding", lightLogoAsset?.content ?? "missing-light-logo")
+      )
     ).toBe(true);
     expect(
-      fs.existsSync(path.resolve(process.cwd(), darkLogoAsset?.content ?? "missing-dark-logo"))
+      fs.existsSync(
+        path.resolve(process.cwd(), "src/infrastructure/branding", darkLogoAsset?.content ?? "missing-dark-logo")
+      )
     ).toBe(true);
     expect(
-      fs.existsSync(path.resolve(process.cwd(), symbolAsset?.content ?? "missing-symbol"))
+      fs.existsSync(
+        path.resolve(process.cwd(), "src/infrastructure/branding", symbolAsset?.content ?? "missing-symbol")
+      )
     ).toBe(true);
   });
 

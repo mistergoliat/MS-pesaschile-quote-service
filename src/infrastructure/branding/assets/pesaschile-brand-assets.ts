@@ -1,7 +1,7 @@
 export const PESASCHILE_BRAND_ASSET_IDS = {
   primaryLogo: "asset://pesaschile-brand-v1/primary-logo",
-  logoLight: "asset://pesaschile-brand-v1/logo-light",
-  logoDark: "asset://pesaschile-brand-v1/logo-dark",
+  logoOnLight: "asset://pesaschile-brand-v1/logo-on-light",
+  logoOnDark: "asset://pesaschile-brand-v1/logo-on-dark",
   symbol: "asset://pesaschile-brand-v1/symbol"
 } as const;
 
@@ -27,19 +27,19 @@ export const PESASCHILE_BRAND_ASSETS: Record<string, BrandAssetDefinition> = {
       "</svg>"
     ].join("")
   },
-  [PESASCHILE_BRAND_ASSET_IDS.logoLight]: {
+  [PESASCHILE_BRAND_ASSET_IDS.logoOnLight]: {
     mediaType: "image/png",
     encoding: "file",
-    content: "src/infrastructure/branding/assets/files/logo-light.png"
+    content: "assets/files/logo-on-light.png"
   },
-  [PESASCHILE_BRAND_ASSET_IDS.logoDark]: {
+  [PESASCHILE_BRAND_ASSET_IDS.logoOnDark]: {
     mediaType: "image/png",
     encoding: "file",
-    content: "src/infrastructure/branding/assets/files/logo-dark.png"
+    content: "assets/files/logo-on-dark.png"
   },
   [PESASCHILE_BRAND_ASSET_IDS.symbol]: {
     mediaType: "image/png",
     encoding: "file",
-    content: "src/infrastructure/branding/assets/files/symbol.png"
+    content: "assets/files/symbol.png"
   }
 };

@@ -131,7 +131,7 @@ describe("document templates", () => {
     expect(html).toContain('background:#F7F9FA;');
     expect(html).toContain("background:#1D2B35");
     expect(html).toContain(".quote-email__header-surface {\n        background:#1D2B35 !important;");
-    expect(html).toContain(".quote-email__header-number,\n      .quote-email__header-issued {\n        color:#ECF0F1 !important;");
+    expect(html).toContain(".quote-email__header-number,\n      .quote-email__header-issued {\n        color:#FFFFFF !important;");
     expect(html).toContain("PC-000777");
     expect(html).toContain("12 AGO 2026");
     expect(html).toContain("17 AGO 2026");

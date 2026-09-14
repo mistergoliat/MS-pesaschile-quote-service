@@ -6,8 +6,9 @@
   "main": "dist/server.js",
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && tsc -p tsconfig.build.json && npm run copy:migrations",
+    "build": "npm run clean && tsc -p tsconfig.build.json && npm run copy:migrations && npm run copy:brand-assets",
     "copy:migrations": "node scripts/copy-migrations.cjs",
+    "copy:brand-assets": "node scripts/copy-brand-assets.cjs",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "lint": "eslint .",

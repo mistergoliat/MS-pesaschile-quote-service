@@ -29,10 +29,10 @@ export function resolveBrandAsset(assetId: string): ResolvedBrandAsset | null {
 }
 
 function resolveAssetFilePath(value: string): string {
-  const projectRelativePath = path.resolve(__dirname, "..", "..", "..", value);
+  const moduleRelativePath = path.resolve(__dirname, value);
 
-  if (fs.existsSync(projectRelativePath)) {
-    return projectRelativePath;
+  if (fs.existsSync(moduleRelativePath)) {
+    return moduleRelativePath;
   }
 
   return path.resolve(process.cwd(), value);

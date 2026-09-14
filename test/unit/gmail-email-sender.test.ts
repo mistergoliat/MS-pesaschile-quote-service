@@ -103,12 +103,12 @@ describe("GmailEmailSender", () => {
     expect(mimeMessage).toContain('Content-Type: multipart/related; boundary="quote-email-related-');
     expect(mimeMessage).toContain(`Content-ID: <${QUOTE_EMAIL_INLINE_LOGO_DARK_CONTENT_ID}>`);
     expect(mimeMessage).toContain(`Content-ID: <${QUOTE_EMAIL_INLINE_LOGO_LIGHT_CONTENT_ID}>`);
-    expect(mimeMessage).toContain('Content-Disposition: inline; filename="pesaschile-logo-dark.png"');
-    expect(mimeMessage).toContain('Content-Disposition: inline; filename="pesaschile-logo-light.png"');
+    expect(mimeMessage).toContain('Content-Disposition: inline; filename="pesaschile-logo-on-dark.png"');
+    expect(mimeMessage).toContain('Content-Disposition: inline; filename="pesaschile-logo-on-light.png"');
     expect(mimeMessage).toContain(`X-Attachment-Id: ${QUOTE_EMAIL_INLINE_LOGO_DARK_CONTENT_ID}`);
     expect(mimeMessage).toContain(`X-Attachment-Id: ${QUOTE_EMAIL_INLINE_LOGO_LIGHT_CONTENT_ID}`);
-    expect(mimeMessage).toContain("Content-Location: pesaschile-logo-dark.png");
-    expect(mimeMessage).toContain("Content-Location: pesaschile-logo-light.png");
+    expect(mimeMessage).toContain("Content-Location: pesaschile-logo-on-dark.png");
+    expect(mimeMessage).toContain("Content-Location: pesaschile-logo-on-light.png");
     expect(mimeMessage).not.toContain("pesaschile-symbol");
   });
 
@@ -146,13 +146,13 @@ describe("GmailEmailSender", () => {
       inlineAssets: [
         {
           contentId: QUOTE_EMAIL_INLINE_LOGO_DARK_CONTENT_ID,
-          filename: "pesaschile-logo-dark.png",
+          filename: "pesaschile-logo-on-dark.png",
           contentType: "image/png",
           content: Buffer.from("png-dark", "utf8")
         },
         {
           contentId: QUOTE_EMAIL_INLINE_LOGO_LIGHT_CONTENT_ID,
-          filename: "pesaschile-logo-light.png",
+          filename: "pesaschile-logo-on-light.png",
           contentType: "image/png",
           content: Buffer.from("png-light", "utf8")
         }
@@ -162,8 +162,8 @@ describe("GmailEmailSender", () => {
     expect(mimeMessage).toContain('Content-Type: multipart/related; boundary="quote-email-related-');
     expect(mimeMessage).toContain(`Content-ID: <${QUOTE_EMAIL_INLINE_LOGO_DARK_CONTENT_ID}>`);
     expect(mimeMessage).toContain(`Content-ID: <${QUOTE_EMAIL_INLINE_LOGO_LIGHT_CONTENT_ID}>`);
-    expect(mimeMessage).toContain('Content-Disposition: inline; filename="pesaschile-logo-dark.png"');
-    expect(mimeMessage).toContain('Content-Disposition: inline; filename="pesaschile-logo-light.png"');
+    expect(mimeMessage).toContain('Content-Disposition: inline; filename="pesaschile-logo-on-dark.png"');
+    expect(mimeMessage).toContain('Content-Disposition: inline; filename="pesaschile-logo-on-light.png"');
     expect(mimeMessage).not.toContain("pesaschile-symbol");
     expect(mimeMessage).not.toContain('Content-Type: multipart/mixed; boundary="quote-email-mixed-');
   });

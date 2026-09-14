@@ -19,13 +19,13 @@ export function resolveQuoteEmailInlineAssets(html: string): readonly QuoteEmail
   const requestedInlineAssets = [
     {
       contentId: QUOTE_EMAIL_INLINE_LOGO_LIGHT_CONTENT_ID,
-      assetId: PESASCHILE_BRAND_ASSET_IDS.logoLight,
-      filename: "pesaschile-logo-light.png"
+      assetId: PESASCHILE_BRAND_ASSET_IDS.logoOnLight,
+      filename: "pesaschile-logo-on-light.png"
     },
     {
       contentId: QUOTE_EMAIL_INLINE_LOGO_DARK_CONTENT_ID,
-      assetId: PESASCHILE_BRAND_ASSET_IDS.logoDark,
-      filename: "pesaschile-logo-dark.png"
+      assetId: PESASCHILE_BRAND_ASSET_IDS.logoOnDark,
+      filename: "pesaschile-logo-on-dark.png"
     }
   ].filter((asset) => html.includes(`cid:${asset.contentId}`));
 

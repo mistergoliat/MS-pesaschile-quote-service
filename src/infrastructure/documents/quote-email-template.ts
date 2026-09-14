@@ -13,8 +13,8 @@ function renderBrandLogo(
   surface: BrandLogoSurface,
   width: number
 ): string {
-  const resolvedDarkLogo = resolveBrandAsset(model.brand.assets.logoDark);
-  const resolvedLightLogo = resolveBrandAsset(model.brand.assets.logoLight);
+  const resolvedDarkLogo = resolveBrandAsset(model.brand.assets.logoOnDark);
+  const resolvedLightLogo = resolveBrandAsset(model.brand.assets.logoOnLight);
 
   if (!resolvedDarkLogo || !resolvedLightLogo) {
     return [
@@ -104,14 +104,14 @@ function renderEmailStyleBlock(model: QuoteEmailViewModel): string {
     @media (prefers-color-scheme: dark) {
       .quote-email__header-surface {
         background:${model.brand.colors.dark} !important;
-        color:${model.brand.colors.light} !important;
+        color:#FFFFFF !important;
       }
       .quote-email__header-label {
         color:#A5BAB7 !important;
       }
       .quote-email__header-number,
       .quote-email__header-issued {
-        color:${model.brand.colors.light} !important;
+        color:#FFFFFF !important;
       }
       .quote-email__surface-dark {
         background:${model.brand.colors.dark} !important;
@@ -148,14 +148,14 @@ function renderEmailStyleBlock(model: QuoteEmailViewModel): string {
     }
     html[data-force-color-scheme="dark"] .quote-email__header-surface {
       background:${model.brand.colors.dark} !important;
-      color:${model.brand.colors.light} !important;
+      color:#FFFFFF !important;
     }
     html[data-force-color-scheme="dark"] .quote-email__header-label {
       color:#A5BAB7 !important;
     }
     html[data-force-color-scheme="dark"] .quote-email__header-number,
     html[data-force-color-scheme="dark"] .quote-email__header-issued {
-      color:${model.brand.colors.light} !important;
+      color:#FFFFFF !important;
     }
     html[data-force-color-scheme="dark"] .quote-email__surface-dark {
       background:${model.brand.colors.dark} !important;
