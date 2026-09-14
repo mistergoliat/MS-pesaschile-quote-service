@@ -584,7 +584,7 @@ describe("Quote HTTP API", () => {
         version: 2,
         issuedDocument: {
           available: true,
-          renderVersion: "quote-pdf-v2-pdfmake"
+          renderVersion: "quote-pdf-v3"
         }
       });
       expect(typeof issueResponse.body?.issuedDocument.pdf?.documentRef).toBe("string");

@@ -43,7 +43,7 @@ export async function createPostgresQuoteTestContext(): Promise<PostgresQuoteTes
     QUOTE_COMPANY_NAME: "Pesas Chile SPA",
     QUOTE_DOCUMENT_STORAGE_ROOT: storageRoot,
     QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
-    QUOTE_RENDER_VERSION: "quote-pdf-v2-pdfmake"
+    QUOTE_RENDER_VERSION: "quote-pdf-v3"
   }));
 
   const repository = new PostgresQuoteRepository(database);

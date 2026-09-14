@@ -135,11 +135,9 @@ export function renderQuotePrintableHtml(model: IssuedQuoteDocumentViewModel): s
       <table>
         <thead>
           <tr>
-            <th>Detalle</th>
+            <th>Descripción</th>
             <th class="numeric">Cant.</th>
-            <th class="numeric">Precio unit.</th>
-            <th class="numeric">Subtotal</th>
-            <th class="numeric">IVA</th>
+            <th class="numeric">Precio unitario</th>
             <th class="numeric">Total</th>
           </tr>
         </thead>
@@ -156,8 +154,6 @@ export function renderQuotePrintableHtml(model: IssuedQuoteDocumentViewModel): s
                   </td>
                   <td class="numeric">${escapeHtml(item.quantityDisplay)}</td>
                   <td class="numeric">${escapeHtml(item.unitPriceDisplay)}</td>
-                  <td class="numeric">${escapeHtml(item.lineSubtotalDisplay)}</td>
-                  <td class="numeric">${escapeHtml(item.lineTaxDisplay)}</td>
                   <td class="numeric">${escapeHtml(item.lineTotalDisplay)}</td>
                 </tr>
               `
@@ -168,8 +164,12 @@ export function renderQuotePrintableHtml(model: IssuedQuoteDocumentViewModel): s
 
       <table class="totals">
         <tr>
-          <td class="muted">${escapeHtml(model.pricing.pricingNote)}</td>
-          <td class="numeric">${escapeHtml(model.pricing.totalDisplay)}</td>
+          <td class="muted">Neto</td>
+          <td class="numeric">${escapeHtml(model.pricing.subtotalDisplay)}</td>
+        </tr>
+        <tr>
+          <td class="muted">IVA</td>
+          <td class="numeric">${escapeHtml(model.pricing.taxAmountDisplay)}</td>
         </tr>
         <tr class="grand-total">
           <td>Total</td>

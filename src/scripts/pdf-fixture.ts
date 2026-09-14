@@ -5,9 +5,11 @@ import {
   createPesasChileBrandV1
 } from "../infrastructure/branding/pesaschile-brand-v1";
 
+export const PDF_RENDER_VERSION = "quote-pdf-v3";
+
 export function createPdfRenderer(): NativePdfRenderer {
   return new NativePdfRenderer({
-    renderVersion: "quote-pdf-v2-pdfmake",
+    renderVersion: PDF_RENDER_VERSION,
     brand: createPesasChileBrandV1(),
     senderSignature: createDefaultPesasChileSenderSignatureV1()
   });
@@ -56,5 +58,72 @@ export function createPdfFixture(itemCount: number): CanonicalIssuedQuoteSnapsho
       taxAmount: String(itemCount * 1900),
       total: String(itemCount * 11900)
     }
+  };
+}
+
+export function createSimplePdfFixture(): CanonicalIssuedQuoteSnapshot {
+  const fixture = createPdfFixture(1);
+
+  return {
+    ...fixture,
+    quoteId: "preview-quote-simple",
+    quoteNumber: "PC-PREVIEW-SIMPLE",
+    items: [
+      {
+        ...fixture.items[0]!,
+        sku: "BAL-001",
+        description: "Balanza industrial de plataforma 300 kg"
+      }
+    ]
+  };
+}
+
+export function createMixedPdfFixture(): CanonicalIssuedQuoteSnapshot {
+  const fixture = createPdfFixture(3);
+
+  return {
+    ...fixture,
+    quoteId: "preview-quote-mixed",
+    quoteNumber: "PC-PREVIEW-MIXED",
+    items: [
+      {
+        ...fixture.items[0]!,
+        type: "product",
+        sku: "BAL-001",
+        description: "Balanza industrial de plataforma 300 kg"
+      },
+      {
+        ...fixture.items[1]!,
+        type: "service",
+        sku: null,
+        description: "Instalación y calibración en terreno"
+      },
+      {
+        ...fixture.items[2]!,
+        type: "shipping",
+        externalSource: null,
+        externalItemId: null,
+        externalVariantId: null,
+        sku: null,
+        description: "Despacho a domicilio"
+      }
+    ]
+  };
+}
+
+export function createLongDescriptionPdfFixture(): CanonicalIssuedQuoteSnapshot {
+  const fixture = createPdfFixture(1);
+
+  return {
+    ...fixture,
+    quoteId: "preview-quote-long-description",
+    quoteNumber: "PC-PREVIEW-LONG-DESCRIPTION",
+    items: [
+      {
+        ...fixture.items[0]!,
+        description:
+          "Balanza industrial de plataforma reforzada para operaciones logísticas y comerciales, con estructura de acero, indicador digital, nivelación regulable y capacidad de 300 kg para uso continuo en ambientes exigentes."
+      }
+    ]
   };
 }

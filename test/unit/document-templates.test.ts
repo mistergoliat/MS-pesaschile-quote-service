@@ -220,7 +220,7 @@ describe("document templates", () => {
     const html = renderQuotePrintableHtml(
       buildIssuedQuoteDocumentViewModel({
         snapshot: buildSnapshot(),
-        renderVersion: "quote-pdf-v2-pdfmake",
+        renderVersion: "quote-pdf-v3",
         companyName: "Pesas Chile SPA"
       })
     );
@@ -228,8 +228,35 @@ describe("document templates", () => {
     expect(html).toContain("Cotizacion comercial");
     expect(html).toContain("Precios incluyen IVA");
     expect(html).toContain("$37.566");
+    expect(html).toContain("<th>Descripción</th>");
+    expect(html).toContain("<th class=\"numeric\">Cant.</th>");
+    expect(html).toContain("<th class=\"numeric\">Precio unitario</th>");
+    expect(html).toContain("<th class=\"numeric\">Total</th>");
+    expect(html).not.toContain("<th class=\"numeric\">Subtotal</th>");
+    expect(html).not.toContain("<th class=\"numeric\">IVA</th>");
+    expect(html).toContain("SKU-9");
+    expect(html).not.toContain("SKU null");
+    expect(html).toContain("Neto");
     expect(html).not.toContain("Version de render:");
     expect(html).not.toContain("Quote Service");
+  });
+
+  it("does not truncate long printable descriptions", () => {
+    const description =
+      "Balanza industrial de plataforma reforzada para operaciones logísticas y comerciales, con estructura de acero, indicador digital y capacidad de 300 kg.";
+    const snapshot = buildSnapshot();
+    const html = renderQuotePrintableHtml(
+      buildIssuedQuoteDocumentViewModel({
+        snapshot: {
+          ...snapshot,
+          items: [{ ...snapshot.items[0]!, description }]
+        },
+        renderVersion: "quote-pdf-v3",
+        companyName: "Pesas Chile SPA"
+      })
+    );
+
+    expect(html).toContain(description);
   });
 
   it("renders Despacho in printable and email HTML", () => {
@@ -264,11 +291,12 @@ describe("document templates", () => {
     );
     const viewModel = buildIssuedQuoteDocumentViewModel({
       snapshot: shippingSnapshot,
-      renderVersion: "quote-pdf-v2-pdfmake",
+      renderVersion: "quote-pdf-v3",
       companyName: "Pesas Chile SPA"
     });
 
     expect(renderQuotePrintableHtml(viewModel)).toContain("Despacho");
+    expect(renderQuotePrintableHtml(viewModel)).not.toContain("SKU null");
     expect(
       renderQuoteEmailHtml(
         buildQuoteEmailViewModel({

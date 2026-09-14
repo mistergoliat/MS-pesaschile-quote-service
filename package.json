@@ -28,6 +28,7 @@
     "documents:cleanup": "tsx src/scripts/cleanup-orphan-documents.ts",
     "documents:cleanup:runtime": "node dist/scripts/cleanup-orphan-documents.js",
     "email:preview": "tsx src/scripts/preview-quote-email.ts",
+    "email:smoke:pdf": "tsx src/scripts/smoke-send-quote-pdf.ts",
     "pdf:preview": "tsx src/scripts/preview-quote-pdf.ts",
     "pdf:benchmark": "tsx src/scripts/benchmark-pdf-renderer.ts",
     "pdf:concurrency-smoke": "tsx src/scripts/pdf-concurrency-smoke.ts",

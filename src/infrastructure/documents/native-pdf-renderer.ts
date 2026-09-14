@@ -7,7 +7,6 @@ import {
   type IssuedQuoteDocumentViewModel
 } from "../../application/quote/documents/issued-quote-document";
 import type { BrandTheme, SenderSignature } from "../branding/brand-theme";
-import { PESASCHILE_BRAND_ASSET_IDS } from "../branding/assets/pesaschile-brand-assets";
 import { resolveBrandAsset } from "../branding/brand-asset-resolver";
 
 const pdfMakeRequire = createRequire(__filename);
@@ -54,10 +53,10 @@ const COLORS = {
   gunmetal: "#1D2B35",
   antiFlashWhite: "#ECF0F1",
   muted: "#5B6C75",
-  border: "#D8E0E2",
-  white: "#FFFFFF"
+  border: "#D8E0E2"
 } as const;
 
+// POPPINS_ASSET_PENDING: no approved Poppins font files are versioned in this repository.
 const FONTS = {
   Helvetica: {
     normal: "Helvetica",
@@ -66,6 +65,14 @@ const FONTS = {
     bolditalics: "Helvetica-BoldOblique"
   }
 } as const;
+
+function toDataUri(asset: { readonly mediaType: string; readonly content: Buffer }): string {
+  return `data:${asset.mediaType};base64,${asset.content.toString("base64")}`;
+}
+
+function buildLineMetadata(item: IssuedQuoteDocumentViewModel["items"][number]): string {
+  return item.sku ? `${item.typeLabel} · SKU ${item.sku}` : item.typeLabel;
+}
 
 export class NativePdfRenderer implements PdfRendererPort {
   constructor(private readonly config: NativePdfRendererConfig) {}
@@ -95,12 +102,16 @@ export class NativePdfRenderer implements PdfRendererPort {
   }
 
   private buildDefinition(model: IssuedQuoteDocumentViewModel): PdfDocumentDefinition {
-    const logo = resolveBrandAsset(PESASCHILE_BRAND_ASSET_IDS.primaryLogo);
+    const logoOnLight = resolveBrandAsset(this.config.brand.assets.logoOnLight);
     const content: unknown[] = [
       {
         columns: [
-          logo
-            ? { svg: logo.content.toString("utf8"), width: 190, margin: [0, 0, 12, 0] }
+          logoOnLight
+            ? {
+                image: "logoOnLight",
+                width: 190,
+                margin: [0, 0, 18, 0]
+              }
             : { text: model.companyName, style: "brandFallback" },
           {
             stack: [
@@ -112,7 +123,7 @@ export class NativePdfRenderer implements PdfRendererPort {
             width: "*"
           }
         ],
-        columnGap: 12,
+        columnGap: 18,
         margin: [0, 0, 0, 22]
       },
       {
@@ -122,7 +133,7 @@ export class NativePdfRenderer implements PdfRendererPort {
             [
               {
                 stack: [
-                  { text: "CLIENTE", style: "sectionLabel" },
+                  { text: "DATOS DEL CLIENTE", style: "sectionLabel" },
                   ...this.customerLines(model)
                 ],
                 margin: [0, 0, 12, 0]
@@ -130,9 +141,11 @@ export class NativePdfRenderer implements PdfRendererPort {
               {
                 stack: [
                   { text: "DOCUMENTO", style: "sectionLabel" },
+                  { text: `N° cotización: ${model.quoteNumber}`, style: "body" },
+                  { text: `Fecha emisión: ${model.issuedAtDisplay}`, style: "body" },
+                  { text: `Vigencia: ${model.validUntilDisplay}`, style: "body" },
                   { text: `Moneda: ${model.currency}`, style: "body" },
-                  { text: model.pricing.pricingNote, style: "body" },
-                  { text: `Render: ${model.renderVersion}`, style: "mutedSmall" }
+                  { text: model.pricing.pricingNote, style: "body" }
                 ],
                 margin: [12, 0, 0, 0]
               }
@@ -147,30 +160,24 @@ export class NativePdfRenderer implements PdfRendererPort {
           headerRows: 1,
           dontBreakRows: true,
           keepWithHeaderRows: 1,
-          widths: ["*", 42, 76, 76, 58, 76] as const,
+          widths: ["*", 42, 82, 82] as const,
           body: [
             [
-              { text: "DETALLE", style: "tableHeader" },
+              { text: "DESCRIPCIÓN", style: "tableHeader" },
               { text: "CANT.", style: "tableHeader", alignment: "right" },
-              { text: "PRECIO UNIT.", style: "tableHeader", alignment: "right" },
-              { text: "SUBTOTAL", style: "tableHeader", alignment: "right" },
-              { text: "IVA", style: "tableHeader", alignment: "right" },
+              { text: "PRECIO UNITARIO", style: "tableHeader", alignment: "right" },
               { text: "TOTAL", style: "tableHeader", alignment: "right" }
             ],
             ...model.items.map((item) => [
               {
                 stack: [
                   { text: item.description, style: "bodyStrong" },
-                  {
-                    text: `${item.typeLabel}${item.sku ? ` · SKU ${item.sku}` : ""}`,
-                    style: "mutedSmall"
-                  }
-                ]
+                  { text: buildLineMetadata(item), style: "mutedSmall" }
+                ],
+                margin: [0, 2, 0, 2]
               },
               { text: item.quantityDisplay, style: "body", alignment: "right" },
               { text: item.unitPriceDisplay, style: "body", alignment: "right" },
-              { text: item.lineSubtotalDisplay, style: "body", alignment: "right" },
-              { text: item.lineTaxDisplay, style: "body", alignment: "right" },
               { text: item.lineTotalDisplay, style: "body", alignment: "right" }
             ])
           ]
@@ -181,12 +188,12 @@ export class NativePdfRenderer implements PdfRendererPort {
           vLineColor: () => COLORS.border,
           hLineWidth: () => 0.5,
           vLineWidth: () => 0,
-          paddingLeft: () => 7,
-          paddingRight: () => 7,
+          paddingLeft: () => 8,
+          paddingRight: () => 8,
           paddingTop: () => 7,
           paddingBottom: () => 7
         },
-        margin: [0, 0, 0, 14]
+        margin: [0, 0, 0, 18]
       },
       {
         columns: [
@@ -202,10 +209,16 @@ export class NativePdfRenderer implements PdfRendererPort {
             table: {
               widths: ["*", 90] as const,
               body: [
-                ["Subtotal", { text: model.pricing.subtotalDisplay, alignment: "right" }],
-                ["IVA", { text: model.pricing.taxAmountDisplay, alignment: "right" }],
                 [
-                  { text: "TOTAL", bold: true },
+                  { text: "Neto", style: "mutedSmall" },
+                  { text: model.pricing.subtotalDisplay, style: "body", alignment: "right" }
+                ],
+                [
+                  { text: "IVA", style: "mutedSmall" },
+                  { text: model.pricing.taxAmountDisplay, style: "body", alignment: "right" }
+                ],
+                [
+                  { text: "TOTAL", style: "totalLabel" },
                   { text: model.pricing.totalDisplay, style: "totalValue", alignment: "right" }
                 ]
               ]
@@ -214,7 +227,7 @@ export class NativePdfRenderer implements PdfRendererPort {
             width: 220
           }
         ],
-        columnGap: 20,
+        columnGap: 24,
         margin: [0, 0, 0, 24]
       },
       {
@@ -236,8 +249,9 @@ export class NativePdfRenderer implements PdfRendererPort {
 
     return {
       pageSize: "A4",
-      pageMargins: [45, 48, 45, 42],
+      pageMargins: [48, 48, 48, 44],
       content,
+      ...(logoOnLight ? { images: { logoOnLight: toDataUri(logoOnLight) } } : {}),
       defaultStyle: {
         font: "Helvetica",
         fontSize: 9,
@@ -246,24 +260,40 @@ export class NativePdfRenderer implements PdfRendererPort {
       styles: {
         brandFallback: { fontSize: 22, bold: true, color: COLORS.gunmetal },
         documentLabel: { fontSize: 8, bold: true, color: COLORS.raspberry, characterSpacing: 1.2 },
-        quoteNumber: { fontSize: 17, bold: true, color: COLORS.gunmetal, margin: [0, 2, 0, 4] },
-        sectionLabel: { fontSize: 8, bold: true, color: COLORS.muted, characterSpacing: 1.1, margin: [0, 0, 0, 6] },
+        quoteNumber: { fontSize: 18, bold: true, color: COLORS.gunmetal, margin: [0, 2, 0, 4] },
+        sectionLabel: {
+          fontSize: 8,
+          bold: true,
+          color: COLORS.muted,
+          characterSpacing: 1.1,
+          margin: [0, 0, 0, 6]
+        },
         body: { fontSize: 9, color: COLORS.gunmetal },
         bodyStrong: { fontSize: 9, bold: true, color: COLORS.gunmetal },
         mutedSmall: { fontSize: 8, color: COLORS.muted },
         tableHeader: { fontSize: 7.5, bold: true, color: COLORS.gunmetal },
-        totalValue: { fontSize: 13, bold: true, color: COLORS.raspberry },
+        totalLabel: { fontSize: 10, bold: true, color: COLORS.gunmetal },
+        totalValue: { fontSize: 14, bold: true, color: COLORS.raspberry },
         signatureRole: { fontSize: 9, bold: true, color: COLORS.raspberry, margin: [0, 2, 0, 2] }
       },
       header: () => ({
-        canvas: [{ type: "rect", x: 0, y: 0, w: 595, h: 5, color: COLORS.raspberry }]
+        canvas: [{ type: "rect", x: 0, y: 0, w: 595, h: 4, color: COLORS.raspberry }]
       }),
       footer: (currentPage: number, pageCount: number) => ({
         columns: [
-          { text: `${this.config.brand.company.legalName} · ${model.quoteNumber}`, style: "mutedSmall" },
+          {
+            text: [
+              this.config.brand.company.legalName,
+              this.config.brand.company.website,
+              model.quoteNumber
+            ]
+              .filter((value): value is string => Boolean(value))
+              .join(" · "),
+            style: "mutedSmall"
+          },
           { text: `Página ${currentPage} de ${pageCount}`, style: "mutedSmall", alignment: "right" }
         ],
-        margin: [45, 8, 45, 0]
+        margin: [48, 8, 48, 0]
       }),
       info: {
         title: `Cotización ${model.quoteNumber}`,

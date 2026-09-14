@@ -246,7 +246,7 @@ function buildAppEnv() {
     SERVICE_AUTH_TOKEN: state.credentials.serviceAuthToken,
     QUOTE_DOCUMENT_REF_SECRET: state.credentials.documentRefSecret,
     QUOTE_DOCUMENT_STORAGE_ROOT: state.paths.storageRoot,
-    QUOTE_RENDER_VERSION: "quote-pdf-v2-pdfmake",
+    QUOTE_RENDER_VERSION: "quote-pdf-v3",
     QUOTE_EXPIRATION_SCHEDULER_ENABLED: "true",
     QUOTE_EXPIRATION_INTERVAL_MS: "1000",
     QUOTE_EXPIRATION_BATCH_SIZE: "25",

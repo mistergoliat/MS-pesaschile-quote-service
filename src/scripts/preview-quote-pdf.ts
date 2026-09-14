@@ -1,7 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { createPdfFixture, createPdfRenderer } from "./pdf-fixture";
+import {
+  createLongDescriptionPdfFixture,
+  createMixedPdfFixture,
+  createPdfFixture,
+  createPdfRenderer,
+  createSimplePdfFixture,
+  PDF_RENDER_VERSION
+} from "./pdf-fixture";
+
+function countPages(pdf: Buffer): number {
+  return [...pdf.toString("latin1").matchAll(/\/Type\s*\/Page\b/g)].length;
+}
 
 async function main(): Promise<void> {
   const outputDirectory = path.resolve(process.cwd(), ".tmp-pdf-previews");
@@ -9,14 +20,26 @@ async function main(): Promise<void> {
 
   await fs.mkdir(outputDirectory, { recursive: true });
 
-  for (const [label, itemCount] of [
-    ["short", 1],
-    ["long", 30],
-    ["multipage", 100]
-  ] as const) {
-    const pdf = await renderer.renderPdf(createPdfFixture(itemCount));
+  const fixtures = [
+    ["simple", createSimplePdfFixture()],
+    ["mixed", createMixedPdfFixture()],
+    ["long-description", createLongDescriptionPdfFixture()],
+    ["30-lines", createPdfFixture(30)],
+    ["multipage", createPdfFixture(100)]
+  ] as const;
+
+  for (const [label, fixture] of fixtures) {
+    const pdf = await renderer.renderPdf(fixture);
     await fs.writeFile(path.join(outputDirectory, `quote-${label}.pdf`), pdf);
-    console.log(JSON.stringify({ label, itemCount, bytes: pdf.byteLength }));
+    console.log(
+      JSON.stringify({
+        label,
+        renderVersion: PDF_RENDER_VERSION,
+        itemCount: fixture.items.length,
+        pages: countPages(pdf),
+        bytes: pdf.byteLength
+      })
+    );
   }
 }
 

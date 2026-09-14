@@ -18,7 +18,7 @@ describe("loadEnv", () => {
       QUOTE_COMPANY_NAME: "Pesas Chile SPA",
       QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
       QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
-      QUOTE_RENDER_VERSION: "quote-pdf-v2-pdfmake",
+      QUOTE_RENDER_VERSION: "quote-pdf-v3",
       QUOTE_EMAIL_PROVIDER: "gmail",
       GOOGLE_GMAIL_CLIENT_ID: "gmail-client-id",
       GOOGLE_GMAIL_CLIENT_SECRET: "gmail-client-secret",

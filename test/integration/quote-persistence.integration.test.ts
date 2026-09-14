@@ -603,7 +603,7 @@ describe("PostgreSQL quote persistence", () => {
         QUOTE_COMPANY_NAME: "Pesas Chile SPA",
         QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
         QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
-        QUOTE_RENDER_VERSION: "quote-pdf-v2-pdfmake"
+        QUOTE_RENDER_VERSION: "quote-pdf-v3"
       }));
       const restartedService = new QuoteService(
         new PostgresQuoteRepository(restartedDatabase)

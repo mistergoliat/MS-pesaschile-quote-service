@@ -3,9 +3,17 @@ import { inflateSync } from "node:zlib";
 
 import { describe, expect, it } from "vitest";
 
-import { createPdfFixture, createPdfRenderer } from "../../src/scripts/pdf-fixture";
+import {
+  createPdfFixture,
+  createPdfRenderer,
+  PDF_RENDER_VERSION
+} from "../../src/scripts/pdf-fixture";
 
 describe("NativePdfRenderer", () => {
+  it("uses the quote PDF v3 generation for preview fixtures", () => {
+    expect(PDF_RENDER_VERSION).toBe("quote-pdf-v3");
+  });
+
   it.each([1, 10, 30, 100])("renders a valid PDF for %i lines", async (itemCount) => {
     const pdf = await createPdfRenderer().renderPdf(createPdfFixture(itemCount));
 

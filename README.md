@@ -41,6 +41,7 @@ PDF generation is native: `CanonicalIssuedQuoteSnapshot → pdfmake → PDF`. No
 - `npm run test:unit`
 - `npm run verify`
 - `npm run email:preview`
+- `QUOTE_SMOKE_RECIPIENT=recipient@example.com npm run email:smoke:pdf` sends a real Gmail smoke email with a generated quote PDF after validating MIME, UTF-8 HTML, PDF attachment, and quote content.
 - `npm run pdf:preview`
 - `npm run pdf:benchmark`
 - `npm run pdf:concurrency-smoke`
@@ -424,7 +425,7 @@ Operational commands:
 
 ### T07D Lightweight Native PDF Renderer
 
-The current renderer version is `quote-pdf-v2-pdfmake`. It consumes the immutable
+The current renderer version is `quote-pdf-v3`. It consumes the immutable
 `CanonicalIssuedQuoteSnapshot` directly; it does not query PostgreSQL, rehydrate
 Catalog data, or recalculate pricing. The existing printable HTML artifact remains
 available for API compatibility, while email HTML remains unchanged.
