@@ -193,6 +193,16 @@ const corrHolders = [];
 (function walk(o) { if (o && typeof o === 'object') { if (o.externalCorrelation && 'correlationId' in o.externalCorrelation) corrHolders.push(o); for (const v of Object.values(o)) walk(v); } })(readdirSync(`${DIR}/examples`).map((f) => read(`examples/${f}`)));
 check('A3: no example carries correlationId inside externalCorrelation', corrHolders.length === 0);
 
+// 10. R1.5A.3 contract amendment (QUOTE_V2_CONTRACT_FREEZE.md §3b)
+const sec = text('QUOTE_V2_SECURITY_SCOPES.md');
+const creatorOnly = /Creator principal only \(amendment A4\)/;
+check('A4: security doc states creator-only draft edit / issue / cancel', /Mutation authority \(amendment A4\)/.test(sec) && /\*\*creator principal\*\*/.test(sec));
+check('A4: read:any is read visibility only (no mutation authority)', /\| `quotes:read:any` \| Extends \*\*read\*\* visibility[^|]*grants no mutation authority/.test(sec));
+check('A4: no scope grants edit/issue/cancel of merely visible quotes', ![...sec.matchAll(/^\| `(quotes:[a-z:]+)` \| ([^|]+)\|/gm)].some(([, , grant]) => /visible/.test(grant) && /\b(edit|issue|cancel)\b/i.test(grant)));
+check('A4: updateDraft / issueDraft / cancelQuote descriptions are creator-only', ['/v2/quotes/{quoteId}/draft', '/v2/quotes/{quoteId}/issue', '/v2/quotes/{quoteId}/cancel'].every((p) => creatorOnly.test(Object.values(P[p])[0].description ?? '')));
+check('A4: state machine T2/T3/T7/T8/T11 initiated by the creator principal', ['T2', 'T3', 'T7', 'T8', 'T11'].every((t) => new RegExp('^\\| ' + t + ' \\|[^\\n]*\\| creator principal \\(', 'm').test(sm)));
+check('A4: recorded in the freeze record', /^\| A4 \| Read authority never implies mutation authority/m.test(text('QUOTE_V2_CONTRACT_FREEZE.md')));
+
 const failed = results.filter((r) => !r.ok);
 console.log(`checks: ${results.length}, passed: ${results.length - failed.length}, failed: ${failed.length}`);
 for (const f of failed) console.log('FAIL', f.name, f.detail);

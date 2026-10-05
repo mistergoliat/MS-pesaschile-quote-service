@@ -64,7 +64,7 @@ Each is normative and recorded where it lives.
 | C11 | Cancel allowed from `draft` and from `issued` before the validity boundary; rejected while `issuing` | State machine §3–4 |
 | C12 | Override expressed as `validThroughLocalDate` (inclusive civil date), range day 1 … +365 days | Validity §2 |
 | C13 | Optional `expectedTotals` → `422 arithmetic_mismatch` (lets a consumer bind approved amounts) | Domain §6.3, §17 |
-| C14 | Visibility: own quotes, or all with `quotes:read:any`; invisible = 404 | Security §3 |
+| C14 | Visibility: own quotes, or all with `quotes:read:any`; invisible = 404. ~~Visibility authorizes draft edit, issue and cancel~~ — mutation authority is creator-only, **A4** | Security §3 |
 | C15 | Drafts may have 0 lines; issue requires ≥ 1 | Domain §4.2 |
 | C16 | No revisions in V2; change after acceptance = new quote | State machine §5 |
 | C17 | No public HTML artifact; document only via authenticated PDF endpoint | Domain §9 |
@@ -85,6 +85,16 @@ amended set.
 | A1 | Quote lifecycle and issuance-operation lifecycle are separate. A technical issuance failure never cancels the quote: at the deadline the operation becomes `failed` (`issuance_deadline_exceeded`) and the quote stays `issuing` (number kept, no document). Resolution is an operator retry (new operation for the same quote, T10) or an explicit principal cancel (T11, allowed from `issuing` only when the current operation is `failed`). A quote may have several operations: at most one active, at most one `succeeded`. | C7 (quote part), T6 | State machine §1–§6, Idempotency §4, Domain §2/§8, OpenAPI `Operation`, `Cancellation`, cancel operation |
 | A2 | `201`/`202` (`200`/`202`) semantics stay frozen; the length of the synchronous wait (`syncIssueBudgetMs`, default 5000 ms) is an implementation parameter, not an API invariant. Clients handle both outcomes for every request. | C8 (5 s as contract) | Domain §4.1, Idempotency §4.2/§4.4, OpenAPI create/issue descriptions |
 | A3 | Request/trace correlation is distinct from durable business correlation. `externalCorrelation` = `{sourceSystem, externalReferenceType?, externalReference?}` (durable, in the body and the fingerprint). Trace correlation is the optional `X-Correlation-Id` header, recorded on audit events and logs only, never on the quote. The fingerprint is computed over the unmodified body. V1 `source_correlation_id` migrates to legacy data. | C4, C5 (`body′` exclusion) | Domain §11/§14, Idempotency §2/§3.1, OpenAPI conventions, `ExternalCorrelation`, `CorrelationId` parameter, `AuditEvent.correlationId`, examples, migration §1.1 |
+
+## 3b. Contract amendments (R1.5A.3)
+
+Applied during R1.5A.3 by explicit owner decision (authorization design
+defect found in implementation review). **CONTRACT_FROZEN = YES** still holds
+for the amended set.
+
+| # | Amendment | Supersedes | Where |
+|---|---|---|---|
+| A4 | Read authority never implies mutation authority. `quotes:read:any` expands **read** visibility only. Draft edit, issue and cancel are allowed only to the creator principal (`createdByPrincipalId`), in addition to the endpoint scope; `principalType` never grants authority; V2 defines no cross-principal mutation scope. A non-creator receives `404 quote_not_found` for these mutations, exactly like a missing quote (existence hiding preserved). | C14 (visibility as mutation authority) | Security §2–§3, Domain §12, State machine T2/T3/T7/T8/T11, OpenAPI `updateDraft`/`issueDraft`/`cancelQuote` descriptions and `NotFound` |
 
 ## 4. Static validation performed
 

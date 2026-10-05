@@ -47,3 +47,13 @@ export interface AuthenticatedPrincipal {
 export function hasScope(principal: AuthenticatedPrincipal, scope: QuoteScope): boolean {
   return principal.scopes.has(scope);
 }
+
+/** Read visibility (security §3): own quotes, or every quote with `quotes:read:any`. */
+export function isVisible(principal: AuthenticatedPrincipal, createdByPrincipalId: string): boolean {
+  return createdByPrincipalId === principal.principalId || hasScope(principal, "quotes:read:any");
+}
+
+/** Mutation authority (security §3, amendment A4): the creator only; read scopes never grant it. */
+export function isCreator(principal: AuthenticatedPrincipal, createdByPrincipalId: string): boolean {
+  return createdByPrincipalId === principal.principalId;
+}
