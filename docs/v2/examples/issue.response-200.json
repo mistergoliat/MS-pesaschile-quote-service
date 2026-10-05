@@ -1,0 +1,140 @@
+{
+  "quote": {
+    "quoteId": "c41a7e09-2b6d-4f3e-8a1c-9d5e0b7f2a44",
+    "status": "issued",
+    "version": 4,
+    "quoteNumber": "PC-000138",
+    "currency": "CLP",
+    "externalCorrelation": {
+      "sourceSystem": "backoffice",
+      "externalReferenceType": "case",
+      "externalReference": "CASE-2026-0912",
+      "correlationId": "bo-req-5521"
+    },
+    "customer": {
+      "kind": "company",
+      "legalName": "Gimnasio Andes SpA",
+      "tradeName": "Andes Fit",
+      "rut": "76123456-0",
+      "contactName": "Pedro Soto",
+      "email": "compras@andesfit.example.com",
+      "address": {
+        "lines": [
+          "Av. Providencia 1234, oficina 501"
+        ],
+        "commune": "Providencia",
+        "region": "Región Metropolitana",
+        "country": "CL"
+      }
+    },
+    "lines": [
+      {
+        "lineId": "2c7e1b90-4d3a-4f6c-8b2e-5a9d0c1f3e21",
+        "position": 1,
+        "kind": "product",
+        "item": {
+          "sourceSystem": "pesaschile-catalog",
+          "productRef": "3301",
+          "variantRef": "8810",
+          "sku": "PG-15",
+          "description": "Piso de goma 15 mm",
+          "attributes": [
+            {
+              "name": "Ancho",
+              "value": "1 m"
+            }
+          ]
+        },
+        "quantity": {
+          "value": "15",
+          "unit": "m"
+        },
+        "unitPrice": {
+          "amount": 18990,
+          "taxBasis": "included",
+          "taxRate": "0.19"
+        },
+        "amounts": {
+          "net": 239370,
+          "tax": 45480,
+          "gross": 284850
+        }
+      },
+      {
+        "lineId": "2c7e1b90-4d3a-4f6c-8b2e-5a9d0c1f3e22",
+        "position": 2,
+        "kind": "service",
+        "item": {
+          "sourceSystem": "backoffice",
+          "description": "Servicio exento (ejemplo de cálculo)"
+        },
+        "quantity": {
+          "value": "1",
+          "unit": "unit"
+        },
+        "unitPrice": {
+          "amount": 35000,
+          "taxBasis": "exempt"
+        },
+        "amounts": {
+          "net": 35000,
+          "tax": 0,
+          "gross": 35000
+        }
+      }
+    ],
+    "shipping": null,
+    "totals": {
+      "net": 274370,
+      "tax": 45480,
+      "gross": 319850,
+      "exemptNet": 35000
+    },
+    "validity": {
+      "source": "policy",
+      "policyId": "cl-retail-5-calendar-days-v1",
+      "issuerZone": "America/Santiago",
+      "tzdbVersion": "2025a",
+      "issueLocalDate": "2026-10-04",
+      "validThroughLocalDate": "2026-10-08",
+      "validUntilExclusive": "2026-10-09T03:00:00Z",
+      "override": null
+    },
+    "issuance": {
+      "issuedAt": "2026-10-05T02:30:00Z",
+      "operationId": "e7b2d4f1-9c3a-4e5b-a6d8-1f0c3b5e9a72",
+      "issuerProfileId": "pesaschile-cl-v1"
+    },
+    "document": {
+      "available": true,
+      "contentType": "application/pdf",
+      "semanticSnapshotHash": "3b3eedfeb1261eff1e4dafdcded4f1f57f58b684352f8e69a12a5102ae25573f",
+      "pdfSha256": "49593ae36fd4f194b651efbc41ec22e77464294400e4026df43cf673ed916eb9",
+      "byteLength": 16120,
+      "rendererVersion": "quote-pdf-v4",
+      "templateVersion": "quote-template-v4",
+      "generatedAt": "2026-10-05T02:30:00.950Z",
+      "artifactRef": "sha256:49593ae36fd4f194b651efbc41ec22e77464294400e4026df43cf673ed916eb9"
+    },
+    "cancellation": null,
+    "expiration": null,
+    "createdByPrincipalId": "backoffice",
+    "createdAt": "2026-10-04T13:10:00Z",
+    "updatedAt": "2026-10-05T02:30:00.950Z"
+  },
+  "operation": {
+    "operationId": "e7b2d4f1-9c3a-4e5b-a6d8-1f0c3b5e9a72",
+    "type": "quote.issue",
+    "status": "succeeded",
+    "quoteId": "c41a7e09-2b6d-4f3e-8a1c-9d5e0b7f2a44",
+    "acceptedAt": "2026-10-05T02:30:00Z",
+    "deadlineAt": "2026-10-06T02:30:00Z",
+    "completedAt": "2026-10-05T02:30:00.950Z",
+    "attempts": {
+      "count": 1,
+      "lastAttemptAt": "2026-10-05T02:30:00.015Z",
+      "lastErrorCode": null,
+      "nextAttemptAt": null
+    }
+  }
+}

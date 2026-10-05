@@ -1,0 +1,99 @@
+{
+  "externalCorrelation": {
+    "sourceSystem": "sales-integration",
+    "externalReferenceType": "conversation",
+    "externalReference": "conv-7f3a91c2",
+    "correlationId": "req-4b1e9d0a-77"
+  },
+  "customer": {
+    "kind": "person",
+    "displayName": "Camila Rojas",
+    "email": "camila.rojas@example.com",
+    "phone": "+56 9 1234 5678"
+  },
+  "lines": [
+    {
+      "kind": "product",
+      "item": {
+        "sourceSystem": "pesaschile-catalog",
+        "productRef": "1042",
+        "variantRef": "3317",
+        "sku": "MH-10",
+        "description": "Mancuerna hexagonal 10 kg",
+        "attributes": [
+          {
+            "name": "Peso",
+            "value": "10 kg"
+          }
+        ]
+      },
+      "quantity": {
+        "value": "2",
+        "unit": "unit"
+      },
+      "unitPrice": {
+        "amount": 24990,
+        "taxBasis": "included",
+        "taxRate": "0.19"
+      },
+      "pricingProvenance": {
+        "sourceSystem": "pesaschile-catalog",
+        "reference": "price-engine-v2",
+        "asOf": "2026-10-04T17:58:12Z"
+      }
+    },
+    {
+      "kind": "product",
+      "item": {
+        "sourceSystem": "pesaschile-catalog",
+        "productRef": "2210",
+        "sku": "BP-200",
+        "description": "Banco plano reforzado"
+      },
+      "quantity": {
+        "value": "1",
+        "unit": "unit"
+      },
+      "unitPrice": {
+        "amount": 89990,
+        "taxBasis": "included",
+        "taxRate": "0.19"
+      },
+      "pricingProvenance": {
+        "sourceSystem": "pesaschile-catalog",
+        "reference": "price-engine-v2",
+        "asOf": "2026-10-04T17:58:12Z"
+      }
+    }
+  ],
+  "shipping": {
+    "carrier": {
+      "code": "starken",
+      "name": "Starken"
+    },
+    "serviceType": {
+      "code": "domicilio",
+      "name": "Entrega a domicilio"
+    },
+    "destination": {
+      "commune": "Ñuñoa",
+      "region": "Región Metropolitana",
+      "country": "CL"
+    },
+    "amount": {
+      "amount": 5990,
+      "taxBasis": "excluded",
+      "taxRate": "0.19"
+    },
+    "sourceQuote": {
+      "sourceSystem": "pc-carrier",
+      "reference": "all-offers",
+      "asOf": "2026-10-04T17:59:40Z"
+    }
+  },
+  "expectedTotals": {
+    "net": 123612,
+    "tax": 23486,
+    "gross": 147098
+  }
+}

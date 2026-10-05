@@ -1,0 +1,42 @@
+{
+  "items": [
+    {
+      "eventId": "b1e2c3d4-0001-4a5b-8c6d-7e8f9a0b1c2d",
+      "sequence": 1,
+      "type": "quote.issue.accepted",
+      "occurredAt": "2026-10-04T18:00:00Z",
+      "principalId": "sales-integration",
+      "operationId": "a3d9c1e7-5b2f-4a8c-8e1d-6f4b2c9e7d30",
+      "correlationId": "req-4b1e9d0a-77",
+      "idempotencyKeyHash": "2d6da996d983ac0ee2af7d92dab6627f3f32b9acba88613f7e15d6dcc2521105",
+      "fromStatus": null,
+      "toStatus": "issuing",
+      "data": {
+        "lineCount": 2,
+        "hasShipping": true,
+        "gross": 147098,
+        "validityPolicyId": "cl-retail-5-calendar-days-v1",
+        "quoteNumber": "PC-000137"
+      }
+    },
+    {
+      "eventId": "b1e2c3d4-0002-4a5b-8c6d-7e8f9a0b1c2d",
+      "sequence": 2,
+      "type": "quote.issued",
+      "occurredAt": "2026-10-04T18:00:01.412Z",
+      "principalId": "system",
+      "operationId": "a3d9c1e7-5b2f-4a8c-8e1d-6f4b2c9e7d30",
+      "correlationId": "req-4b1e9d0a-77",
+      "idempotencyKeyHash": null,
+      "fromStatus": "issuing",
+      "toStatus": "issued",
+      "data": {
+        "pdfSha256": "2532b30b6c80161d9164dc96b7d3645b285ec943cf8968c313be8ecd049c40b7",
+        "rendererVersion": "quote-pdf-v4",
+        "templateVersion": "quote-template-v4",
+        "attempts": 1
+      }
+    }
+  ],
+  "nextCursor": null
+}

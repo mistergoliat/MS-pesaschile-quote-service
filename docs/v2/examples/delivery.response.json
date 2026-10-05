@@ -1,0 +1,15 @@
+{
+  "deliveryId": "7d2f9b1e-3a4c-4e8d-9f0a-6b5c2e1d8a90",
+  "quoteId": "0f8e4a52-3c1b-4d6e-9b7a-2e5f1c8d9a10",
+  "channel": "email",
+  "status": "pending",
+  "recipientMasked": "ca***@example.com",
+  "documentSha256": "2532b30b6c80161d9164dc96b7d3645b285ec943cf8968c313be8ecd049c40b7",
+  "requestedAt": "2026-10-04T18:05:00Z",
+  "sentAt": null,
+  "attempts": {
+    "count": 0,
+    "lastAttemptAt": null,
+    "lastErrorCode": null
+  }
+}

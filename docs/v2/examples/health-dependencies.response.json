@@ -1,0 +1,53 @@
+{
+  "service": {
+    "name": "pesaschile-quote-service",
+    "version": "2.0.0",
+    "startedAt": "2026-10-04T12:00:00Z"
+  },
+  "schema": {
+    "expectedHead": "000006_quote_v2",
+    "actualHead": null
+  },
+  "dependencies": {
+    "database": {
+      "status": "down",
+      "failureCategory": "unreachable",
+      "lastSuccessAt": null
+    },
+    "artifactStorage": {
+      "status": "up",
+      "failureCategory": null,
+      "lastSuccessAt": "2026-10-04T12:00:30Z"
+    },
+    "renderer": {
+      "status": "up",
+      "failureCategory": null,
+      "lastSuccessAt": "2026-10-04T12:00:01Z"
+    },
+    "emailProvider": {
+      "status": "disabled",
+      "failureCategory": null,
+      "lastSuccessAt": null
+    }
+  },
+  "workers": {
+    "issuance": {
+      "enabled": true,
+      "lastPollAt": "2026-10-04T12:00:30Z",
+      "queueDepth": 0,
+      "oldestPendingAgeSeconds": null
+    },
+    "expiry": {
+      "enabled": true,
+      "lastPollAt": "2026-10-04T12:00:30Z",
+      "queueDepth": 0,
+      "oldestPendingAgeSeconds": null
+    },
+    "emailDelivery": {
+      "enabled": false,
+      "lastPollAt": null,
+      "queueDepth": 0,
+      "oldestPendingAgeSeconds": null
+    }
+  }
+}

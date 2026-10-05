@@ -1,0 +1,2087 @@
+openapi: 3.1.0
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+info:
+  title: Quote Service API
+  version: 2.0.0
+  summary: Formal commercial quotes from caller-frozen commercial snapshots (Model B).
+  description: |
+    Canonical V2 contract (R1.2 contract freeze). Normative companion documents
+    live next to this file:
+
+    - QUOTE_V2_DOMAIN_CONTRACT.md: ownership, arithmetic, snapshots, document, email, errors
+    - QUOTE_V2_STATE_MACHINE.md: quote states and transitions
+    - QUOTE_V2_IDEMPOTENCY_AND_RECOVERY.md: idempotency, issuance operation, reconciliation
+    - QUOTE_V2_VALIDITY_POLICY.md: policy cl-retail-5-calendar-days-v1
+    - QUOTE_V2_SECURITY_SCOPES.md: principals and scopes
+
+    Conventions:
+
+    - Every request body schema is closed (`additionalProperties: false`); an
+      unknown request member is `422 validation_error`.
+    - Consumers MUST ignore unknown response members (2.x evolves additively).
+    - CLP amounts are JSON integers (whole pesos). Quantities and tax rates are
+      canonical decimal strings, never binary floating point.
+    - All instants returned by the service are RFC 3339 UTC (`Z`).
+    - Every mutation requires `Idempotency-Key`. The request fingerprint is
+      SHA-256 over RFC 8785 (JCS) canonical JSON of
+      `{operation, pathParameters, body}` where `body` excludes
+      `externalCorrelation.correlationId`.
+    - Scopes required by each operation are listed in `x-required-scopes`.
+    - Quote Service never calls Catalog, Shipping, CRM or any pricing source,
+      and never sends email as part of create or issue.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: http://127.0.0.1:3011
+    description: Private network only. Not exposed publicly.
+security:
+  - serviceBearer: []
+tags:
+  - name: Quotes
+  - name: Drafts
+  - name: Operations
+  - name: Idempotency
+  - name: Documents
+  - name: Audit
+  - name: Deliveries
+  - name: Health
+paths:
+  /v2/quotes:
+    post:
+      tags: [Quotes]
+      operationId: createAndIssueQuote
+      summary: Create and issue one formal quote from one frozen commercial snapshot.
+      description: |
+        Transactional flow. One database transaction binds the idempotency key,
+        validates and freezes the snapshot, verifies arithmetic, resolves
+        validity, allocates the quote number and commits the quote as
+        `issuing` together with its issuance operation. The document is then
+        rendered within the synchronous budget or by the issuance worker.
+
+        - `201`: the bound quote is no longer `issuing` (normally `issued`).
+        - `202`: the bound quote is `issuing`; poll the operation.
+
+        A replay (same principal, operation, key and fingerprint) returns the
+        same logical quote with the status code computed from its current
+        state and header `Idempotent-Replay: true`. No email is sent.
+      x-idempotency-operation: quote.create_and_issue
+      x-required-scopes: [quotes:create]
+      x-conditional-scopes:
+        validityOverride: quotes:validity:override
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateQuoteRequest'
+            examples:
+              transactional:
+                externalValue: examples/create-and-issue.request.json
+      responses:
+        '201':
+          description: Quote issued (or otherwise no longer issuing). Check `quote.status`.
+          headers:
+            Location:
+              $ref: '#/components/headers/QuoteLocation'
+            Idempotent-Replay:
+              $ref: '#/components/headers/IdempotentReplay'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuoteOperationResult'
+              examples:
+                issued:
+                  externalValue: examples/create-and-issue.response-201.json
+        '202':
+          description: Durably accepted; the quote is `issuing`.
+          headers:
+            Location:
+              $ref: '#/components/headers/OperationLocation'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+            Idempotent-Replay:
+              $ref: '#/components/headers/IdempotentReplay'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuoteOperationResult'
+              examples:
+                issuing:
+                  externalValue: examples/create-and-issue.response-202.json
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    get:
+      tags: [Quotes]
+      operationId: listQuotesByCorrelation
+      summary: List quotes by external correlation.
+      description: |
+        Several quotes may share an external reference. Only quotes visible to
+        the principal are returned. Ordered by `createdAt` descending, then
+        `quoteId`.
+      x-required-scopes: [quotes:read]
+      parameters:
+        - name: sourceSystem
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/SystemCode'
+        - name: externalReferenceType
+          in: query
+          required: false
+          description: Required together with `externalReference`.
+          schema:
+            $ref: '#/components/schemas/SystemCode'
+        - name: externalReference
+          in: query
+          required: false
+          description: Required together with `externalReferenceType`.
+          schema:
+            $ref: '#/components/schemas/OpaqueReference'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/QuoteStatus'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Cursor'
+      responses:
+        '200':
+          description: Page of quotes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotePage'
+              examples:
+                page:
+                  externalValue: examples/quote-list.response.json
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v2/quotes/drafts:
+    post:
+      tags: [Drafts]
+      operationId: createDraft
+      summary: Create an editable draft. No quote number, no validity, no document.
+      x-idempotency-operation: quote.draft.create
+      x-required-scopes: [quotes:draft:write]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDraftRequest'
+            examples:
+              draft:
+                externalValue: examples/draft-create.request.json
+      responses:
+        '201':
+          description: Draft created (also returned on replay, with current state).
+          headers:
+            Location:
+              $ref: '#/components/headers/QuoteLocation'
+            Idempotent-Replay:
+              $ref: '#/components/headers/IdempotentReplay'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+              examples:
+                draft:
+                  externalValue: examples/draft-create.response-201.json
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v2/quotes/{quoteId}/draft:
+    patch:
+      tags: [Drafts]
+      operationId: updateDraft
+      summary: Replace top-level members of a draft (version-fenced).
+      description: |
+        Each present top-level member (`externalCorrelation`, `customer`,
+        `lines`, `shipping`) replaces the stored member entirely; arrays are
+        replaced, never merged. `shipping: null` removes shipping. Omitted
+        members are unchanged. Content type is `application/json`, not JSON
+        Merge Patch.
+      x-idempotency-operation: quote.draft.update
+      x-required-scopes: [quotes:draft:write]
+      parameters:
+        - $ref: '#/components/parameters/QuoteIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDraftRequest'
+            examples:
+              update:
+                externalValue: examples/draft-update.request.json
+      responses:
+        '200':
+          description: Updated draft (on replay, the quote's current state).
+          headers:
+            Idempotent-Replay:
+              $ref: '#/components/headers/IdempotentReplay'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v2/quotes/{quoteId}/issue:
+    post:
+      tags: [Drafts]
+      operationId: issueDraft
+      summary: Issue a draft (manual flow). Same issuance semantics as create-and-issue.
+      description: |
+        Freezes the draft at `expectedVersion`, resolves validity, allocates the
+        quote number and commits `issuing` with an issuance operation.
+
+        - `200`: the quote is no longer `issuing` (normally `issued`).
+        - `202`: the quote is `issuing`; poll the operation.
+
+        No email is sent.
+      x-idempotency-operation: quote.issue
+      x-required-scopes: [quotes:issue]
+      x-conditional-scopes:
+        validityOverride: quotes:validity:override
+      parameters:
+        - $ref: '#/components/parameters/QuoteIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IssueDraftRequest'
+            examples:
+              issue:
+                externalValue: examples/issue.request.json
+      responses:
+        '200':
+          description: Quote issued (or otherwise no longer issuing). Check `quote.status`.
+          headers:
+            Idempotent-Replay:
+              $ref: '#/components/headers/IdempotentReplay'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuoteOperationResult'
+              examples:
+                issued:
+                  externalValue: examples/issue.response-200.json
+        '202':
+          description: Durably accepted; the quote is `issuing`.
+          headers:
+            Location:
+              $ref: '#/components/headers/OperationLocation'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+            Idempotent-Replay:
+              $ref: '#/components/headers/IdempotentReplay'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuoteOperationResult'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v2/quotes/{quoteId}:
+    get:
+      tags: [Quotes]
+      operationId: getQuote
+      summary: Read a quote (current state, frozen snapshot, owner totals).
+      description: |
+        `status` is a projection: an `issued` quote whose `validUntilExclusive`
+        has passed is returned as `expired` even before the expiry job
+        materializes it.
+      x-required-scopes: [quotes:read]
+      parameters:
+        - $ref: '#/components/parameters/QuoteIdPath'
+      responses:
+        '200':
+          description: The quote.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+              examples:
+                issued:
+                  externalValue: examples/quote-issued.json
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v2/operations/{operationId}:
+    get:
+      tags: [Operations]
+      operationId: getOperation
+      summary: Read a durable issuance operation.
+      x-required-scopes: [quotes:read]
+      parameters:
+        - name: operationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+              examples:
+                running:
+                  externalValue: examples/operation-issuing.json
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v2/idempotency/current:
+    get:
+      tags: [Idempotency]
+      operationId: lookupIdempotencyKey
+      summary: Look up what the caller's own key is bound to.
+      description: |
+        Scope is always the authenticated principal: a principal can never see
+        another principal's bindings. Returns `200` with `state: not_found`
+        when nothing is bound. A binding exists only when the mutation
+        committed; rejected requests bind nothing. See
+        QUOTE_V2_IDEMPOTENCY_AND_RECOVERY.md for when `not_found` is final.
+      x-required-scopes: [quotes:read]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            $ref: '#/components/schemas/IdempotencyKeyValue'
+        - name: operation
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/IdempotentOperationName'
+      responses:
+        '200':
+          description: Binding state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdempotencyLookup'
+              examples:
+                bound:
+                  externalValue: examples/idempotency-lookup.bound.json
+                notFound:
+                  externalValue: examples/idempotency-lookup.not-found.json
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v2/quotes/{quoteId}/cancel:
+    post:
+      tags: [Quotes]
+      operationId: cancelQuote
+      summary: Cancel a draft or an issued (not yet expired) quote.
+      description: |
+        Allowed from `draft` and `issued`. `issuing` returns
+        `409 operation_in_progress`; `expired` and `cancelled` return
+        `409 invalid_state_transition`. Never rewrites an issued document.
+      x-idempotency-operation: quote.cancel
+      x-required-scopes: [quotes:cancel]
+      parameters:
+        - $ref: '#/components/parameters/QuoteIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelRequest'
+            examples:
+              cancel:
+                externalValue: examples/cancel.request.json
+      responses:
+        '200':
+          description: The cancelled quote (on replay, its current state).
+          headers:
+            Idempotent-Replay:
+              $ref: '#/components/headers/IdempotentReplay'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v2/quotes/{quoteId}/document:
+    get:
+      tags: [Documents]
+      operationId: getQuoteDocument
+      summary: Exact stored PDF bytes of the issued document.
+      description: |
+        Available for quotes that reached `issued` (also after expiry or
+        cancellation). Never re-rendered. The bytes are verified against
+        `pdfSha256` before streaming.
+      x-required-scopes: [quotes:document:read]
+      parameters:
+        - $ref: '#/components/parameters/QuoteIdPath'
+      responses:
+        '200':
+          description: PDF bytes.
+          headers:
+            X-Document-Sha256:
+              description: Lowercase hex SHA-256 of the body; equals `document.pdfSha256`.
+              schema:
+                $ref: '#/components/schemas/Sha256Hex'
+            ETag:
+              description: Strong ETag, the quoted `pdfSha256`.
+              schema:
+                type: string
+            Content-Disposition:
+              description: '`attachment; filename="<quoteNumber>.pdf"`'
+              schema:
+                type: string
+          content:
+            application/pdf:
+              schema:
+                type: string
+                contentMediaType: application/pdf
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v2/quotes/{quoteId}/audit:
+    get:
+      tags: [Audit]
+      operationId: getQuoteAudit
+      summary: Append-only audit history of a quote (no PII, no raw keys).
+      x-required-scopes: [quotes:audit:read]
+      parameters:
+        - $ref: '#/components/parameters/QuoteIdPath'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Cursor'
+      responses:
+        '200':
+          description: Page of audit events in `sequence` order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditPage'
+              examples:
+                page:
+                  externalValue: examples/audit.response.json
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v2/quotes/{quoteId}/deliveries/email:
+    post:
+      tags: [Deliveries]
+      operationId: requestEmailDelivery
+      summary: Explicitly queue an email delivery of an issued quote.
+      description: |
+        The only operation that can cause an email. Allowed only while the
+        quote is `issued` (not expired, not cancelled). Recipient defaults to
+        `customer.email`; without either, `422 delivery_recipient_missing`.
+        With the email provider disabled, `503 dependency_unavailable` and
+        nothing is queued.
+      x-idempotency-operation: quote.delivery.email
+      x-required-scopes: [quotes:delivery:email]
+      parameters:
+        - $ref: '#/components/parameters/QuoteIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailDeliveryRequest'
+            examples:
+              explicit:
+                externalValue: examples/email-delivery.request.json
+      responses:
+        '202':
+          description: Delivery queued (on replay, its current state).
+          headers:
+            Location:
+              description: /v2/quotes/{quoteId}/deliveries/{deliveryId}
+              schema:
+                type: string
+            Idempotent-Replay:
+              $ref: '#/components/headers/IdempotentReplay'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Delivery'
+              examples:
+                queued:
+                  externalValue: examples/delivery.response.json
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v2/quotes/{quoteId}/deliveries/{deliveryId}:
+    get:
+      tags: [Deliveries]
+      operationId: getDelivery
+      summary: Read a delivery (recipient masked).
+      x-required-scopes: [quotes:read]
+      parameters:
+        - $ref: '#/components/parameters/QuoteIdPath'
+        - name: deliveryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The delivery.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Delivery'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /health/live:
+    get:
+      tags: [Health]
+      operationId: getLiveness
+      summary: Process liveness. Never probes dependencies.
+      security: []
+      responses:
+        '200':
+          description: The process answers HTTP.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Liveness'
+              examples:
+                live:
+                  externalValue: examples/health-live.response.json
+  /health/ready:
+    get:
+      tags: [Health]
+      operationId: getReadiness
+      summary: Readiness for quote traffic (database, schema head, artifact storage, renderer, lifecycle).
+      security: []
+      responses:
+        '200':
+          description: Ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+        '503':
+          description: Not ready. Sanitized check results only.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+              examples:
+                notReady:
+                  externalValue: examples/health-ready.not-ready.json
+  /health/dependencies:
+    get:
+      tags: [Health]
+      operationId: getDependencyHealth
+      summary: Internal, authenticated, sanitized dependency and worker details.
+      x-required-scopes: [service:health:dependencies]
+      responses:
+        '200':
+          description: Always 200 when authorized; per-dependency status inside.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DependencyHealth'
+              examples:
+                details:
+                  externalValue: examples/health-dependencies.response.json
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+components:
+  securitySchemes:
+    serviceBearer:
+      type: http
+      scheme: bearer
+      description: |
+        Credential resolving to one authenticated principal with a set of
+        scopes (QUOTE_V2_SECURITY_SCOPES.md). Initial mechanism: per-principal
+        opaque bearer tokens; future mechanisms (mTLS, signed workload tokens)
+        keep the same principal/scope semantics. Request bodies never carry
+        an actor that grants authority.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Caller-chosen key, scoped to (principal, operation, key). Never logged raw.
+      schema:
+        $ref: '#/components/schemas/IdempotencyKeyValue'
+    QuoteIdPath:
+      name: quoteId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  headers:
+    IdempotentReplay:
+      description: '`true` when this response replays an existing binding; absent otherwise.'
+      schema:
+        type: string
+        enum: ['true']
+    QuoteLocation:
+      description: /v2/quotes/{quoteId}
+      schema:
+        type: string
+    OperationLocation:
+      description: /v2/operations/{operationId}
+      schema:
+        type: string
+    RetryAfter:
+      description: Suggested polling delay in seconds.
+      schema:
+        type: integer
+        minimum: 1
+  responses:
+    InvalidRequest:
+      description: 'invalid_request: malformed JSON, missing/invalid header, bad path or query parameter, unsupported media type.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthenticated:
+      description: 'unauthenticated'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: 'forbidden: authenticated principal lacks a required scope.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: 'quote_not_found | operation_not_found | delivery_not_found (also returned for resources not visible to the principal).'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: 'invalid_state_transition | version_conflict | idempotency_key_conflict | operation_in_progress | document_not_available'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            idempotencyKeyConflict:
+              externalValue: examples/error.idempotency-key-conflict.json
+            versionConflict:
+              externalValue: examples/error.version-conflict.json
+            operationInProgress:
+              externalValue: examples/error.operation-in-progress.json
+            documentNotAvailable:
+              externalValue: examples/error.document-not-available.json
+    PayloadTooLarge:
+      description: 'payload_too_large'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unprocessable:
+      description: 'validation_error | arithmetic_mismatch | delivery_recipient_missing'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            validation:
+              externalValue: examples/error.validation.json
+            arithmeticMismatch:
+              externalValue: examples/error.arithmetic-mismatch.json
+            recipientMissing:
+              externalValue: examples/error.delivery-recipient-missing.json
+    InternalError:
+      description: 'internal_error: sanitized; never contains SQL, provider or stack details.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailable:
+      description: 'dependency_unavailable | schema_not_ready | document_storage_failed (document read only). Includes Retry-After.'
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            dependencyUnavailable:
+              externalValue: examples/error.dependency-unavailable.json
+  schemas:
+    # ---------- primitives ----------
+    SystemCode:
+      type: string
+      description: Stable lowercase code chosen by a caller (e.g. a source system name).
+      pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'
+    OpaqueReference:
+      type: string
+      description: Opaque printable-ASCII reference; no leading or trailing space.
+      minLength: 1
+      maxLength: 200
+      pattern: '^[!-~](?:[ -~]{0,198}[!-~])?$'
+    Text:
+      type: string
+      description: Customer-facing text; no control characters, no leading or trailing whitespace.
+      minLength: 1
+      pattern: '^[^\s\x00-\x1F\x7F](?:[^\x00-\x1F\x7F]*[^\s\x00-\x1F\x7F])?$'
+    Instant:
+      type: string
+      description: RFC 3339 UTC instant as returned by the service.
+      format: date-time
+      pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?Z$'
+    InputInstant:
+      type: string
+      description: RFC 3339 instant with offset (provenance input; stored as given and normalized to UTC in responses).
+      format: date-time
+    LocalDate:
+      type: string
+      format: date
+      pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+    Sha256Hex:
+      type: string
+      pattern: '^[0-9a-f]{64}$'
+    Cursor:
+      type: string
+      minLength: 1
+      maxLength: 512
+      pattern: '^[A-Za-z0-9_-]+$'
+    IdempotencyKeyValue:
+      type: string
+      minLength: 1
+      maxLength: 200
+      pattern: '^[!-~]+$'
+    IdempotentOperationName:
+      type: string
+      enum:
+        - quote.create_and_issue
+        - quote.draft.create
+        - quote.draft.update
+        - quote.issue
+        - quote.cancel
+        - quote.delivery.email
+    ClpUnitAmount:
+      type: integer
+      description: Whole CLP pesos, caller-supplied input.
+      minimum: 0
+      maximum: 1000000000
+    ClpAmount:
+      type: integer
+      description: Whole CLP pesos, owner-computed.
+      minimum: 0
+      maximum: 9007199254740991
+    Quantity:
+      type: string
+      description: Canonical positive decimal, below 10000, at most 6 fractional digits, no trailing fractional zeros.
+      pattern: '^(?:[1-9][0-9]{0,3}(?:\.[0-9]{0,5}[1-9])?|0\.[0-9]{0,5}[1-9])$'
+    UnitCode:
+      type: string
+      description: Unit of measure code (e.g. `unit`, `kg`, `m`, `set`). Display only; arithmetic is unit-agnostic.
+      pattern: '^[a-z][a-z0-9_]{0,15}$'
+    TaxRate:
+      type: string
+      description: Canonical decimal fraction in (0, 1], at most 6 fractional digits (e.g. `0.19`).
+      pattern: '^(?:0\.[0-9]{0,5}[1-9]|1)$'
+    TaxBasis:
+      type: string
+      enum: [included, excluded, exempt]
+    Email:
+      type: string
+      format: email
+      maxLength: 254
+    Phone:
+      type: string
+      pattern: '^\+?[0-9][0-9 ()-]{5,19}$'
+    Rut:
+      type: string
+      description: Chilean RUT without dots, uppercase K; the check digit is verified (validation_error otherwise). Syntax only, not identity verification.
+      pattern: '^[1-9][0-9]{0,7}-[0-9K]$'
+    QuoteNumber:
+      type: string
+      description: Owner-assigned; prefix from the issuer profile, sequence of at least 6 digits, never truncated. Opaque to consumers.
+      pattern: '^[A-Z]{2,8}-[0-9]{6,}$'
+    QuoteStatus:
+      type: string
+      enum: [draft, issuing, issued, expired, cancelled]
+    # ---------- correlation ----------
+    ExternalCorrelation:
+      type: object
+      additionalProperties: false
+      description: |
+        Provenance and correlation only. Not quote identity, not idempotency
+        identity. Several quotes may share an external reference.
+        `correlationId` is excluded from the request fingerprint; the stored
+        value is the one of the committing request.
+      required: [sourceSystem]
+      properties:
+        sourceSystem:
+          $ref: '#/components/schemas/SystemCode'
+        externalReferenceType:
+          $ref: '#/components/schemas/SystemCode'
+        externalReference:
+          $ref: '#/components/schemas/OpaqueReference'
+        correlationId:
+          $ref: '#/components/schemas/OpaqueReference'
+      dependentRequired:
+        externalReference: [externalReferenceType]
+        externalReferenceType: [externalReference]
+    # ---------- customer ----------
+    Address:
+      type: object
+      additionalProperties: false
+      required: [country]
+      anyOf:
+        - required: [lines]
+        - required: [commune]
+      properties:
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 3
+          items:
+            allOf:
+              - $ref: '#/components/schemas/Text'
+              - maxLength: 120
+        commune:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 80
+        region:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 80
+        country:
+          type: string
+          const: CL
+    ExternalCustomerReference:
+      type: object
+      additionalProperties: false
+      required: [sourceSystem, reference]
+      properties:
+        sourceSystem:
+          $ref: '#/components/schemas/SystemCode'
+        reference:
+          $ref: '#/components/schemas/OpaqueReference'
+    GuestCustomer:
+      type: object
+      additionalProperties: false
+      description: No identity required; every field optional. Nothing is fabricated for absent fields.
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          const: guest
+        displayName:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 200
+        email:
+          $ref: '#/components/schemas/Email'
+        phone:
+          $ref: '#/components/schemas/Phone'
+        address:
+          $ref: '#/components/schemas/Address'
+        externalCustomerReference:
+          $ref: '#/components/schemas/ExternalCustomerReference'
+    PersonCustomer:
+      type: object
+      additionalProperties: false
+      required: [kind, displayName]
+      properties:
+        kind:
+          type: string
+          const: person
+        displayName:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 200
+        rut:
+          $ref: '#/components/schemas/Rut'
+        email:
+          $ref: '#/components/schemas/Email'
+        phone:
+          $ref: '#/components/schemas/Phone'
+        address:
+          $ref: '#/components/schemas/Address'
+        externalCustomerReference:
+          $ref: '#/components/schemas/ExternalCustomerReference'
+    CompanyCustomer:
+      type: object
+      additionalProperties: false
+      required: [kind, legalName]
+      properties:
+        kind:
+          type: string
+          const: company
+        legalName:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 200
+        tradeName:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 200
+        rut:
+          $ref: '#/components/schemas/Rut'
+        contactName:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 200
+        email:
+          $ref: '#/components/schemas/Email'
+        phone:
+          $ref: '#/components/schemas/Phone'
+        address:
+          $ref: '#/components/schemas/Address'
+        externalCustomerReference:
+          $ref: '#/components/schemas/ExternalCustomerReference'
+    Customer:
+      oneOf:
+        - $ref: '#/components/schemas/GuestCustomer'
+        - $ref: '#/components/schemas/PersonCustomer'
+        - $ref: '#/components/schemas/CompanyCustomer'
+      discriminator:
+        propertyName: kind
+        mapping:
+          guest: '#/components/schemas/GuestCustomer'
+          person: '#/components/schemas/PersonCustomer'
+          company: '#/components/schemas/CompanyCustomer'
+    # ---------- charges ----------
+    ChargeAmountInput:
+      type: object
+      additionalProperties: false
+      description: |
+        Caller-resolved amount and tax treatment. `taxRate` is required for
+        `included` and `excluded` and forbidden for `exempt`.
+      required: [amount, taxBasis]
+      properties:
+        amount:
+          $ref: '#/components/schemas/ClpUnitAmount'
+        taxBasis:
+          $ref: '#/components/schemas/TaxBasis'
+        taxRate:
+          $ref: '#/components/schemas/TaxRate'
+      if:
+        properties:
+          taxBasis:
+            const: exempt
+      then:
+        not:
+          required: [taxRate]
+      else:
+        required: [taxRate]
+    ComputedAmounts:
+      type: object
+      additionalProperties: false
+      description: Owner-computed with the published arithmetic; `gross = net + tax`.
+      required: [net, tax, gross]
+      properties:
+        net:
+          $ref: '#/components/schemas/ClpAmount'
+        tax:
+          $ref: '#/components/schemas/ClpAmount'
+        gross:
+          $ref: '#/components/schemas/ClpAmount'
+    ItemAttribute:
+      type: object
+      additionalProperties: false
+      required: [name, value]
+      properties:
+        name:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 60
+        value:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 120
+    ItemSnapshot:
+      type: object
+      additionalProperties: false
+      description: Frozen item identity and customer-facing description. Never resolved by Quote.
+      required: [sourceSystem, description]
+      properties:
+        sourceSystem:
+          $ref: '#/components/schemas/SystemCode'
+        productRef:
+          $ref: '#/components/schemas/OpaqueReference'
+        variantRef:
+          $ref: '#/components/schemas/OpaqueReference'
+        sku:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 100
+        description:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 300
+        attributes:
+          type: array
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/ItemAttribute'
+    LineQuantity:
+      type: object
+      additionalProperties: false
+      required: [value, unit]
+      properties:
+        value:
+          $ref: '#/components/schemas/Quantity'
+        unit:
+          $ref: '#/components/schemas/UnitCode'
+    PricingProvenance:
+      type: object
+      additionalProperties: false
+      description: Where the caller obtained the price. Recorded, never verified.
+      required: [sourceSystem, asOf]
+      properties:
+        sourceSystem:
+          $ref: '#/components/schemas/SystemCode'
+        reference:
+          $ref: '#/components/schemas/OpaqueReference'
+        asOf:
+          $ref: '#/components/schemas/InputInstant'
+    LineInput:
+      type: object
+      additionalProperties: false
+      required: [kind, item, quantity, unitPrice]
+      properties:
+        kind:
+          type: string
+          enum: [product, service]
+        item:
+          $ref: '#/components/schemas/ItemSnapshot'
+        quantity:
+          $ref: '#/components/schemas/LineQuantity'
+        unitPrice:
+          $ref: '#/components/schemas/ChargeAmountInput'
+        pricingProvenance:
+          $ref: '#/components/schemas/PricingProvenance'
+    Line:
+      type: object
+      additionalProperties: false
+      description: Stored line. `position` is 1-based request order.
+      required: [lineId, position, kind, item, quantity, unitPrice, amounts]
+      properties:
+        lineId:
+          type: string
+          format: uuid
+        position:
+          type: integer
+          minimum: 1
+          maximum: 100
+        kind:
+          type: string
+          enum: [product, service]
+        item:
+          $ref: '#/components/schemas/ItemSnapshot'
+        quantity:
+          $ref: '#/components/schemas/LineQuantity'
+        unitPrice:
+          $ref: '#/components/schemas/ChargeAmountInput'
+        pricingProvenance:
+          $ref: '#/components/schemas/PricingProvenance'
+        amounts:
+          $ref: '#/components/schemas/ComputedAmounts'
+    ShippingCarrier:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        code:
+          $ref: '#/components/schemas/SystemCode'
+        name:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 120
+    ShippingServiceType:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        code:
+          $ref: '#/components/schemas/SystemCode'
+        name:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 120
+    ShippingDestination:
+      type: object
+      additionalProperties: false
+      required: [commune, country]
+      properties:
+        commune:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 80
+        region:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 80
+        country:
+          type: string
+          const: CL
+    ShippingSourceQuote:
+      type: object
+      additionalProperties: false
+      required: [sourceSystem, asOf]
+      properties:
+        sourceSystem:
+          $ref: '#/components/schemas/SystemCode'
+        reference:
+          $ref: '#/components/schemas/OpaqueReference'
+        asOf:
+          $ref: '#/components/schemas/InputInstant'
+    ShippingInput:
+      type: object
+      additionalProperties: false
+      description: |
+        One chosen freight charge, quantity 1. Quote never calls Shipping and
+        never re-rates, selects or infers carrier/service. Exactly one input
+        basis is used for arithmetic.
+      required: [carrier, destination, amount]
+      properties:
+        carrier:
+          $ref: '#/components/schemas/ShippingCarrier'
+        serviceType:
+          $ref: '#/components/schemas/ShippingServiceType'
+        destination:
+          $ref: '#/components/schemas/ShippingDestination'
+        amount:
+          $ref: '#/components/schemas/ChargeAmountInput'
+        sourceQuote:
+          $ref: '#/components/schemas/ShippingSourceQuote'
+    Shipping:
+      type: object
+      additionalProperties: false
+      required: [carrier, destination, amount, amounts]
+      properties:
+        carrier:
+          $ref: '#/components/schemas/ShippingCarrier'
+        serviceType:
+          $ref: '#/components/schemas/ShippingServiceType'
+        destination:
+          $ref: '#/components/schemas/ShippingDestination'
+        amount:
+          $ref: '#/components/schemas/ChargeAmountInput'
+        sourceQuote:
+          $ref: '#/components/schemas/ShippingSourceQuote'
+        amounts:
+          $ref: '#/components/schemas/ComputedAmounts'
+    ExpectedTotals:
+      type: object
+      additionalProperties: false
+      description: |
+        Optional caller assertion. If present and any value differs from the
+        owner-computed totals, the request is rejected with
+        `422 arithmetic_mismatch` and nothing is committed.
+      required: [net, tax, gross]
+      properties:
+        net:
+          $ref: '#/components/schemas/ClpAmount'
+        tax:
+          $ref: '#/components/schemas/ClpAmount'
+        gross:
+          $ref: '#/components/schemas/ClpAmount'
+    Totals:
+      type: object
+      additionalProperties: false
+      description: Sums of rounded charge amounts (lines + shipping). `exemptNet` is the part of `net` from exempt charges.
+      required: [net, tax, gross, exemptNet]
+      properties:
+        net:
+          $ref: '#/components/schemas/ClpAmount'
+        tax:
+          $ref: '#/components/schemas/ClpAmount'
+        gross:
+          $ref: '#/components/schemas/ClpAmount'
+        exemptNet:
+          $ref: '#/components/schemas/ClpAmount'
+    ValidityOverrideInput:
+      type: object
+      additionalProperties: false
+      description: Privileged (`quotes:validity:override`). Inclusive last valid Chile civil date.
+      required: [validThroughLocalDate, reasonCode]
+      properties:
+        validThroughLocalDate:
+          $ref: '#/components/schemas/LocalDate'
+        reasonCode:
+          type: string
+          pattern: '^[a-z][a-z0-9_]{1,63}$'
+        note:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 500
+    # ---------- requests ----------
+    CreateQuoteRequest:
+      type: object
+      additionalProperties: false
+      required: [externalCorrelation, customer, lines]
+      properties:
+        externalCorrelation:
+          $ref: '#/components/schemas/ExternalCorrelation'
+        customer:
+          $ref: '#/components/schemas/Customer'
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/LineInput'
+        shipping:
+          $ref: '#/components/schemas/ShippingInput'
+        expectedTotals:
+          $ref: '#/components/schemas/ExpectedTotals'
+        validityOverride:
+          $ref: '#/components/schemas/ValidityOverrideInput'
+    CreateDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [externalCorrelation, customer, lines]
+      properties:
+        externalCorrelation:
+          $ref: '#/components/schemas/ExternalCorrelation'
+        customer:
+          $ref: '#/components/schemas/Customer'
+        lines:
+          type: array
+          minItems: 0
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/LineInput'
+        shipping:
+          $ref: '#/components/schemas/ShippingInput'
+    UpdateDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      minProperties: 2
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+        externalCorrelation:
+          $ref: '#/components/schemas/ExternalCorrelation'
+        customer:
+          $ref: '#/components/schemas/Customer'
+        lines:
+          type: array
+          minItems: 0
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/LineInput'
+        shipping:
+          oneOf:
+            - $ref: '#/components/schemas/ShippingInput'
+            - type: 'null'
+    IssueDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+        expectedTotals:
+          $ref: '#/components/schemas/ExpectedTotals'
+        validityOverride:
+          $ref: '#/components/schemas/ValidityOverrideInput'
+    CancelRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reasonCode]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+        reasonCode:
+          type: string
+          pattern: '^[a-z][a-z0-9_]{1,63}$'
+        note:
+          allOf:
+            - $ref: '#/components/schemas/Text'
+            - maxLength: 500
+    EmailDeliveryRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        recipient:
+          type: object
+          additionalProperties: false
+          required: [email]
+          properties:
+            email:
+              $ref: '#/components/schemas/Email'
+            name:
+              allOf:
+                - $ref: '#/components/schemas/Text'
+                - maxLength: 200
+    # ---------- quote representation ----------
+    Validity:
+      type: object
+      additionalProperties: false
+      required: [source, policyId, issuerZone, tzdbVersion, issueLocalDate, validThroughLocalDate, validUntilExclusive, override]
+      properties:
+        source:
+          type: string
+          enum: [policy, override, legacy_caller_supplied]
+        policyId:
+          description: The default policy applied (`source=policy`); null otherwise.
+          oneOf:
+            - type: string
+              pattern: '^[a-z0-9][a-z0-9-]{2,63}$'
+            - type: 'null'
+        issuerZone:
+          type: string
+          const: America/Santiago
+        tzdbVersion:
+          description: IANA tzdb release used for the resolution (null only for legacy V1 rows).
+          oneOf:
+            - type: string
+              pattern: '^[0-9]{4}[a-z]$'
+            - type: 'null'
+        issueLocalDate:
+          $ref: '#/components/schemas/LocalDate'
+        validThroughLocalDate:
+          description: Inclusive last valid Chile civil date (printed on the document).
+          $ref: '#/components/schemas/LocalDate'
+        validUntilExclusive:
+          description: First instant at which the quote is no longer valid. Expired iff `now >= validUntilExclusive`.
+          $ref: '#/components/schemas/Instant'
+        override:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [principalId, reasonCode]
+              properties:
+                principalId:
+                  $ref: '#/components/schemas/SystemCode'
+                reasonCode:
+                  type: string
+                  pattern: '^[a-z][a-z0-9_]{1,63}$'
+            - type: 'null'
+    Issuance:
+      type: object
+      additionalProperties: false
+      required: [issuedAt, operationId, issuerProfileId]
+      properties:
+        issuedAt:
+          description: Issue effective instant (commit of issue acceptance). Validity base and printed issue date.
+          $ref: '#/components/schemas/Instant'
+        operationId:
+          type: string
+          format: uuid
+        issuerProfileId:
+          $ref: '#/components/schemas/SystemCode'
+    Document:
+      type: object
+      additionalProperties: false
+      description: All fields except `available` and `contentType` are null until the manifest commits.
+      required: [available, contentType, semanticSnapshotHash, pdfSha256, byteLength, rendererVersion, templateVersion, generatedAt, artifactRef]
+      properties:
+        available:
+          type: boolean
+        contentType:
+          type: string
+          const: application/pdf
+        semanticSnapshotHash:
+          oneOf:
+            - $ref: '#/components/schemas/Sha256Hex'
+            - type: 'null'
+        pdfSha256:
+          oneOf:
+            - $ref: '#/components/schemas/Sha256Hex'
+            - type: 'null'
+        byteLength:
+          oneOf:
+            - type: integer
+              minimum: 1
+            - type: 'null'
+        rendererVersion:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 100
+            - type: 'null'
+        templateVersion:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 100
+            - type: 'null'
+        generatedAt:
+          oneOf:
+            - $ref: '#/components/schemas/Instant'
+            - type: 'null'
+        artifactRef:
+          description: Immutable opaque artifact reference (`sha256:<pdfSha256>`).
+          oneOf:
+            - type: string
+              pattern: '^sha256:[0-9a-f]{64}$'
+            - type: 'null'
+    Cancellation:
+      type: object
+      additionalProperties: false
+      required: [cancelledAt, reasonCode, initiatedBy]
+      properties:
+        cancelledAt:
+          $ref: '#/components/schemas/Instant'
+        reasonCode:
+          type: string
+          pattern: '^[a-z][a-z0-9_]{1,63}$'
+        initiatedBy:
+          description: Principal id, or `system` for `issuance_failed`.
+          $ref: '#/components/schemas/SystemCode'
+    Quote:
+      type: object
+      additionalProperties: false
+      description: |
+        A customer-facing formal quote exists only when `status = issued`,
+        `quoteNumber`, `issuance.issuedAt`, `validity`, `totals`,
+        `document.available = true` and `document.pdfSha256` are all present.
+        `issuing` and `draft` are never formal quotes.
+      required: [quoteId, status, version, quoteNumber, currency, externalCorrelation, customer, lines, shipping, totals, validity, issuance, document, cancellation, expiration, createdByPrincipalId, createdAt, updatedAt]
+      properties:
+        quoteId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/QuoteStatus'
+        version:
+          type: integer
+          minimum: 1
+        quoteNumber:
+          description: Null in `draft` and for drafts cancelled before issue.
+          oneOf:
+            - $ref: '#/components/schemas/QuoteNumber'
+            - type: 'null'
+        currency:
+          type: string
+          const: CLP
+        externalCorrelation:
+          $ref: '#/components/schemas/ExternalCorrelation'
+        customer:
+          $ref: '#/components/schemas/Customer'
+        lines:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/Line'
+        shipping:
+          oneOf:
+            - $ref: '#/components/schemas/Shipping'
+            - type: 'null'
+        totals:
+          $ref: '#/components/schemas/Totals'
+        validity:
+          description: Null in `draft` (and drafts cancelled before issue).
+          oneOf:
+            - $ref: '#/components/schemas/Validity'
+            - type: 'null'
+        issuance:
+          oneOf:
+            - $ref: '#/components/schemas/Issuance'
+            - type: 'null'
+        document:
+          $ref: '#/components/schemas/Document'
+        cancellation:
+          oneOf:
+            - $ref: '#/components/schemas/Cancellation'
+            - type: 'null'
+        expiration:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [expiredAt]
+              properties:
+                expiredAt:
+                  description: Equals `validity.validUntilExclusive`, except migrated V1 quotes (`validity.source = legacy_caller_supplied`) that keep their recorded V1 expiry instant.
+                  $ref: '#/components/schemas/Instant'
+            - type: 'null'
+        createdByPrincipalId:
+          $ref: '#/components/schemas/SystemCode'
+        createdAt:
+          $ref: '#/components/schemas/Instant'
+        updatedAt:
+          $ref: '#/components/schemas/Instant'
+    QuotePage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/Quote'
+        nextCursor:
+          oneOf:
+            - $ref: '#/components/schemas/Cursor'
+            - type: 'null'
+    Operation:
+      type: object
+      additionalProperties: false
+      description: |
+        Durable issuance operation. `failed` is terminal and only reached at
+        `deadlineAt`; the quote is then `cancelled` with reason
+        `issuance_failed`. Lease and fencing internals are not exposed.
+      required: [operationId, type, status, quoteId, acceptedAt, deadlineAt, completedAt, attempts]
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          const: quote.issue
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed]
+        quoteId:
+          type: string
+          format: uuid
+        acceptedAt:
+          $ref: '#/components/schemas/Instant'
+        deadlineAt:
+          $ref: '#/components/schemas/Instant'
+        completedAt:
+          oneOf:
+            - $ref: '#/components/schemas/Instant'
+            - type: 'null'
+        attempts:
+          type: object
+          additionalProperties: false
+          required: [count, lastAttemptAt, lastErrorCode, nextAttemptAt]
+          properties:
+            count:
+              type: integer
+              minimum: 0
+            lastAttemptAt:
+              oneOf:
+                - $ref: '#/components/schemas/Instant'
+                - type: 'null'
+            lastErrorCode:
+              oneOf:
+                - type: string
+                  enum: [document_generation_failed, document_storage_failed, dependency_unavailable, issuance_deadline_exceeded]
+                - type: 'null'
+            nextAttemptAt:
+              oneOf:
+                - $ref: '#/components/schemas/Instant'
+                - type: 'null'
+    QuoteOperationResult:
+      type: object
+      additionalProperties: false
+      required: [quote, operation]
+      properties:
+        quote:
+          $ref: '#/components/schemas/Quote'
+        operation:
+          $ref: '#/components/schemas/Operation'
+    IdempotencyLookup:
+      type: object
+      additionalProperties: false
+      required: [operation, state, binding]
+      properties:
+        operation:
+          $ref: '#/components/schemas/IdempotentOperationName'
+        state:
+          type: string
+          enum: [not_found, bound]
+        binding:
+          oneOf:
+            - type: 'null'
+            - type: object
+              additionalProperties: false
+              required: [boundAt, requestFingerprint, resourceType, quoteId, operationId, deliveryId, quoteStatus]
+              properties:
+                boundAt:
+                  $ref: '#/components/schemas/Instant'
+                requestFingerprint:
+                  $ref: '#/components/schemas/Sha256Hex'
+                resourceType:
+                  type: string
+                  enum: [quote, delivery]
+                quoteId:
+                  type: string
+                  format: uuid
+                operationId:
+                  oneOf:
+                    - type: string
+                      format: uuid
+                    - type: 'null'
+                deliveryId:
+                  oneOf:
+                    - type: string
+                      format: uuid
+                    - type: 'null'
+                quoteStatus:
+                  $ref: '#/components/schemas/QuoteStatus'
+    Delivery:
+      type: object
+      additionalProperties: false
+      required: [deliveryId, quoteId, channel, status, recipientMasked, documentSha256, requestedAt, sentAt, attempts]
+      properties:
+        deliveryId:
+          type: string
+          format: uuid
+        quoteId:
+          type: string
+          format: uuid
+        channel:
+          type: string
+          const: email
+        status:
+          type: string
+          enum: [pending, sending, sent, failed, unknown]
+        recipientMasked:
+          type: string
+          maxLength: 254
+        documentSha256:
+          $ref: '#/components/schemas/Sha256Hex'
+        requestedAt:
+          $ref: '#/components/schemas/Instant'
+        sentAt:
+          oneOf:
+            - $ref: '#/components/schemas/Instant'
+            - type: 'null'
+        attempts:
+          type: object
+          additionalProperties: false
+          required: [count, lastAttemptAt, lastErrorCode]
+          properties:
+            count:
+              type: integer
+              minimum: 0
+            lastAttemptAt:
+              oneOf:
+                - $ref: '#/components/schemas/Instant'
+                - type: 'null'
+            lastErrorCode:
+              oneOf:
+                - type: string
+                  pattern: '^[a-z][a-z0-9_]{1,63}$'
+                - type: 'null'
+    AuditEventType:
+      type: string
+      enum:
+        - quote.draft.created
+        - quote.draft.updated
+        - quote.issue.accepted
+        - quote.issue.attempt_failed
+        - quote.issued
+        - quote.issue.failed
+        - quote.cancelled
+        - quote.expired
+        - quote.delivery.requested
+        - quote.delivery.sent
+        - quote.delivery.failed
+        - quote.delivery.unknown
+        - idempotency.replayed
+        - idempotency.conflict
+        - legacy.v1.event
+    AuditEvent:
+      type: object
+      additionalProperties: false
+      required: [eventId, sequence, type, occurredAt, principalId, operationId, correlationId, idempotencyKeyHash, fromStatus, toStatus, data]
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          minimum: 1
+        type:
+          $ref: '#/components/schemas/AuditEventType'
+        occurredAt:
+          $ref: '#/components/schemas/Instant'
+        principalId:
+          description: Authenticated principal, or `system` for owner jobs.
+          $ref: '#/components/schemas/SystemCode'
+        operationId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        correlationId:
+          oneOf:
+            - $ref: '#/components/schemas/OpaqueReference'
+            - type: 'null'
+        idempotencyKeyHash:
+          description: SHA-256 of the key. The raw key is never stored in audit or logs.
+          oneOf:
+            - $ref: '#/components/schemas/Sha256Hex'
+            - type: 'null'
+        fromStatus:
+          oneOf:
+            - $ref: '#/components/schemas/QuoteStatus'
+            - type: 'null'
+        toStatus:
+          oneOf:
+            - $ref: '#/components/schemas/QuoteStatus'
+            - type: 'null'
+        data:
+          type: object
+          description: Minimal non-PII event data (counts, totals, versions, codes).
+    AuditPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        nextCursor:
+          oneOf:
+            - $ref: '#/components/schemas/Cursor'
+            - type: 'null'
+    # ---------- health ----------
+    Liveness:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: live
+    CheckResult:
+      type: string
+      enum: [ok, fail]
+    Readiness:
+      type: object
+      additionalProperties: false
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        checks:
+          type: object
+          additionalProperties: false
+          required: [database, schema, artifactStorage, renderer, lifecycle]
+          properties:
+            database:
+              $ref: '#/components/schemas/CheckResult'
+            schema:
+              $ref: '#/components/schemas/CheckResult'
+            artifactStorage:
+              $ref: '#/components/schemas/CheckResult'
+            renderer:
+              $ref: '#/components/schemas/CheckResult'
+            lifecycle:
+              $ref: '#/components/schemas/CheckResult'
+    DependencyStatus:
+      type: object
+      additionalProperties: false
+      required: [status, failureCategory, lastSuccessAt]
+      properties:
+        status:
+          type: string
+          enum: [up, down, degraded, disabled]
+        failureCategory:
+          oneOf:
+            - type: string
+              enum: [unreachable, timeout, authentication, permission, schema_mismatch, storage_full, storage_read_only, integrity, renderer_unavailable, provider_error]
+            - type: 'null'
+        lastSuccessAt:
+          oneOf:
+            - $ref: '#/components/schemas/Instant'
+            - type: 'null'
+    WorkerStatus:
+      type: object
+      additionalProperties: false
+      required: [enabled, lastPollAt, queueDepth, oldestPendingAgeSeconds]
+      properties:
+        enabled:
+          type: boolean
+        lastPollAt:
+          oneOf:
+            - $ref: '#/components/schemas/Instant'
+            - type: 'null'
+        queueDepth:
+          type: integer
+          minimum: 0
+        oldestPendingAgeSeconds:
+          oneOf:
+            - type: integer
+              minimum: 0
+            - type: 'null'
+    DependencyHealth:
+      type: object
+      additionalProperties: false
+      required: [service, schema, dependencies, workers]
+      properties:
+        service:
+          type: object
+          additionalProperties: false
+          required: [name, version, startedAt]
+          properties:
+            name:
+              type: string
+            version:
+              type: string
+            startedAt:
+              $ref: '#/components/schemas/Instant'
+        schema:
+          type: object
+          additionalProperties: false
+          required: [expectedHead, actualHead]
+          properties:
+            expectedHead:
+              type: string
+            actualHead:
+              oneOf:
+                - type: string
+                - type: 'null'
+        dependencies:
+          type: object
+          additionalProperties: false
+          required: [database, artifactStorage, renderer, emailProvider]
+          properties:
+            database:
+              $ref: '#/components/schemas/DependencyStatus'
+            artifactStorage:
+              $ref: '#/components/schemas/DependencyStatus'
+            renderer:
+              $ref: '#/components/schemas/DependencyStatus'
+            emailProvider:
+              $ref: '#/components/schemas/DependencyStatus'
+        workers:
+          type: object
+          additionalProperties: false
+          required: [issuance, expiry, emailDelivery]
+          properties:
+            issuance:
+              $ref: '#/components/schemas/WorkerStatus'
+            expiry:
+              $ref: '#/components/schemas/WorkerStatus'
+            emailDelivery:
+              $ref: '#/components/schemas/WorkerStatus'
+    # ---------- errors ----------
+    ErrorCode:
+      type: string
+      enum:
+        - invalid_request
+        - validation_error
+        - arithmetic_mismatch
+        - unauthenticated
+        - forbidden
+        - quote_not_found
+        - operation_not_found
+        - delivery_not_found
+        - document_not_available
+        - invalid_state_transition
+        - version_conflict
+        - idempotency_key_conflict
+        - operation_in_progress
+        - payload_too_large
+        - dependency_unavailable
+        - schema_not_ready
+        - document_generation_failed
+        - document_storage_failed
+        - delivery_recipient_missing
+        - api_version_retired
+        - internal_error
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, requestId]
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            message:
+              type: string
+              maxLength: 500
+            requestId:
+              type: string
+              maxLength: 100
+            details:
+              type: object
+              description: Typed per code (see QUOTE_V2_DOMAIN_CONTRACT.md §12). Never PII, SQL, provider payloads or stacks.

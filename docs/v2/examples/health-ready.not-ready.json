@@ -1,0 +1,10 @@
+{
+  "status": "not_ready",
+  "checks": {
+    "database": "fail",
+    "schema": "fail",
+    "artifactStorage": "ok",
+    "renderer": "ok",
+    "lifecycle": "ok"
+  }
+}

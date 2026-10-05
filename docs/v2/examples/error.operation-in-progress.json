@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "operation_in_progress",
+    "message": "The quote is issuing; retry after the operation completes.",
+    "requestId": "req_01J9ZK3M8Q",
+    "details": {
+      "operationId": "a3d9c1e7-5b2f-4a8c-8e1d-6f4b2c9e7d30"
+    }
+  }
+}

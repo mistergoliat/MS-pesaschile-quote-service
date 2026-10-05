@@ -1,0 +1,19 @@
+{
+  "error": {
+    "code": "arithmetic_mismatch",
+    "message": "expectedTotals do not match owner-computed totals.",
+    "requestId": "req_01J9ZK3M8Q",
+    "details": {
+      "expected": {
+        "net": 123612,
+        "tax": 23486,
+        "gross": 147099
+      },
+      "computed": {
+        "net": 123612,
+        "tax": 23486,
+        "gross": 147098
+      }
+    }
+  }
+}

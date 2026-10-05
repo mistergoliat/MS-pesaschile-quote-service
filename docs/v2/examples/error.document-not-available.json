@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "document_not_available",
+    "message": "The quote has no issued document.",
+    "requestId": "req_01J9ZK3M8Q",
+    "details": {
+      "status": "issuing"
+    }
+  }
+}

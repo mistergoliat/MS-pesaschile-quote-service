@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "delivery_recipient_missing",
+    "message": "No recipient was given and the customer snapshot has no email.",
+    "requestId": "req_01J9ZK3M8Q"
+  }
+}

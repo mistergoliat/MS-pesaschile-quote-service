@@ -1,0 +1,110 @@
+{
+  "quoteId": "c41a7e09-2b6d-4f3e-8a1c-9d5e0b7f2a44",
+  "status": "draft",
+  "version": 1,
+  "quoteNumber": null,
+  "currency": "CLP",
+  "externalCorrelation": {
+    "sourceSystem": "backoffice",
+    "externalReferenceType": "case",
+    "externalReference": "CASE-2026-0912",
+    "correlationId": "bo-req-5521"
+  },
+  "customer": {
+    "kind": "company",
+    "legalName": "Gimnasio Andes SpA",
+    "tradeName": "Andes Fit",
+    "rut": "76123456-0",
+    "contactName": "Pedro Soto",
+    "email": "compras@andesfit.example.com",
+    "address": {
+      "lines": [
+        "Av. Providencia 1234, oficina 501"
+      ],
+      "commune": "Providencia",
+      "region": "Región Metropolitana",
+      "country": "CL"
+    }
+  },
+  "lines": [
+    {
+      "lineId": "91a0e3c4-6f2d-4b8e-a7c5-3e1d9f0b2c11",
+      "position": 1,
+      "kind": "product",
+      "item": {
+        "sourceSystem": "pesaschile-catalog",
+        "productRef": "3301",
+        "variantRef": "8810",
+        "sku": "PG-15",
+        "description": "Piso de goma 15 mm",
+        "attributes": [
+          {
+            "name": "Ancho",
+            "value": "1 m"
+          }
+        ]
+      },
+      "quantity": {
+        "value": "12.5",
+        "unit": "m"
+      },
+      "unitPrice": {
+        "amount": 18990,
+        "taxBasis": "included",
+        "taxRate": "0.19"
+      },
+      "amounts": {
+        "net": 199475,
+        "tax": 37900,
+        "gross": 237375
+      }
+    },
+    {
+      "lineId": "91a0e3c4-6f2d-4b8e-a7c5-3e1d9f0b2c12",
+      "position": 2,
+      "kind": "service",
+      "item": {
+        "sourceSystem": "backoffice",
+        "description": "Servicio exento (ejemplo de cálculo)"
+      },
+      "quantity": {
+        "value": "1",
+        "unit": "unit"
+      },
+      "unitPrice": {
+        "amount": 35000,
+        "taxBasis": "exempt"
+      },
+      "amounts": {
+        "net": 35000,
+        "tax": 0,
+        "gross": 35000
+      }
+    }
+  ],
+  "shipping": null,
+  "totals": {
+    "net": 234475,
+    "tax": 37900,
+    "gross": 272375,
+    "exemptNet": 35000
+  },
+  "validity": null,
+  "issuance": null,
+  "document": {
+    "available": false,
+    "contentType": "application/pdf",
+    "semanticSnapshotHash": null,
+    "pdfSha256": null,
+    "byteLength": null,
+    "rendererVersion": null,
+    "templateVersion": null,
+    "generatedAt": null,
+    "artifactRef": null
+  },
+  "cancellation": null,
+  "expiration": null,
+  "createdByPrincipalId": "backoffice",
+  "createdAt": "2026-10-04T13:10:00Z",
+  "updatedAt": "2026-10-04T13:10:00Z"
+}

@@ -1,0 +1,25 @@
+{
+  "carrier": {
+    "code": "starken",
+    "name": "Starken"
+  },
+  "serviceType": {
+    "code": "domicilio",
+    "name": "Entrega a domicilio"
+  },
+  "destination": {
+    "commune": "Ñuñoa",
+    "region": "Región Metropolitana",
+    "country": "CL"
+  },
+  "amount": {
+    "amount": 5990,
+    "taxBasis": "excluded",
+    "taxRate": "0.19"
+  },
+  "sourceQuote": {
+    "sourceSystem": "pc-carrier",
+    "reference": "all-offers",
+    "asOf": "2026-10-04T17:59:40Z"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "error": {
+    "code": "dependency_unavailable",
+    "message": "A required dependency is unavailable; nothing was committed.",
+    "requestId": "req_01J9ZK3M8Q",
+    "details": {
+      "dependency": "database",
+      "retryable": true
+    }
+  }
+}

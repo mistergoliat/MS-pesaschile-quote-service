@@ -1,0 +1,11 @@
+{
+  "error": {
+    "code": "idempotency_key_conflict",
+    "message": "This Idempotency-Key is already bound to a different request for this operation.",
+    "requestId": "req_01J9ZK3M8Q",
+    "details": {
+      "operation": "quote.create_and_issue",
+      "boundRequestFingerprint": "c6b18e863ed367a164a96ae0783693ffd434c637d81117ac8a9538ff9fbfafd8"
+    }
+  }
+}

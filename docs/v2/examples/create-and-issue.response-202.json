@@ -1,0 +1,172 @@
+{
+  "quote": {
+    "quoteId": "0f8e4a52-3c1b-4d6e-9b7a-2e5f1c8d9a10",
+    "status": "issuing",
+    "version": 1,
+    "quoteNumber": "PC-000137",
+    "currency": "CLP",
+    "externalCorrelation": {
+      "sourceSystem": "sales-integration",
+      "externalReferenceType": "conversation",
+      "externalReference": "conv-7f3a91c2",
+      "correlationId": "req-4b1e9d0a-77"
+    },
+    "customer": {
+      "kind": "person",
+      "displayName": "Camila Rojas",
+      "email": "camila.rojas@example.com",
+      "phone": "+56 9 1234 5678"
+    },
+    "lines": [
+      {
+        "lineId": "5b0c2f3e-8d41-4c7a-9a55-0f2b8e6c1a01",
+        "position": 1,
+        "kind": "product",
+        "item": {
+          "sourceSystem": "pesaschile-catalog",
+          "productRef": "1042",
+          "variantRef": "3317",
+          "sku": "MH-10",
+          "description": "Mancuerna hexagonal 10 kg",
+          "attributes": [
+            {
+              "name": "Peso",
+              "value": "10 kg"
+            }
+          ]
+        },
+        "quantity": {
+          "value": "2",
+          "unit": "unit"
+        },
+        "unitPrice": {
+          "amount": 24990,
+          "taxBasis": "included",
+          "taxRate": "0.19"
+        },
+        "pricingProvenance": {
+          "sourceSystem": "pesaschile-catalog",
+          "reference": "price-engine-v2",
+          "asOf": "2026-10-04T17:58:12Z"
+        },
+        "amounts": {
+          "net": 42000,
+          "tax": 7980,
+          "gross": 49980
+        }
+      },
+      {
+        "lineId": "5b0c2f3e-8d41-4c7a-9a55-0f2b8e6c1a02",
+        "position": 2,
+        "kind": "product",
+        "item": {
+          "sourceSystem": "pesaschile-catalog",
+          "productRef": "2210",
+          "sku": "BP-200",
+          "description": "Banco plano reforzado"
+        },
+        "quantity": {
+          "value": "1",
+          "unit": "unit"
+        },
+        "unitPrice": {
+          "amount": 89990,
+          "taxBasis": "included",
+          "taxRate": "0.19"
+        },
+        "pricingProvenance": {
+          "sourceSystem": "pesaschile-catalog",
+          "reference": "price-engine-v2",
+          "asOf": "2026-10-04T17:58:12Z"
+        },
+        "amounts": {
+          "net": 75622,
+          "tax": 14368,
+          "gross": 89990
+        }
+      }
+    ],
+    "shipping": {
+      "carrier": {
+        "code": "starken",
+        "name": "Starken"
+      },
+      "serviceType": {
+        "code": "domicilio",
+        "name": "Entrega a domicilio"
+      },
+      "destination": {
+        "commune": "Ñuñoa",
+        "region": "Región Metropolitana",
+        "country": "CL"
+      },
+      "amount": {
+        "amount": 5990,
+        "taxBasis": "excluded",
+        "taxRate": "0.19"
+      },
+      "sourceQuote": {
+        "sourceSystem": "pc-carrier",
+        "reference": "all-offers",
+        "asOf": "2026-10-04T17:59:40Z"
+      },
+      "amounts": {
+        "net": 5990,
+        "tax": 1138,
+        "gross": 7128
+      }
+    },
+    "totals": {
+      "net": 123612,
+      "tax": 23486,
+      "gross": 147098,
+      "exemptNet": 0
+    },
+    "validity": {
+      "source": "policy",
+      "policyId": "cl-retail-5-calendar-days-v1",
+      "issuerZone": "America/Santiago",
+      "tzdbVersion": "2025a",
+      "issueLocalDate": "2026-10-04",
+      "validThroughLocalDate": "2026-10-08",
+      "validUntilExclusive": "2026-10-09T03:00:00Z",
+      "override": null
+    },
+    "issuance": {
+      "issuedAt": "2026-10-04T18:00:00Z",
+      "operationId": "a3d9c1e7-5b2f-4a8c-8e1d-6f4b2c9e7d30",
+      "issuerProfileId": "pesaschile-cl-v1"
+    },
+    "document": {
+      "available": false,
+      "contentType": "application/pdf",
+      "semanticSnapshotHash": null,
+      "pdfSha256": null,
+      "byteLength": null,
+      "rendererVersion": null,
+      "templateVersion": null,
+      "generatedAt": null,
+      "artifactRef": null
+    },
+    "cancellation": null,
+    "expiration": null,
+    "createdByPrincipalId": "sales-integration",
+    "createdAt": "2026-10-04T18:00:00Z",
+    "updatedAt": "2026-10-04T18:00:00Z"
+  },
+  "operation": {
+    "operationId": "a3d9c1e7-5b2f-4a8c-8e1d-6f4b2c9e7d30",
+    "type": "quote.issue",
+    "status": "pending",
+    "quoteId": "0f8e4a52-3c1b-4d6e-9b7a-2e5f1c8d9a10",
+    "acceptedAt": "2026-10-04T18:00:00Z",
+    "deadlineAt": "2026-10-05T18:00:00Z",
+    "completedAt": null,
+    "attempts": {
+      "count": 1,
+      "lastAttemptAt": "2026-10-04T18:00:00.020Z",
+      "lastErrorCode": "document_storage_failed",
+      "nextAttemptAt": "2026-10-04T18:00:05Z"
+    }
+  }
+}

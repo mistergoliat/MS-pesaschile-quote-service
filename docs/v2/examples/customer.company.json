@@ -1,0 +1,16 @@
+{
+  "kind": "company",
+  "legalName": "Gimnasio Andes SpA",
+  "tradeName": "Andes Fit",
+  "rut": "76123456-0",
+  "contactName": "Pedro Soto",
+  "email": "compras@andesfit.example.com",
+  "address": {
+    "lines": [
+      "Av. Providencia 1234, oficina 501"
+    ],
+    "commune": "Providencia",
+    "region": "Región Metropolitana",
+    "country": "CL"
+  }
+}

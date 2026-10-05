@@ -1,0 +1,21 @@
+{
+  "error": {
+    "code": "validation_error",
+    "message": "Request body is invalid.",
+    "requestId": "req_01J9ZK3M8Q",
+    "details": {
+      "fields": [
+        {
+          "path": "/lines/0/unitPrice/taxRate",
+          "code": "required",
+          "message": "taxRate is required unless taxBasis is exempt."
+        },
+        {
+          "path": "/customer/rut",
+          "code": "invalid_check_digit",
+          "message": "RUT check digit does not match."
+        }
+      ]
+    }
+  }
+}

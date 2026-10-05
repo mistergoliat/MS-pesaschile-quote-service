@@ -1,0 +1,160 @@
+{
+  "items": [
+    {
+      "quoteId": "0f8e4a52-3c1b-4d6e-9b7a-2e5f1c8d9a10",
+      "status": "issued",
+      "version": 2,
+      "quoteNumber": "PC-000137",
+      "currency": "CLP",
+      "externalCorrelation": {
+        "sourceSystem": "sales-integration",
+        "externalReferenceType": "conversation",
+        "externalReference": "conv-7f3a91c2",
+        "correlationId": "req-4b1e9d0a-77"
+      },
+      "customer": {
+        "kind": "person",
+        "displayName": "Camila Rojas",
+        "email": "camila.rojas@example.com",
+        "phone": "+56 9 1234 5678"
+      },
+      "lines": [
+        {
+          "lineId": "5b0c2f3e-8d41-4c7a-9a55-0f2b8e6c1a01",
+          "position": 1,
+          "kind": "product",
+          "item": {
+            "sourceSystem": "pesaschile-catalog",
+            "productRef": "1042",
+            "variantRef": "3317",
+            "sku": "MH-10",
+            "description": "Mancuerna hexagonal 10 kg",
+            "attributes": [
+              {
+                "name": "Peso",
+                "value": "10 kg"
+              }
+            ]
+          },
+          "quantity": {
+            "value": "2",
+            "unit": "unit"
+          },
+          "unitPrice": {
+            "amount": 24990,
+            "taxBasis": "included",
+            "taxRate": "0.19"
+          },
+          "pricingProvenance": {
+            "sourceSystem": "pesaschile-catalog",
+            "reference": "price-engine-v2",
+            "asOf": "2026-10-04T17:58:12Z"
+          },
+          "amounts": {
+            "net": 42000,
+            "tax": 7980,
+            "gross": 49980
+          }
+        },
+        {
+          "lineId": "5b0c2f3e-8d41-4c7a-9a55-0f2b8e6c1a02",
+          "position": 2,
+          "kind": "product",
+          "item": {
+            "sourceSystem": "pesaschile-catalog",
+            "productRef": "2210",
+            "sku": "BP-200",
+            "description": "Banco plano reforzado"
+          },
+          "quantity": {
+            "value": "1",
+            "unit": "unit"
+          },
+          "unitPrice": {
+            "amount": 89990,
+            "taxBasis": "included",
+            "taxRate": "0.19"
+          },
+          "pricingProvenance": {
+            "sourceSystem": "pesaschile-catalog",
+            "reference": "price-engine-v2",
+            "asOf": "2026-10-04T17:58:12Z"
+          },
+          "amounts": {
+            "net": 75622,
+            "tax": 14368,
+            "gross": 89990
+          }
+        }
+      ],
+      "shipping": {
+        "carrier": {
+          "code": "starken",
+          "name": "Starken"
+        },
+        "serviceType": {
+          "code": "domicilio",
+          "name": "Entrega a domicilio"
+        },
+        "destination": {
+          "commune": "Ñuñoa",
+          "region": "Región Metropolitana",
+          "country": "CL"
+        },
+        "amount": {
+          "amount": 5990,
+          "taxBasis": "excluded",
+          "taxRate": "0.19"
+        },
+        "sourceQuote": {
+          "sourceSystem": "pc-carrier",
+          "reference": "all-offers",
+          "asOf": "2026-10-04T17:59:40Z"
+        },
+        "amounts": {
+          "net": 5990,
+          "tax": 1138,
+          "gross": 7128
+        }
+      },
+      "totals": {
+        "net": 123612,
+        "tax": 23486,
+        "gross": 147098,
+        "exemptNet": 0
+      },
+      "validity": {
+        "source": "policy",
+        "policyId": "cl-retail-5-calendar-days-v1",
+        "issuerZone": "America/Santiago",
+        "tzdbVersion": "2025a",
+        "issueLocalDate": "2026-10-04",
+        "validThroughLocalDate": "2026-10-08",
+        "validUntilExclusive": "2026-10-09T03:00:00Z",
+        "override": null
+      },
+      "issuance": {
+        "issuedAt": "2026-10-04T18:00:00Z",
+        "operationId": "a3d9c1e7-5b2f-4a8c-8e1d-6f4b2c9e7d30",
+        "issuerProfileId": "pesaschile-cl-v1"
+      },
+      "document": {
+        "available": true,
+        "contentType": "application/pdf",
+        "semanticSnapshotHash": "73a9ee7503d9dfcd9c255ead0bd3fe9c0187e3e969b6d6d1158706cee12ae294",
+        "pdfSha256": "2532b30b6c80161d9164dc96b7d3645b285ec943cf8968c313be8ecd049c40b7",
+        "byteLength": 18342,
+        "rendererVersion": "quote-pdf-v4",
+        "templateVersion": "quote-template-v4",
+        "generatedAt": "2026-10-04T18:00:01.412Z",
+        "artifactRef": "sha256:2532b30b6c80161d9164dc96b7d3645b285ec943cf8968c313be8ecd049c40b7"
+      },
+      "cancellation": null,
+      "expiration": null,
+      "createdByPrincipalId": "sales-integration",
+      "createdAt": "2026-10-04T18:00:00Z",
+      "updatedAt": "2026-10-04T18:00:01.412Z"
+    }
+  ],
+  "nextCursor": null
+}

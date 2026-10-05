@@ -1,0 +1,15 @@
+{
+  "name": "quote-v2-contract-tools",
+  "private": true,
+  "description": "Documentation tooling for the Quote Service V2 contract. Not a runtime dependency of the service.",
+  "type": "module",
+  "scripts": {
+    "validate": "node validate-contract.mjs",
+    "generate-examples": "node generate-examples.mjs"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "yaml": "^2.8.1"
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "externalCorrelation": {
+    "sourceSystem": "backoffice",
+    "externalReferenceType": "case",
+    "externalReference": "CASE-2026-0912",
+    "correlationId": "bo-req-5521"
+  },
+  "customer": {
+    "kind": "company",
+    "legalName": "Gimnasio Andes SpA",
+    "tradeName": "Andes Fit",
+    "rut": "76123456-0",
+    "contactName": "Pedro Soto",
+    "email": "compras@andesfit.example.com",
+    "address": {
+      "lines": [
+        "Av. Providencia 1234, oficina 501"
+      ],
+      "commune": "Providencia",
+      "region": "Región Metropolitana",
+      "country": "CL"
+    }
+  },
+  "lines": [
+    {
+      "kind": "product",
+      "item": {
+        "sourceSystem": "pesaschile-catalog",
+        "productRef": "3301",
+        "variantRef": "8810",
+        "sku": "PG-15",
+        "description": "Piso de goma 15 mm",
+        "attributes": [
+          {
+            "name": "Ancho",
+            "value": "1 m"
+          }
+        ]
+      },
+      "quantity": {
+        "value": "12.5",
+        "unit": "m"
+      },
+      "unitPrice": {
+        "amount": 18990,
+        "taxBasis": "included",
+        "taxRate": "0.19"
+      }
+    },
+    {
+      "kind": "service",
+      "item": {
+        "sourceSystem": "backoffice",
+        "description": "Servicio exento (ejemplo de cálculo)"
+      },
+      "quantity": {
+        "value": "1",
+        "unit": "unit"
+      },
+      "unitPrice": {
+        "amount": 35000,
+        "taxBasis": "exempt"
+      }
+    }
+  ]
+}

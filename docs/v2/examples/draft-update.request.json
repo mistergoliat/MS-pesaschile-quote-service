@@ -1,0 +1,45 @@
+{
+  "expectedVersion": 1,
+  "lines": [
+    {
+      "kind": "product",
+      "item": {
+        "sourceSystem": "pesaschile-catalog",
+        "productRef": "3301",
+        "variantRef": "8810",
+        "sku": "PG-15",
+        "description": "Piso de goma 15 mm",
+        "attributes": [
+          {
+            "name": "Ancho",
+            "value": "1 m"
+          }
+        ]
+      },
+      "quantity": {
+        "value": "15",
+        "unit": "m"
+      },
+      "unitPrice": {
+        "amount": 18990,
+        "taxBasis": "included",
+        "taxRate": "0.19"
+      }
+    },
+    {
+      "kind": "service",
+      "item": {
+        "sourceSystem": "backoffice",
+        "description": "Servicio exento (ejemplo de cálculo)"
+      },
+      "quantity": {
+        "value": "1",
+        "unit": "unit"
+      },
+      "unitPrice": {
+        "amount": 35000,
+        "taxBasis": "exempt"
+      }
+    }
+  ]
+}

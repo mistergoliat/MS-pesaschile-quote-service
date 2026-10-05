@@ -1,0 +1,11 @@
+{
+  "error": {
+    "code": "version_conflict",
+    "message": "expectedVersion does not match the current quote version.",
+    "requestId": "req_01J9ZK3M8Q",
+    "details": {
+      "expectedVersion": 1,
+      "currentVersion": 2
+    }
+  }
+}
