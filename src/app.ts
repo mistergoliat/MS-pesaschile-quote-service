@@ -11,6 +11,7 @@ import {
 } from "./infrastructure/branding/pesaschile-brand-v1";
 import { buildConnectionConfig, PostgresDatabase } from "./infrastructure/persistence/postgres/postgres";
 import { PostgresDependencyProbe } from "./infrastructure/persistence/postgres/postgres-dependency-probe";
+import type { QuoteClock } from "./infrastructure/persistence/postgres/quote-clock";
 import { loadMigrationManifest } from "./infrastructure/persistence/postgres/schema-head";
 import { ApplicationLifecycleState } from "./infrastructure/runtime/application-lifecycle-state";
 import { BackgroundJobManager } from "./infrastructure/runtime/background-job-manager";
@@ -44,6 +45,8 @@ export interface BuildApplicationOverrides {
   readonly logStream?: { write(line: string): void };
   /** Additional business routes mounted behind the readiness gate (tests). */
   readonly businessRoutes?: readonly BusinessRouteRegistrar[];
+  /** Expiry-projection time source (tests pin it; production uses the database clock). */
+  readonly quoteClock?: QuoteClock;
 }
 
 /**
@@ -152,7 +155,7 @@ export function buildApplication(
     // The email subsystem was retired with V1 and returns in R1.6.
     emailEnabled: false,
     startedAt: new Date(),
-    businessRoutes: [v2QuoteRoutes(database), ...(overrides.businessRoutes ?? [])]
+    businessRoutes: [v2QuoteRoutes(database, overrides.quoteClock), ...(overrides.businessRoutes ?? [])]
   });
 
   let shutdownPromise: Promise<ShutdownOutcome> | null = null;

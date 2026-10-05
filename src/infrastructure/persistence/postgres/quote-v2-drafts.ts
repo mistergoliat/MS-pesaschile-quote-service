@@ -21,20 +21,16 @@ import {
   freezeIssue,
   insertLines,
   insertShipping,
-  omitNull,
   parseRequest,
-  readOperation,
-  readQuote,
   type AcceptCreateAndIssueInput,
   type AcceptOutcome,
   type CommandContext,
   type CommandOutcome,
   type CommercialSnapshot,
-  type ComputedSnapshot,
-  type Json,
-  type QuoteOperationResult
+  type ComputedSnapshot
 } from "./quote-v2-acceptance";
 import type { PostgresDatabase } from "./postgres";
+import { omitNull, readOperation, readQuote, type Json, type QuoteView } from "./quote-v2-reads";
 
 /*
  * Manual flow (Domain §4.2, state machine T1–T3). Every command runs in one
@@ -46,23 +42,24 @@ import type { PostgresDatabase } from "./postgres";
  */
 
 export type DraftCommandInput = AcceptCreateAndIssueInput;
-type QuoteView = QuoteOperationResult["quote"];
 
-interface LockedQuote {
+export interface LockedQuote {
   status: string;
   version: number;
+  quote_number: string | null;
   created_by_principal_id: string;
   current_operation_id: string | null;
+  valid_until_exclusive: Date | null;
 }
 
 /**
  * Mutation authority (security §3, amendment A4): only the creator principal may
- * edit or issue; `quotes:read:any` grants no mutation. Any other quote is
+ * edit, issue or cancel; `quotes:read:any` grants no mutation. Any other quote is
  * answered exactly like a missing one (existence hiding).
  */
-async function lockOwnQuote(client: PoolClient, quoteId: string, principal: AuthenticatedPrincipal): Promise<LockedQuote> {
+export async function lockOwnQuote(client: PoolClient, quoteId: string, principal: AuthenticatedPrincipal): Promise<LockedQuote> {
   const { rows } = await client.query<LockedQuote>(
-    `select status, version, created_by_principal_id, current_operation_id
+    `select status, version, quote_number, created_by_principal_id, current_operation_id, valid_until_exclusive
      from quote_service.quotes where quote_id = $1 for update`,
     [quoteId]
   );
@@ -141,7 +138,7 @@ export async function createDraft(database: PostgresDatabase, input: DraftComman
   const context = commandContext(input, "quote.draft.create", {});
 
   return database.withTransaction(async (client) => {
-    const answered = await answerFromBinding(client, context, (bound) => readQuote(client, bound.quoteId));
+    const answered = await answerFromBinding(client, context, (bound) => readQuote(client, bound.quoteId, input.clock));
 
     if (answered) {
       return answered;
@@ -194,7 +191,7 @@ export async function updateDraft(
   const context = commandContext(input, "quote.draft.update", { quoteId });
 
   return database.withTransaction(async (client) => {
-    const answered = await answerFromBinding(client, context, (bound) => readQuote(client, bound.quoteId));
+    const answered = await answerFromBinding(client, context, (bound) => readQuote(client, bound.quoteId, input.clock));
 
     if (answered) {
       return answered;
@@ -261,7 +258,7 @@ export async function issueDraft(database: PostgresDatabase, quoteId: string, in
 
   return database.withTransaction(async (client) => {
     const answered = await answerFromBinding(client, context, async (bound) => ({
-      quote: await readQuote(client, bound.quoteId),
+      quote: await readQuote(client, bound.quoteId, input.clock),
       operation: await readOperation(client, bound.operationId!)
     }));
 

@@ -7,6 +7,7 @@ import {
   isDatabaseUnavailableError,
   isSchemaNotReadyError
 } from "../infrastructure/persistence/postgres/postgres-errors";
+import { InvalidCursorError } from "../infrastructure/persistence/postgres/quote-v2-reads";
 
 /** Seconds a client should wait before retrying a 503 caused by dependency state. */
 export const DEPENDENCY_RETRY_AFTER_SECONDS = 5;
@@ -20,6 +21,7 @@ type HttpErrorCode =
   | "arithmetic_mismatch"
   | "idempotency_key_conflict"
   | "quote_not_found"
+  | "operation_not_found"
   | "version_conflict"
   | "invalid_state_transition"
   | "operation_in_progress"
@@ -86,6 +88,10 @@ export function toHttpError(error: unknown): HttpError {
       code: "internal_error",
       message: "The outcome of the request is unknown; retry it with the same Idempotency-Key."
     });
+  }
+
+  if (error instanceof InvalidCursorError) {
+    return new HttpError({ statusCode: 400, code: "invalid_request", message: "cursor is invalid for this query" });
   }
 
   if (error instanceof QuoteRequestRejected) {

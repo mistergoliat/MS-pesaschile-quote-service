@@ -173,6 +173,13 @@ export const issueDraftRequestSchema = z.strictObject({
   validityOverride: validityOverride.optional()
 });
 
+/** `CancelRequest`: `note` is kept in the immutable request snapshot only, never on the quote or in audit data. */
+export const cancelRequestSchema = z.strictObject({
+  expectedVersion,
+  reasonCode,
+  note: text(500).optional()
+});
+
 export type CreateQuoteRequest = z.infer<typeof createQuoteRequestSchema>;
 export type CreateDraftRequest = z.infer<typeof createDraftRequestSchema>;
 export type UpdateDraftRequest = z.infer<typeof updateDraftRequestSchema>;
@@ -216,6 +223,7 @@ export const REJECTION_STATUS = {
   validation_error: 422,
   arithmetic_mismatch: 422,
   quote_not_found: 404,
+  operation_not_found: 404,
   invalid_state_transition: 409,
   version_conflict: 409,
   operation_in_progress: 409
