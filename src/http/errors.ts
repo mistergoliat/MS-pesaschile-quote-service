@@ -1,6 +1,8 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 
+import { QuoteRequestRejected } from "../application/quote-v2/create-quote-request";
+import { CommitOutcomeUnknownError } from "../infrastructure/persistence/postgres/postgres";
 import {
   isDatabaseUnavailableError,
   isSchemaNotReadyError
@@ -15,6 +17,8 @@ type HttpErrorCode =
   | "invalid_request"
   | "internal_error"
   | "validation_error"
+  | "arithmetic_mismatch"
+  | "idempotency_key_conflict"
   | "payload_too_large"
   | "dependency_unavailable"
   | "schema_not_ready";
@@ -68,6 +72,20 @@ export function createSchemaNotReadyError(): HttpError {
 export function toHttpError(error: unknown): HttpError {
   if (error instanceof HttpError) {
     return error;
+  }
+
+  // Never claim "nothing was committed" when COMMIT itself failed: the caller
+  // must reconcile by replaying with the same Idempotency-Key.
+  if (error instanceof CommitOutcomeUnknownError) {
+    return new HttpError({
+      statusCode: 500,
+      code: "internal_error",
+      message: "The outcome of the request is unknown; retry it with the same Idempotency-Key."
+    });
+  }
+
+  if (error instanceof QuoteRequestRejected) {
+    return new HttpError({ statusCode: 422, code: error.code, message: error.message, details: error.details });
   }
 
   const fastifyCode =

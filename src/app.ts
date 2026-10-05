@@ -16,6 +16,7 @@ import { ApplicationLifecycleState } from "./infrastructure/runtime/application-
 import { BackgroundJobManager } from "./infrastructure/runtime/background-job-manager";
 import { sendErrorResponse, toHttpError } from "./http/errors";
 import { registerRoutes, type BusinessRouteRegistrar } from "./http/routes";
+import { v2QuoteRoutes } from "./http/routes/v2-quote-route";
 
 export type ShutdownOutcome = "completed" | "timed_out" | "failed";
 
@@ -41,7 +42,7 @@ export interface BuildApplicationOverrides {
   readonly principalRegistry?: PrincipalRegistry;
   /** Log destination (tests capture logs to prove no secret is written). */
   readonly logStream?: { write(line: string): void };
-  /** Business routes mounted behind the readiness gate. */
+  /** Additional business routes mounted behind the readiness gate (tests). */
   readonly businessRoutes?: readonly BusinessRouteRegistrar[];
 }
 
@@ -151,7 +152,7 @@ export function buildApplication(
     // The email subsystem was retired with V1 and returns in R1.6.
     emailEnabled: false,
     startedAt: new Date(),
-    businessRoutes: overrides.businessRoutes ?? []
+    businessRoutes: [v2QuoteRoutes(database), ...(overrides.businessRoutes ?? [])]
   });
 
   let shutdownPromise: Promise<ShutdownOutcome> | null = null;

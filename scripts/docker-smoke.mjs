@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
@@ -23,6 +24,7 @@ const PHASE_TIMEOUT_MS = {
   liveness: 15_000,
   readiness: 60_000,
   dependencies: 15_000,
+  v2Create: 30_000,
   v1Retired: 15_000,
   restart: 90_000,
   gracefulShutdown: 30_000
@@ -39,9 +41,10 @@ const phaseDefinitions = [
   { key: "liveness", label: "PHASE 08 liveness" },
   { key: "readiness", label: "PHASE 09 readiness" },
   { key: "dependencies", label: "PHASE 10 dependencies" },
-  { key: "v1Retired", label: "PHASE 11 v1 retired" },
-  { key: "restart", label: "PHASE 12 restart" },
-  { key: "gracefulShutdown", label: "PHASE 13 graceful shutdown" }
+  { key: "v2Create", label: "PHASE 11 v2 create-and-issue" },
+  { key: "v1Retired", label: "PHASE 12 v1 retired" },
+  { key: "restart", label: "PHASE 13 restart" },
+  { key: "gracefulShutdown", label: "PHASE 14 graceful shutdown" }
 ];
 
 const imageTag = process.env.SMOKE_IMAGE_TAG ?? "pesaschile-quote-service:t06-smoke";
@@ -63,7 +66,9 @@ const state = {
   },
   credentials: {
     // Monitoring principal for /health/dependencies (registry stores only the hash).
-    serviceAuthToken: crypto.randomBytes(32).toString("base64url")
+    serviceAuthToken: crypto.randomBytes(32).toString("base64url"),
+    // Transactional caller with quotes:create.
+    salesToken: crypto.randomBytes(32).toString("base64url")
   },
   app: {
     hostPort: null,
@@ -127,6 +132,12 @@ function buildAppEnv() {
           principalType: "service",
           scopes: ["service:health:dependencies"],
           tokenSha256: [crypto.createHash("sha256").update(state.credentials.serviceAuthToken).digest("hex")]
+        },
+        {
+          principalId: "smoke-sales",
+          principalType: "service",
+          scopes: ["quotes:create", "quotes:read"],
+          tokenSha256: [crypto.createHash("sha256").update(state.credentials.salesToken).digest("hex")]
         }
       ]
     }),
@@ -794,6 +805,31 @@ async function runSmoke() {
     );
     assert(!details.text.includes("postgres://"), "Dependency details leaked a DSN");
     assert(!details.text.includes(state.credentials.serviceAuthToken), "Dependency details leaked the credential");
+  });
+
+  await runPhase("v2Create", PHASE_TIMEOUT_MS.v2Create, async () => {
+    const body = JSON.parse(readFileSync("docs/v2/examples/create-and-issue.request.json", "utf8"));
+    const headers = { Authorization: `Bearer ${state.credentials.salesToken}`, "Idempotency-Key": `smoke-${suffix}` };
+    const created = await fetchJson("/v2/quotes", { method: "POST", headers: { ...headers, "X-Correlation-Id": "smoke-1" }, body, timeoutMs: 10_000 });
+    assert(created.status === 202, `Expected 202, got ${created.status}: ${created.text}`);
+    assert(created.body.quote.status === "issuing" && created.body.operation.status === "pending", "Accepted quote is not issuing/pending");
+    assert(/^PC-[0-9]{6,}$/.test(created.body.quote.quoteNumber), "Quote number missing");
+    state.summary.v2Quote = { quoteId: created.body.quote.quoteId, quoteNumber: created.body.quote.quoteNumber, operationId: created.body.operation.operationId };
+
+    const replay = await fetchJson("/v2/quotes", { method: "POST", headers: { ...headers, "X-Correlation-Id": "smoke-2" }, body, timeoutMs: 10_000 });
+    assert(replay.status === 202 && replay.headers.get("idempotent-replay") === "true", `Replay failed: ${replay.status}`);
+    assert(
+      replay.body.quote.quoteId === created.body.quote.quoteId &&
+        replay.body.quote.quoteNumber === created.body.quote.quoteNumber &&
+        replay.body.operation.operationId === created.body.operation.operationId,
+      "Replay returned a different quote"
+    );
+
+    const changed = { ...body, lines: [{ ...body.lines[0], quantity: { value: "3", unit: "unit" } }], expectedTotals: undefined };
+    const conflict = await fetchJson("/v2/quotes", { method: "POST", headers, body: changed, timeoutMs: 10_000 });
+    assert(conflict.status === 409 && conflict.body.error.code === "idempotency_key_conflict", `Expected 409, got ${conflict.status}`);
+    const quotes = (await queryDatabase("select count(*) from quote_service.quotes;")).trim();
+    assert(quotes === "1", `Expected exactly one quote, found ${quotes}`);
   });
 
   await runPhase("v1Retired", PHASE_TIMEOUT_MS.v1Retired, async () => {

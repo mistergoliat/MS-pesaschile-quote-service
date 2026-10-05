@@ -274,7 +274,7 @@ for the R1.5 routes, injected through `BuildApplicationOverrides.businessRoutes`
 | Item | Owner slice |
 |---|---|
 | V2 routes, closed schemas, error catalog (principal registry and scope enforcement: done in R1.5A, [principals.md](principals.md)) | R1.5 |
-| Acceptance transaction: fingerprint (JCS), binding, number allocation `PC-` + ≥ 6 digits, validity resolution with IANA tzdb, operation creation | R1.5 |
+| ~~Acceptance transaction for `POST /v2/quotes`~~: done in R1.5A.2 (`quote-v2-acceptance.ts`); drafts / issue-a-draft (R1.5A.3) still open | R1.5A.3 |
 | Issuance worker: claim / lease / fencing / backoff / deadline sweep, inline budget, content-addressed artifact write, manifest commit | R1.5 |
 | Operator retry procedure (A1, T10) and cancel-after-failed-issuance (T11) | R1.5 (state) / R1.6 (tooling) |
 | Expiry projection and materialization job | R1.5 |
