@@ -57,7 +57,8 @@ describe("validity policy cl-retail-5-calendar-days-v1", () => {
       expect(civilDate(boundary)).toBe(addDays(validity.validThroughLocalDate, 1));
       expect(civilDate(boundary - 1)).toBe(validity.validThroughLocalDate);
     }
-  });
+    // Exhaustive correctness sweep (~17,500 resolutions, ~4 s): not a performance assertion.
+  }, 15_000);
 
   it.each([
     ["2026-04-05", "April transition 2026 (repeated 23:00 hour)"],
