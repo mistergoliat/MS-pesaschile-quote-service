@@ -24,8 +24,13 @@ info:
     - All instants returned by the service are RFC 3339 UTC (`Z`).
     - Every mutation requires `Idempotency-Key`. The request fingerprint is
       SHA-256 over RFC 8785 (JCS) canonical JSON of
-      `{operation, pathParameters, body}` where `body` excludes
-      `externalCorrelation.correlationId`.
+      `{operation, pathParameters, body}` (the received body, unmodified).
+    - Request/trace correlation is the optional `X-Correlation-Id` header. It
+      is recorded on the audit events and logs of that request only; it is
+      never stored on the quote, never quote identity and never part of the
+      fingerprint. Durable business correlation is `externalCorrelation`.
+    - Quote lifecycle and issuance-operation lifecycle are separate. A failed
+      issuance operation never cancels the quote by itself.
     - Scopes required by each operation are listed in `x-required-scopes`.
     - Quote Service never calls Catalog, Shipping, CRM or any pricing source,
       and never sends email as part of create or issue.
@@ -57,7 +62,10 @@ paths:
         validates and freezes the snapshot, verifies arithmetic, resolves
         validity, allocates the quote number and commits the quote as
         `issuing` together with its issuance operation. The document is then
-        rendered within the synchronous budget or by the issuance worker.
+        rendered inline within a bounded, server-configured budget or by the
+        issuance worker. The length of any synchronous wait is not part of
+        this contract: clients MUST handle both `201` and `202` for every
+        request.
 
         - `201`: the bound quote is no longer `issuing` (normally `issued`).
         - `202`: the bound quote is `issuing`; poll the operation.
@@ -71,6 +79,7 @@ paths:
         validityOverride: quotes:validity:override
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -201,6 +210,7 @@ paths:
       x-required-scopes: [quotes:draft:write]
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -257,6 +267,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/QuoteIdPath'
         - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -306,6 +317,9 @@ paths:
         - `200`: the quote is no longer `issuing` (normally `issued`).
         - `202`: the quote is `issuing`; poll the operation.
 
+        As for create-and-issue, the length of any synchronous wait is not part
+        of this contract; clients MUST handle both `200` and `202`.
+
         No email is sent.
       x-idempotency-operation: quote.issue
       x-required-scopes: [quotes:issue]
@@ -314,6 +328,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/QuoteIdPath'
         - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -483,16 +498,19 @@ paths:
     post:
       tags: [Quotes]
       operationId: cancelQuote
-      summary: Cancel a draft or an issued (not yet expired) quote.
+      summary: Cancel a draft, an issued (not yet expired) quote, or an issuing quote whose issuance failed.
       description: |
-        Allowed from `draft` and `issued`. `issuing` returns
-        `409 operation_in_progress`; `expired` and `cancelled` return
-        `409 invalid_state_transition`. Never rewrites an issued document.
+        Allowed from `draft`, from `issued`, and from `issuing` when the
+        quote's current issuance operation is `failed`. `issuing` with a
+        `pending` or `running` operation returns `409 operation_in_progress`;
+        `expired` and `cancelled` return `409 invalid_state_transition`.
+        Never rewrites an issued document.
       x-idempotency-operation: quote.cancel
       x-required-scopes: [quotes:cancel]
       parameters:
         - $ref: '#/components/parameters/QuoteIdPath'
         - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -634,6 +652,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/QuoteIdPath'
         - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -786,6 +805,17 @@ components:
       description: Caller-chosen key, scoped to (principal, operation, key). Never logged raw.
       schema:
         $ref: '#/components/schemas/IdempotencyKeyValue'
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: |
+        Optional request/trace correlation chosen by the caller. Recorded on
+        the audit events and logs of this request only. Never stored on the
+        quote, never quote or idempotency identity, never part of the request
+        fingerprint.
+      schema:
+        $ref: '#/components/schemas/OpaqueReference'
     QuoteIdPath:
       name: quoteId
       in: path
@@ -989,10 +1019,9 @@ components:
       type: object
       additionalProperties: false
       description: |
-        Provenance and correlation only. Not quote identity, not idempotency
-        identity. Several quotes may share an external reference.
-        `correlationId` is excluded from the request fingerprint; the stored
-        value is the one of the committing request.
+        Durable business provenance only. Not quote identity, not idempotency
+        identity. Several quotes may share an external reference. Request/trace
+        correlation is not part of this object (header `X-Correlation-Id`).
       required: [sourceSystem]
       properties:
         sourceSystem:
@@ -1000,8 +1029,6 @@ components:
         externalReferenceType:
           $ref: '#/components/schemas/SystemCode'
         externalReference:
-          $ref: '#/components/schemas/OpaqueReference'
-        correlationId:
           $ref: '#/components/schemas/OpaqueReference'
       dependentRequired:
         externalReference: [externalReferenceType]
@@ -1550,6 +1577,7 @@ components:
           description: Issue effective instant (commit of issue acceptance). Validity base and printed issue date.
           $ref: '#/components/schemas/Instant'
         operationId:
+          description: The quote's current (latest) issuance operation.
           type: string
           format: uuid
         issuerProfileId:
@@ -1611,7 +1639,7 @@ components:
           type: string
           pattern: '^[a-z][a-z0-9_]{1,63}$'
         initiatedBy:
-          description: Principal id, or `system` for `issuance_failed`.
+          description: Principal id that cancelled the quote, or `legacy-v1` for migrated V1 cancellations.
           $ref: '#/components/schemas/SystemCode'
     Quote:
       type: object
@@ -1704,8 +1732,11 @@ components:
       additionalProperties: false
       description: |
         Durable issuance operation. `failed` is terminal and only reached at
-        `deadlineAt`; the quote is then `cancelled` with reason
-        `issuance_failed`. Lease and fencing internals are not exposed.
+        `deadlineAt` (`issuance_deadline_exceeded`). Operation and quote
+        lifecycles are separate: when an operation fails the quote stays
+        `issuing` (number kept, no document). An operator retry creates a new
+        operation for the same quote, or a principal may cancel the quote.
+        Lease and fencing internals are not exposed.
       required: [operationId, type, status, quoteId, acceptedAt, deadlineAt, completedAt, attempts]
       properties:
         operationId:
@@ -1884,6 +1915,7 @@ components:
               format: uuid
             - type: 'null'
         correlationId:
+          description: "`X-Correlation-Id` of the request that produced the event (request/trace correlation); null for system events or when absent. Never quote identity."
           oneOf:
             - $ref: '#/components/schemas/OpaqueReference'
             - type: 'null'

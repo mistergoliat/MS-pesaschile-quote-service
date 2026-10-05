@@ -30,7 +30,7 @@ rendered and is readable only through database-level operator access.
 | `customer_id` | `customer.externalCustomerReference {sourceSystem, reference}` | `sourceSystem` as above |
 | `conversation_id` | legacy data `legacy.conversationId` | Not part of the V2 model (only one external reference per quote) |
 | `actor_type`, `actor_id` | `createdByPrincipalId = "legacy-v1"`; original values in legacy data | V1 actor was a request claim, not an authenticated principal |
-| `source_system`, `source_correlation_id` | `externalCorrelation.sourceSystem` (see above), `externalCorrelation.correlationId` | — |
+| `source_system`, `source_correlation_id` | `externalCorrelation.sourceSystem` (see above); `source_correlation_id` → legacy data `legacy.sourceCorrelationId` | `source_correlation_id` was request/trace correlation, not durable business correlation (amendment A3) |
 | `status` | `status` | `draft`→`draft`; `issued`→`issued` (projected `expired` if past validity); `accepted`→`issued` + legacy event; `paid`→`issued` + legacy events (accepted, paid); `cancelled`→`cancelled`; `expired`→`expired` |
 | `accepted_at`, `paid_at` | audit `legacy.v1.event` (`data.action = accepted / paid`) | Historical facts preserved; Quote does not claim payment truth |
 | `currency` | `currency` | `CLP` |

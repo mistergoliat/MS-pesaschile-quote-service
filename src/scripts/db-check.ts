@@ -14,7 +14,7 @@ const PROBE_TIMEOUT_MS = 5_000;
 async function main(): Promise<void> {
   const env = loadMigrationEnv();
   const manifest = loadMigrationManifest();
-  const probe = new PostgresDependencyProbe({ connectionString: env.databaseUrl }, manifest.names);
+  const probe = new PostgresDependencyProbe({ connectionString: env.databaseUrl }, manifest);
   const result = await probe.probe(PROBE_TIMEOUT_MS);
   const ready = result.connection.ok && result.schema.state === "READY";
 

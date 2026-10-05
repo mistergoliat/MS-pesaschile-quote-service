@@ -148,9 +148,10 @@ Probes:
 
 ## 6. Business traffic while unready
 
-Every `/v1/quotes*` and `/v1/documents*` route sits behind an `onRequest`
-readiness gate. When the gate is closed, no handler, repository or storage
-call runs. Checks run in this order: lifecycle → database → schema →
+Every business route sits behind an `onRequest` readiness gate. The V1
+routes were retired in R1.4; the V2 routes (R1.5) mount in the same gated
+context. When the gate is closed, no handler, repository or storage call
+runs. Checks run in this order: lifecycle → database → schema →
 storage → renderer.
 
 ```http
@@ -189,12 +190,14 @@ already in progress.
 
 ## 8. Background jobs
 
-Expiry, email delivery and orphan cleanup run only while the monitor reports
-ready. While unready, each job logs one `job.paused` and one `job.resumed`
-on recovery, not one line per skipped tick. Iteration failures log `job.failed`
+R1.4 retired the V1 jobs (V1 expiry, V1 email outbox, V1 orphan cleanup)
+together with the V1 persistence model. `BackgroundJobManager` currently runs
+no jobs; the V2 issuance worker and expiry materialization (R1.5) and email
+delivery (R1.6) register there. Every job runs only while the monitor reports
+ready. While unready, each job logs one `job.paused` and one `job.resumed` on
+recovery, not one line per skipped tick. Iteration failures log `job.failed`
 with the error name and driver code only, because driver messages can echo
-row values. Defaults are unchanged: expiry, cleanup and email are all
-**disabled** unless explicitly enabled.
+row values.
 
 ## 9. Operational log events
 
@@ -207,7 +210,7 @@ logged. A long outage produces one `dependency.down`, not one per poll.
 | `runtime.ready` / `runtime.unready` | info / warn | `failing` (check names) |
 | `dependency.down` | warn | `dependency`, `failureCategory`. Logged again only if the category changes |
 | `dependency.recovered` | info | `dependency`, `downForMs` |
-| `schema.not_ready` | warn | `state` (`SCHEMA_MISSING` / `SCHEMA_BEHIND` / `SCHEMA_AHEAD_OR_UNKNOWN`), `expectedHead`, `actualHead` |
+| `schema.not_ready` | warn | `state` (`SCHEMA_MISSING` / `SCHEMA_BEHIND` / `SCHEMA_AHEAD_OR_UNKNOWN` / `SCHEMA_INTEGRITY_MISMATCH` / `SCHEMA_INTEGRITY_UNVERIFIED`), `expectedHead`, `actualHead` |
 | `job.paused` / `job.resumed` / `job.failed` | warn / info / error | `job` |
 | `shutdown.started` / `shutdown.completed` | info (error if not completed) | `reason`, `outcome`, `durationMs` |
 | `runtime.config_invalid` / `runtime.init_failed` / `runtime.bind_failed` / `runtime.fatal` | fatal | sanitized |
@@ -216,11 +219,13 @@ Never logged by these paths: credentials, DSNs, auth tokens, customer PII.
 
 ## 10. Schema head
 
-- `EXPECTED_SCHEMA_HEAD` (`src/infrastructure/persistence/postgres/schema-head.ts`)
-  is the migration the code was written for, currently `000005_quote_line_shipping`.
-- At startup the packaged migration directory must end exactly at that head.
-  This catches a build that forgot to copy migrations, or a code/migration
-  mismatch. Otherwise exit 1.
+- `EXPECTED_SCHEMA_HEAD` is the last entry of the generated migration
+  manifest (`migration-manifest.ts`, names plus SHA-256), currently
+  `000008_quote_v2_runtime_grants`.
+- At startup the packaged migration files must equal the manifest exactly:
+  names, order and checksums. This catches a build that forgot to copy
+  migrations, an edited historical migration, or a code/migration mismatch.
+  Otherwise exit 1.
 - At runtime the applied list (`public.schema_migrations`, by `id`) is
   compared with the packaged ordered list:
 
@@ -230,16 +235,16 @@ Never logged by these paths: credentials, DSNs, auth tokens, customer PII.
 | table absent or empty | `SCHEMA_MISSING` | no |
 | strict prefix | `SCHEMA_BEHIND` | no |
 | extra, foreign or reordered entries | `SCHEMA_AHEAD_OR_UNKNOWN` | no |
+| identical, but a recorded checksum differs from the packaged file | `SCHEMA_INTEGRITY_MISMATCH` | no |
+| identical, but an applied migration has no recorded checksum | `SCHEMA_INTEGRITY_UNVERIFIED` | no |
 | cannot connect | `DB_UNAVAILABLE` | no |
 
 `npm run db:check` (`db:check:runtime` in `dist/`) runs the same comparison
 and exits `0` only for `READY` (`2` otherwise).
 
-**Adding a migration (R1.4):** add the file and bump `EXPECTED_SCHEMA_HEAD`
-in the same change. Nothing else changes.
-
-Head detection uses migration names, which node-pg-migrate already stores.
-File checksums are not persisted; see section 13.
+**Adding a migration:** add the file and run `npm run db:manifest` in the
+same change. The integrity model, roles and V2 schema are documented in
+[v2-persistence.md](v2-persistence.md).
 
 ## 11. Configuration
 
@@ -251,11 +256,12 @@ File checksums are not persisted; see section 13.
 | `HEALTH_PROBE_RETRY_MAX_MS` | 30000 | Backoff cap. Must be ≥ the minimum |
 | `APP_SHUTDOWN_TIMEOUT_MS` | 10000 | Hard shutdown deadline |
 | `QUOTE_DOCUMENT_STORAGE_ROOT` | (required) | Single-host filesystem root. Must be a persistent volume |
-| `MIGRATION_DATABASE_URL` | falls back to `DATABASE_URL` | Read **only** by `db:migrate` / `db:check`. The server never reads it |
+| `MIGRATION_DATABASE_URL` | falls back to `DATABASE_URL` | Read **only** by `db:migrate`, `db:check`, `db:grants` and `documents:verify` (migration principal). The server never reads it |
 | `HEALTHCHECK_DATABASE_TIMEOUT_MS` | 2000 | Deprecated alias of `HEALTH_PROBE_TIMEOUT_MS` |
 
-`db:migrate` / `db:check` need only database configuration. They no longer
-require the service token or document secret.
+`db:migrate` / `db:check` need only database configuration. The V1-only keys
+(`QUOTE_DOCUMENT_REF_SECRET` and the V1 expiry, cleanup and email worker
+settings) were removed in R1.4; leftover values are ignored.
 
 ## 12. Local bootstrap
 
@@ -280,10 +286,10 @@ green without a restart.
 
 | Item | Why deferred | Target |
 |---|---|---|
-| Separate DB **roles** (DDL-capable migrator vs. DML-only runtime) and their grants | Needs role/grant DDL inside migrations; R1.3 only separates configuration (`MIGRATION_DATABASE_URL`) | R1.4 (with `000006`) |
-| Migration file checksums persisted at apply time | Needs a metadata table (a schema change). Name-based head detection is sufficient for readiness | R1.4 |
+| ~~Separate DB roles and grants~~ | **Done in R1.4** (`000008`, [v2-persistence.md §6](v2-persistence.md#6-database-roles-and-grants)) | — |
+| ~~Migration file checksums~~ | **Done in R1.4** (`000006`, [v2-persistence.md §3](v2-persistence.md#3-migration-integrity)) | — |
 | `service:health:dependencies` scope enforcement | Needs the V2 principal registry | R1.5 |
 | Worker `queueDepth` / `oldestPendingAgeSeconds` | Measured by the V2 durable workers | R1.5 |
 | Email provider active probe | Health checks must not call Gmail. Status is derived from delivery outcomes | — |
-| Backup/restore runbook (DB + document root) | Out of R1.3 runtime scope | R1.6/R1.7 |
+| Backup/restore rehearsal (DB + document root) | Recovery model documented in R1.4 ([v2-persistence.md §7](v2-persistence.md#7-recovery-model)); rehearsal needs the production environment | R1.7 |
 | `requestId` in error bodies | V2 error envelope | R1.5 |

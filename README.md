@@ -1,622 +1,98 @@
-# MS PesasChile Quotes API
+# MS PesasChile Quote Service
 
-PesasChile quotes API. `T01`, `T02`, `T03`, and `T04` are implemented in this repository:
+Owner service for PesasChile commercial quotes, being rebuilt on the frozen
+**V2 contract** ([`docs/v2/`](docs/v2/README.md)).
 
-- bootstrap, configuration, health, and migrations;
-- Quote domain and lifecycle;
-- PostgreSQL persistence, audit, idempotency, and optimistic concurrency;
-- HTTP application API with auth, validation, canonical DTOs, and real HTTP integration tests.
+| Slice | Status |
+|---|---|
+| R1.2 V2 contract | frozen (amendments A1–A3 applied in R1.4) |
+| R1.3 runtime reliability and health | done: [docs/runtime-lifecycle.md](docs/runtime-lifecycle.md) |
+| R1.4 V2 schema and migration foundation | done: [docs/v2-persistence.md](docs/v2-persistence.md) |
+| R1.5 V2 API, idempotency, durable issuance | not started |
 
-The governing design remains [technical design](/C:/Users/Goli/Pesas%20Chile/MS/MS-pesaschile-quote-service/docs/quote-service-v1-technical-design.md).
+**Current runtime:** health endpoints and the readiness-gated business
+context. The V1 API (`/v1/*`), its repositories and workers were retired in
+R1.4, because their persistence model was replaced by the V2 schema. The V2
+API arrives in R1.5. Not production-ready: see the
+[bootstrap runbook (draft)](docs/runbooks/production-bootstrap.md).
 
 ## Stack
 
-- Node.js 20
-- TypeScript
-- Fastify
-- Zod
-- PostgreSQL via `pg`
-- `node-pg-migrate`
-- `pdfmake` (native PDF renderer; no browser runtime)
-- Vitest
-- ESLint
+Node.js 20 · TypeScript · Fastify · Zod · PostgreSQL (`pg`, `node-pg-migrate`)
+· `pdfmake` (native PDF renderer, no browser) · Vitest · ESLint.
 
-## Local Setup
-
-1. Copy `.env.example` to `.env`.
-2. Install dependencies with `npm install`.
-3. Start PostgreSQL with `npm run db:compose:up`.
-4. Run migrations with `npm run db:migrate`.
-5. Verify connectivity with `npm run db:check`.
-6. Start the server with `npm run dev`.
-
-PDF generation is native: `CanonicalIssuedQuoteSnapshot → pdfmake → PDF`. No external browser executable is required.
-
-## Validation Commands
-
-- `npm run lint`
-- `npm run typecheck`
-- `npm run build`
-- `npm run test`
-- `npm run test:unit`
-- `npm run verify`
-- `npm run email:preview`
-- `QUOTE_SMOKE_RECIPIENT=recipient@example.com npm run email:smoke:pdf` sends a real Gmail smoke email with a generated quote PDF after validating MIME, UTF-8 HTML, PDF attachment, and quote content.
-- `npm run pdf:preview`
-- `npm run pdf:benchmark`
-- `npm run pdf:concurrency-smoke`
-
-## Authentication
-
-- `GET /health/live`, `GET /health/ready` and the deprecated `GET /health` are public.
-- `GET /health/dependencies` requires `Authorization: Bearer <SERVICE_AUTH_TOKEN>`.
-- Every `/v1/quotes...` endpoint requires `Authorization: Bearer <SERVICE_AUTH_TOKEN>`.
-- Missing token returns `401 missing_authentication`.
-- Invalid token returns `401 invalid_authentication`.
-
-Authentication identifies the technical caller only. Business metadata still travels in request bodies as `actor` and `source`.
-
-## HTTP Contract
-
-### Serialization
-
-- Monetary decimals are always strings.
-- Dates are always ISO-8601 UTC strings.
-- `quoteId` and `lineId` are UUID strings.
-- `quoteNumber` is a public business identifier.
-
-Example line totals:
-
-```json
-{
-  "quantity": "2",
-  "unitPrice": "4990",
-  "taxRate": "0.19",
-  "lineSubtotal": "8387",
-  "lineTax": "1593",
-  "lineTotal": "9980"
-}
-```
-
-### Error Envelope
-
-```json
-{
-  "error": {
-    "code": "quote_not_found",
-    "message": "Quote not found"
-  }
-}
-```
-
-Validation responses may include allowlisted `details.issues[]`. Internal stacks, SQL, secrets, and storage paths are never returned.
-
-### Idempotency
-
-Every mutating endpoint requires `Idempotency-Key`.
-
-- Same key + same logical payload: durable replay of the original result.
-- Same key + different payload: `409 idempotency_key_reused_with_different_payload`.
-- Request already in progress: `409 idempotency_request_in_progress`.
-
-Idempotency is backed by PostgreSQL from T03. It is not handled in Fastify memory.
-
-### Optimistic Concurrency
-
-Mutations over an existing quote require `expectedVersion` in the JSON body.
-
-- Matching version: command proceeds.
-- Stale version: `409 optimistic_concurrency_conflict`.
-
-The API does not auto-retry on behalf of the caller.
-
-## Public Quote DTO
-
-Canonical quote responses include:
-
-- `quoteId`
-- `quoteNumber`
-- `opportunityId`
-- `customerId`
-- `conversationId`
-- `actor`
-- `source`
-- `status`
-- `currency`
-- `customerSnapshot`
-- `items[]`
-- `pricing`
-- `validUntil`
-- `version`
-- `revision.rootId`
-- `revision.previousRevisionId`
-- `revision.supersedesQuoteId`
-- `revision.supersededByQuoteId`
-- `issuedDocument`
-- `timestamps`
-
-`issuedDocument` is safe metadata only:
-
-```json
-{
-  "available": false,
-  "contentHash": null,
-  "renderVersion": null,
-  "generatedAt": null,
-  "pdf": {
-    "documentRef": null,
-    "sha256": null
-  },
-  "html": {
-    "documentRef": null,
-    "sha256": null
-  }
-}
-```
-
-No SQL column names, internal filesystem paths, storage keys, or `Decimal` objects are exposed.
-
-## Endpoints
-
-### Health
-
-See [docs/runtime-lifecycle.md](docs/runtime-lifecycle.md).
-
-- `GET /health/live`: liveness, never probes dependencies
-- `GET /health/ready`: `200` only when database, schema head, storage, renderer and lifecycle are ok
-- `GET /health/dependencies`: authenticated, sanitized dependency detail
-- `GET /health`: deprecated liveness alias
-
-### Quote Commands
-
-- `POST /v1/quotes`
-  - Requires `Authorization` and `Idempotency-Key`
-  - Creates a draft quote
-  - Returns `201`
-- `PUT /v1/quotes/:quoteId/draft`
-  - Requires `expectedVersion`
-  - Replaces mutable draft content
-  - Returns `200`
-- `POST /v1/quotes/:quoteId/issue`
-  - Requires `expectedVersion`
-  - Performs real document issuance, durable storage, and final state transition to `issued`
-  - Returns `200`
-- `POST /v1/quotes/:quoteId/accept`
-  - Requires `expectedVersion`
-  - Returns `200`
-- `POST /v1/quotes/:quoteId/mark-paid`
-  - Requires `expectedVersion`
-  - Returns `200`
-- `POST /v1/quotes/:quoteId/cancel`
-  - Requires `expectedVersion`
-  - Returns `200`
-- `POST /v1/quotes/:quoteId/expire`
-  - Requires `expectedVersion`
-  - `actor.type` must be `system` or `service`
-  - Returns `200`
-- `POST /v1/quotes/:quoteId/revisions`
-  - Requires `expectedVersion`
-  - Creates a new draft revision with a new `quoteId`, `quoteNumber`, and line IDs
-  - Returns `201`
-
-### Quote Queries
-
-- `GET /v1/quotes/:quoteId`
-- `GET /v1/quotes/by-number/:quoteNumber`
-- `GET /v1/quotes`
-  - Filters: `opportunityId`, `status`, `revisionRootId`
-  - Pagination: `limit` default `50`, max `100`; `offset` default `0`
-- `GET /v1/quotes/:quoteId/documents`
-- `GET /v1/quotes/:quoteId/audit`
-  - Pagination: `limit` default `50`, max `100`; `offset` default `0`
-- `GET /v1/documents/:documentRef`
-  - Requires `Authorization`
-  - Streams the persisted PDF or printable HTML for an issued quote
-
-List responses are:
-
-```json
-{
-  "items": [],
-  "pagination": {
-    "limit": 50,
-    "offset": 0,
-    "count": 0
-  }
-}
-```
-
-## Request Shapes
-
-### Create Draft Quote
-
-`POST /v1/quotes`
-
-```json
-{
-  "opportunityId": "opp-123",
-  "customerId": "customer-123",
-  "conversationId": "conversation-123",
-  "actor": {
-    "type": "sales_agent",
-    "id": "agent-1"
-  },
-  "source": {
-    "system": "crm_customer_360",
-    "correlationId": "corr-1"
-  },
-  "currency": "CLP",
-  "customerSnapshot": {
-    "name": "Jane Doe",
-    "businessName": "Pesas Chile",
-    "email": "jane@example.com",
-    "phone": "12345678",
-    "address": "Street 1",
-    "district": "Santiago",
-    "region": "RM"
-  },
-  "items": [
-    {
-      "type": "product",
-      "externalSource": "catalog_service",
-      "externalItemId": "545",
-      "externalVariantId": "31",
-      "sku": "SKU-1",
-      "description": "Line 1",
-      "quantity": "2",
-      "unitPrice": "4990",
-      "taxIncluded": true,
-      "taxRate": "0.19"
-    }
-  ],
-  "validUntil": "2026-08-20T00:00:00.000Z"
-}
-```
-
-Caller-controlled fields do not include `quoteId`, `quoteNumber`, `lineId`, pricing totals, timestamps, status, or revision metadata.
-
-`externalSource`/`externalItemId`/`externalVariantId` (added in migration `000004`) are generic, opaque external-identity references - never required on every line (a `type: "service"` line, or a legacy/manual line, may omit all three; `sku` is a separate, independent field). None of the three participates in pricing/lifecycle, none is a foreign key, and none is displayed in the issued PDF/email (only `description`/`sku`/quantities/totals are). They are frozen into the immutable issued-document content hash exactly like every other commercial field of the line, and persisted historically - a quote issued before this migration simply has `null` for both new columns.
-
-### Update Draft
-
-`PUT /v1/quotes/:quoteId/draft`
-
-```json
-{
-  "expectedVersion": 1,
-  "actor": {
-    "type": "sales_agent",
-    "id": "agent-1"
-  },
-  "source": {
-    "system": "crm_customer_360",
-    "correlationId": "corr-2"
-  },
-  "customerSnapshot": {
-    "name": "Jane Doe"
-  },
-  "items": [
-    {
-      "type": "product",
-      "description": "Updated line",
-      "quantity": "1",
-      "unitPrice": "1000",
-      "taxIncluded": false,
-      "taxRate": "0.19"
-    }
-  ],
-  "validUntil": "2026-08-22T00:00:00.000Z"
-}
-```
-
-### Lifecycle Commands
-
-`POST /accept`, `POST /mark-paid`, `POST /cancel`, and `POST /issue` share:
-
-```json
-{
-  "expectedVersion": 2,
-  "actor": {
-    "type": "operator",
-    "id": "operator-1"
-  },
-  "source": {
-    "system": "manual",
-    "correlationId": "corr-3"
-  }
-}
-```
-
-`POST /expire` uses the same contract but restricts `actor.type` to `system | service`.
-
-### Create Revision
-
-`POST /v1/quotes/:quoteId/revisions`
-
-```json
-{
-  "expectedVersion": 2,
-  "actor": {
-    "type": "operator",
-    "id": "operator-1"
-  },
-  "source": {
-    "system": "manual",
-    "correlationId": "corr-4"
-  },
-  "newValidUntil": "2026-08-25T00:00:00.000Z"
-}
-```
-
-## Main Error Codes
-
-### `400`
-
-- `invalid_quote_reference`
-- `invalid_quote_number`
-- `invalid_customer_snapshot`
-- `invalid_actor`
-- `invalid_source`
-- `invalid_currency`
-- `invalid_line_quantity`
-- `invalid_line_price`
-- `invalid_tax_rate`
-- `invalid_valid_until`
-- `validation_error`
-
-### `401`
-
-- `missing_authentication`
-- `invalid_authentication`
-
-### `404`
-
-- `quote_not_found`
-- `document_not_found`
-
-### `409`
-
-- `invalid_quote_status_transition`
-- `draft_only_operation`
-- `quote_already_terminal`
-- `quote_already_superseded`
-- `optimistic_concurrency_conflict`
-- `idempotency_key_reused_with_different_payload`
-- `idempotency_request_in_progress`
-
-### `503`
-
-- `document_generation_failed`
-- `document_storage_failed`
-
-### `500`
-
-- `internal_server_error`
-
-## T05 Document Issuance
-
-`POST /v1/quotes/:quoteId/issue` now performs real issuance with this sequence:
-
-1. Load the current draft and validate `expectedVersion`.
-2. Build a canonical immutable issuance snapshot.
-3. Render email HTML, printable HTML, and the native PDF outside SQL transactions.
-4. Compute `contentHash`, `htmlSha256`, and `pdfSha256`.
-5. Persist artifacts under deterministic storage keys rooted at `QUOTE_DOCUMENT_STORAGE_ROOT`.
-6. Open a short SQL transaction, revalidate state/version, persist the issued quote, audit, and idempotency completion, then commit.
-
-Important invariants:
-
-- No SQL transaction stays open during HTML rendering, PDF generation, hashing, or filesystem writes.
-- `contentHash` represents the canonical logical snapshot, not the PDF bytes.
-- Public `documentRef` values are opaque HMAC-signed tokens. Internal storage keys and filesystem paths are never exposed.
-- Historical artifacts are immutable once a quote is issued.
-
-Document downloads:
-
-- `GET /v1/quotes/:quoteId/documents` returns safe document metadata and public refs.
-- `GET /v1/documents/:documentRef` streams the persisted artifact with authenticated access, `Content-Type`, `Content-Disposition`, and `X-Document-Sha256`.
-
-Failure behavior:
-
-- Renderer startup/render failures return `503 document_generation_failed`.
-- Storage failures return `503 document_storage_failed`.
-- In both cases the quote remains `draft`, no `issued` audit event is committed, and the idempotency record is marked failed so a retry can try again.
-- Crash-after-storage but before SQL commit is not solved with distributed transactions; those artifacts remain non-visible and are cleaned through `npm run documents:cleanup`.
-
-Operational commands:
-
-- Clean orphaned artifacts: `npm run documents:cleanup`
-- Generate a local email preview: `npm run email:preview`
-
-### T07D Lightweight Native PDF Renderer
-
-The current renderer version is `quote-pdf-v3`. It consumes the immutable
-`CanonicalIssuedQuoteSnapshot` directly; it does not query PostgreSQL, rehydrate
-Catalog data, or recalculate pricing. The existing printable HTML artifact remains
-available for API compatibility, while email HTML remains unchanged.
-
-The renderer uses pdfmake tables, repeated headers, automatic pagination,
-`dontBreakRows`, a repository-owned SVG logo, and PDF-standard Helvetica faces.
-Poppins is not bundled because no safely redistributable local Poppins font exists
-in this repository. This avoids an operating-system font dependency.
-
-The generated `pdfSha256` is always the hash of the persisted PDF bytes. It is
-expected to differ from historical browser-rendered PDFs; the canonical snapshot
-`contentHash` remains independent of the renderer version. Historical issued
-documents are not regenerated.
-
-Preview and operational checks:
-
-- `npm run pdf:preview` writes short, long, and 100-line PDFs to `.tmp-pdf-previews/`.
-- `npm run pdf:benchmark` reports real pdfmake RSS, duration, and PDF size for 10/30 lines. A previous-browser baseline is unavailable after removal.
-- `npm run pdf:concurrency-smoke` renders 1/5/10 concurrent PDFs and validates `%PDF-` signatures.
-
-The runtime Docker image only installs the minimal init/CA packages and does not
-download or provision a browser.
-
-## T06 Operational Hardening
-
-### Expiration Scheduler
-
-Issued quotes can now expire automatically through an internal scheduler.
-
-- Only quotes in `issued` with `validUntil < now` are selected.
-- Expiration uses the domain transition plus transactional persistence and audit.
-- Selection is batched and uses `FOR UPDATE SKIP LOCKED` to stay safe under concurrent workers.
-- The scheduler starts only after the server is listening and stops during graceful shutdown.
-
-Configuration:
-
-- `QUOTE_EXPIRATION_SCHEDULER_ENABLED`
-- `QUOTE_EXPIRATION_INTERVAL_MS`
-- `QUOTE_EXPIRATION_BATCH_SIZE`
-
-### Orphan Cleanup
-
-T06 adds an internal cleanup job on top of the manual `npm run documents:cleanup` command.
-
-- Only artifacts older than `QUOTE_DOCUMENT_ORPHAN_MIN_AGE_MS` are eligible.
-- Referenced issued artifacts are protected.
-- Cleanup uses a PostgreSQL advisory lock so only one instance runs the sweep at a time.
-- Crash-before-commit artifacts remain invisible to the API and are eventually removable by the cleanup job or the manual command.
-
-Configuration:
-
-- `QUOTE_DOCUMENT_CLEANUP_ENABLED`
-- `QUOTE_DOCUMENT_CLEANUP_INTERVAL_MS`
-- `QUOTE_DOCUMENT_ORPHAN_MIN_AGE_MS`
-
-### Runtime Lifecycle And Readiness (R1.3)
-
-Full semantics: [docs/runtime-lifecycle.md](docs/runtime-lifecycle.md). Bootstrap runbook (draft): [docs/runbooks/production-bootstrap.md](docs/runbooks/production-bootstrap.md).
-
-- Only invalid static configuration, a corrupt build (packaged migration set not at `EXPECTED_SCHEMA_HEAD`), an unbindable port or a programmer error stop the process.
-- An unavailable database, schema not at the expected migration head, unusable document storage or an unusable PDF renderer leave the service **live but not ready**. Business routes return `503 dependency_unavailable` / `503 schema_not_ready` with `Retry-After`, and readiness recovers automatically without a restart.
-- A single dependency monitor probes on a bounded cadence (`HEALTH_PROBE_*`). Health requests read its cached state.
-- `npm run db:check` validates connectivity and schema head. It exits `0` only when the schema is at the expected head.
-
-### Timeouts And Limits
-
-Server defaults are explicit and configurable:
-
-- `HTTP_BODY_LIMIT_BYTES`
-- `HTTP_REQUEST_TIMEOUT_MS`
-- `HTTP_CONNECTION_TIMEOUT_MS`
-- `HTTP_KEEP_ALIVE_TIMEOUT_MS`
-- `APP_SHUTDOWN_TIMEOUT_MS`
-- `DB_POOL_MAX`
-- `DB_POOL_IDLE_TIMEOUT_MS`
-- `DB_POOL_CONNECTION_TIMEOUT_MS`
-- `DB_QUERY_TIMEOUT_MS`
-
-Oversized HTTP payloads return `413`.
-
-### Graceful Shutdown
-
-On `SIGINT` or `SIGTERM` the service:
-
-1. marks lifecycle as shutting down (readiness `503`, business routes rejected);
-2. stops the dependency monitor and background jobs;
-3. closes Fastify, draining in-flight requests;
-4. closes the PostgreSQL pool.
-
-The sequence is bounded by `APP_SHUTDOWN_TIMEOUT_MS`. The process exits `0` when it completes and `1` when the deadline passes.
-
-### Production Runtime
-
-This repository now includes a production-oriented `Dockerfile`.
-
-- Base runtime: Node.js 20 on Debian Bookworm slim.
-- PDF strategy: pdfmake in-process rendering from the issued snapshot.
-- Runtime user: non-root `nodeapp`.
-- Persistent artifacts: mount `/var/lib/pesaschile/quote-documents`.
-- Container healthcheck: `/health/live` (liveness). Route traffic on `/health/ready`.
-
-Build:
+## Local setup
 
 ```bash
-docker build -t pesaschile-quote-service:local .
+npm ci
+cp .env.example .env
+npm run db:compose:up            # disposable PostgreSQL 16
+npm run db:migrate -- up         # explicit DDL; the server never migrates
+npm run db:check                 # exit 0 only at the expected head with verified checksums
+npm run dev
+curl -i localhost:3000/health/ready
 ```
 
-Run:
+## Commands
 
-```bash
-docker run --rm \
-  -p 3000:3000 \
-  -e DATABASE_URL=postgres://postgres:postgres@host.docker.internal:5432/pesaschile_quote_service \
-  -e SERVICE_AUTH_TOKEN=replace-with-a-real-token \
-  -e QUOTE_DOCUMENT_REF_SECRET=replace-with-a-long-random-secret \
-  -v quote_documents:/var/lib/pesaschile/quote-documents \
-  pesaschile-quote-service:local
-```
+| Command | Purpose |
+|---|---|
+| `npm run verify` | lint, typecheck, full test suite (Docker PostgreSQL), build |
+| `npm run test:unit` | unit tests only (no database) |
+| `npm run db:migrate -- up` / `db:migrate:runtime` | apply migrations (uses `MIGRATION_DATABASE_URL`, else `DATABASE_URL`) |
+| `npm run db:check` / `db:check:runtime` | connectivity, schema head and migration integrity, as readiness sees them |
+| `npm run db:manifest` | regenerate the migration manifest after adding a migration |
+| `npm run db:grants` / `db:grants:runtime` | re-apply the `quote_runtime` grants |
+| `npm run documents:verify` / `documents:verify:runtime` | verify stored artifacts against their manifests (`--record-byte-length` for legacy sizes) |
+| `npm run smoke:docker` | build the image and smoke the runtime (migrate, check, health, restart, shutdown) |
+| `npm run pdf:preview`, `pdf:benchmark`, `pdf:concurrency-smoke` | PDF renderer previews and checks |
+| `npm run email:preview` | offline email template preview |
+| `QUOTE_SMOKE_RECIPIENT=… npm run email:smoke:pdf` | real Gmail smoke (manual, needs Gmail configuration) |
 
-### Production Notes
+## HTTP surface
 
-- Run migrations explicitly with `npm run db:migrate`, then verify with `npm run db:check`, **before** starting the service. The server never runs DDL. Started against an unmigrated database, it stays not ready (`schema_not_ready`) until the migration runs. `MIGRATION_DATABASE_URL`, if set, is used only by these commands.
-- Filesystem storage is durable only if backed by a persistent volume.
-- Multiple instances that serve document downloads need shared durable storage.
-- Email and WhatsApp delivery remain out of scope; T05/T06 only produce and retain the document artifacts.
+| Route | Auth | Meaning |
+|---|---|---|
+| `GET /health/live` | none | process answers; never probes dependencies |
+| `GET /health/ready` | none | `200` only when database, schema head (including integrity), storage, renderer and lifecycle are ok |
+| `GET /health/dependencies` | `Bearer SERVICE_AUTH_TOKEN` | sanitized dependency and worker detail (contract `DependencyHealth`) |
+| `GET /health` | none | deprecated liveness alias |
 
-## T07A Brand System And Email Template
+Semantics, failure policy and configuration:
+[docs/runtime-lifecycle.md](docs/runtime-lifecycle.md).
 
-T07A introduces a versioned PesasChile brand system and a reusable production email HTML template without adding any sender/delivery implementation.
+## Persistence
 
-Branding:
+V2 schema (`quote_service`), the one-way V1 → V2 data migration, migration
+checksums, the migration/runtime role separation and the recovery model:
+[docs/v2-persistence.md](docs/v2-persistence.md). Schema head:
+`000008_quote_v2_runtime_grants`.
 
-- Brand version: `pesaschile-brand-v1`
-- Email template version: `quote-email-v2`
-- Primary colors: Raspberry `#E62158`, Gunmetal `#1D2B35`, Anti-Flash White `#ECF0F1`
-- Secondary accents: Caribbean Current `#01665F`, Pear `#CCD619`, Ash Grey `#A5BAB7`
-- Typography declaration: `Poppins Black`, `Poppins SemiBold`, `Poppins Light`
-- Email-safe fallback: `"Poppins", Arial, Helvetica, sans-serif`
+## Document rendering and branding
 
-Implementation notes:
-
-- Brand theme and local assets live under `src/infrastructure/branding`.
-- The email template uses a dedicated email view model instead of passing `Quote` or canonical snapshots directly into HTML.
-- Brand assets are repo-controlled and resolved locally. No CDN, Google Fonts, or mandatory remote assets are required.
-- The HTML email is table-based and aimed at Gmail, Outlook, and Apple Mail compatibility.
-- The future sender work remains out of scope. T07A only produces the HTML artifact that T07B will later send.
-
-Sender signature:
-
-- Default signature is configured in code, not hardcoded inside the HTML string.
-- The current default uses PesasChile customer service contact data.
-- Future sender logic can inject a salesperson or sales-agent identity without rewriting the template.
-
-Validity note:
-
-- The email template always states the approved 5-day policy text and shows the persisted `validUntil` date from the quote snapshot.
-- T07A does not enforce the 5-day policy in the domain lifecycle. If stricter enforcement is needed, it should be added in application/config work rather than inside the template.
-
-Preview:
-
-- `npm run email:preview` writes a local HTML preview to `.tmp-previews/quote-email-v2-preview.html`.
-- The preview is offline and does not require external fonts or remote image hosting.
-
-## Testing
-
-HTTP integration coverage uses:
-
-- real Fastify server listening on `127.0.0.1:0`;
-- real PostgreSQL test databases;
-- migrations from zero;
-- real `fetch` requests;
-- auth, create, read, update, lifecycle, revision, list, audit, idempotency, conflict, and error sanitization scenarios;
-- real document rendering and storage;
-- authenticated PDF/HTML downloads;
-- replay and optimistic conflict during issuance;
-- restart persistence over the same database and artifact root.
-
-This repository also keeps persistence-level integration tests for T03.
+- **Renderer:** `quote-pdf-v3`, in-process pdfmake, PDF-standard Helvetica,
+  repository-owned logo. It never queries the database or re-prices; it
+  renders from an issued snapshot. Historical documents are never
+  regenerated.
+- **Brand:** `pesaschile-brand-v1` under `src/infrastructure/branding`;
+  repository-controlled assets, no CDN.
+- **Email template:** `quote-email-v2`, table-based HTML with an email view
+  model. The V2 template and renderer (Chile-local dates, validity-through
+  date, per-charge tax labels, shipping block) are R1.5 work.
 
 ## Architecture
 
-Main layers:
+`src/domain` (V1 domain and exact CLP arithmetic, kept for reuse) ·
+`src/application` (health monitor, document view models) ·
+`src/infrastructure` (config, persistence, documents, branding, email
+adapter, runtime) · `src/http` (health routes, readiness gate, errors).
 
-- `src/domain`
-- `src/application`
-- `src/infrastructure`
-- `src/http`
+## Testing
 
-The HTTP layer authenticates, validates, builds commands, delegates to application services, maps canonical DTOs, and never performs domain state changes or SQL directly.
+- **Unit tests:** pure logic, including the monitor, schema head, manifest
+  integrity, the renderer probe and environment parsing.
+- **Integration tests:** real PostgreSQL through Docker Compose:
+  - runtime reliability (outage, recovery, shutdown, a real `server.ts` process);
+  - the V2 migration matrix: fresh database, representative V1 snapshot,
+    determinism, exceptions, constraints, integrity tamper, legacy artifacts;
+  - database role separation.

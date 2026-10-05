@@ -91,7 +91,6 @@ describe("server process lifecycle", () => {
       DATABASE_URL: "not-a-url-secret-sauce",
       SERVICE_AUTH_TOKEN: "",
       QUOTE_DOCUMENT_STORAGE_ROOT: "",
-      QUOTE_DOCUMENT_REF_SECRET: ""
     });
 
     expect(await server.exited).toBe(1);
@@ -125,7 +124,6 @@ describe("server process lifecycle", () => {
       HEALTH_PROBE_RETRY_MIN_MS: "100",
       HEALTH_PROBE_RETRY_MAX_MS: "200",
       QUOTE_DOCUMENT_STORAGE_ROOT: storageRoot,
-      QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
       QUOTE_EMAIL_PROVIDER: "disabled"
     });
 

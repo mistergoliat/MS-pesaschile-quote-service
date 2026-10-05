@@ -44,6 +44,7 @@ GET    /v2/idempotency/current?operation=…          own key binding lookup
 GET    /health/live | /health/ready | /health/dependencies
 ```
 
-The V1 description in the repository [README](../../README.md) and
+The V1 runtime was retired in R1.4 together with its persistence model
+([v2-persistence.md §8](../v2-persistence.md#8-v1-runtime-retirement-owner-decision-r14));
 [docs/quote-service-v1-technical-design.md](../quote-service-v1-technical-design.md)
-describes the current runtime (V1) until R1.5 ships.
+is historical. The V2 API ships in R1.5.

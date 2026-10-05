@@ -7,7 +7,13 @@ import {
   type DatabaseProbeResult
 } from "../../../application/health/dependency-state";
 import { classifyDatabaseFailure } from "./postgres-errors";
-import { evaluateSchemaHead, readAppliedMigrations } from "./schema-head";
+import {
+  evaluateMigrationIntegrity,
+  evaluateSchemaHead,
+  readAppliedMigrations,
+  readRecordedChecksums,
+  type MigrationManifest
+} from "./schema-head";
 
 /**
  * Probes connectivity and schema head over a dedicated short-lived connection
@@ -18,7 +24,7 @@ import { evaluateSchemaHead, readAppliedMigrations } from "./schema-head";
 export class PostgresDependencyProbe implements DatabaseProbePort {
   constructor(
     private readonly connectionConfig: ClientConfig,
-    private readonly expectedMigrations: readonly string[]
+    private readonly manifest: Pick<MigrationManifest, "names" | "checksums">
   ) {}
 
   async probe(timeoutMs: number): Promise<DatabaseProbeResult> {
@@ -46,11 +52,21 @@ export class PostgresDependencyProbe implements DatabaseProbePort {
 
     try {
       const applied = await readAppliedMigrations(client);
-      const evaluation = evaluateSchemaHead(this.expectedMigrations, applied);
+      const evaluation = evaluateSchemaHead(this.manifest.names, applied);
+
+      if (evaluation.state !== "READY") {
+        return {
+          connection: PROBE_OK,
+          schema: evaluation
+        };
+      }
 
       return {
         connection: PROBE_OK,
-        schema: evaluation
+        schema: {
+          state: evaluateMigrationIntegrity(this.manifest, await readRecordedChecksums(client)),
+          actualHead: evaluation.actualHead
+        }
       };
     } catch (error) {
       const failureCategory = classifyDatabaseFailure(error);

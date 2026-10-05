@@ -10,7 +10,6 @@ const MINIMAL_ENV = {
   DATABASE_URL: "postgres://app:app-secret-password@db.internal:5432/quotes",
   SERVICE_AUTH_TOKEN: "token",
   QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
-  QUOTE_DOCUMENT_REF_SECRET: "test-document-secret"
 };
 
 describe("runtime health configuration", () => {
@@ -88,7 +87,6 @@ describe("loadEnv", () => {
       HEALTHCHECK_DATABASE_TIMEOUT_MS: "1500",
       QUOTE_COMPANY_NAME: "Pesas Chile SPA",
       QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
-      QUOTE_DOCUMENT_REF_SECRET: "test-document-secret",
       QUOTE_RENDER_VERSION: "quote-pdf-v3",
       QUOTE_EMAIL_PROVIDER: "gmail",
       GOOGLE_GMAIL_CLIENT_ID: "gmail-client-id",
@@ -110,7 +108,6 @@ describe("loadEnv", () => {
         DATABASE_URL: "not-a-url",
         SERVICE_AUTH_TOKEN: "token",
         QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
-        QUOTE_DOCUMENT_REF_SECRET: "test-document-secret"
       })
     ).toThrow();
   });

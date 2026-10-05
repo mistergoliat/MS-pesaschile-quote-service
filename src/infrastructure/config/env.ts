@@ -1,32 +1,5 @@
 import { z } from "zod";
 
-function booleanEnvSchema(defaultValue: boolean) {
-  return z
-    .preprocess((value) => {
-      if (value === undefined) {
-        return undefined;
-      }
-
-      if (typeof value === "boolean") {
-        return value;
-      }
-
-      if (typeof value === "string") {
-        return value.trim().toLowerCase();
-      }
-
-      return value;
-    }, z.union([z.boolean(), z.enum(["true", "false"])]))
-    .optional()
-    .transform((value) => {
-      if (value === undefined) {
-        return defaultValue;
-      }
-
-      return value === true || value === "true";
-    });
-}
-
 const envSchema = z
   .object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -57,19 +30,11 @@ const envSchema = z
   HEALTH_PROBE_RETRY_MAX_MS: z.coerce.number().int().min(50).max(300_000).default(30_000),
   QUOTE_COMPANY_NAME: z.string().min(1).default("Pesas Chile SPA"),
   QUOTE_DOCUMENT_STORAGE_ROOT: z.string().min(1),
-  QUOTE_DOCUMENT_REF_SECRET: z.string().min(16),
   QUOTE_RENDER_VERSION: z.string().min(1).default("quote-pdf-v3"),
-  QUOTE_EXPIRATION_SCHEDULER_ENABLED: booleanEnvSchema(false),
-  QUOTE_EXPIRATION_INTERVAL_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(30_000),
-  QUOTE_EXPIRATION_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(25),
-  QUOTE_DOCUMENT_CLEANUP_ENABLED: booleanEnvSchema(false),
-  QUOTE_DOCUMENT_CLEANUP_INTERVAL_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
-  QUOTE_DOCUMENT_ORPHAN_MIN_AGE_MS: z.coerce.number().int().min(1_000).max(86_400_000).default(300_000),
+  // Email provider configuration, used only by the email smoke script until
+  // the V2 delivery subsystem (R1.6). The V1 expiry, cleanup and email worker
+  // settings were retired with the V1 runtime in R1.4.
   QUOTE_EMAIL_PROVIDER: z.enum(["disabled", "gmail"]).default("disabled"),
-  QUOTE_EMAIL_DELIVERY_INTERVAL_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(30_000),
-  QUOTE_EMAIL_DELIVERY_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(25),
-  QUOTE_EMAIL_DELIVERY_LEASE_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(120_000),
-  QUOTE_EMAIL_DELIVERY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
   QUOTE_EMAIL_FROM_ADDRESS: z.string().trim().min(1).optional(),
   QUOTE_EMAIL_FROM_NAME: z.string().trim().min(1).optional(),
   QUOTE_EMAIL_REPLY_TO: z.string().trim().min(1).optional(),
@@ -113,28 +78,12 @@ const envSchema = z
     }
 
     const insecureAuthTokens = new Set(["replace-me", "token", "changeme"]);
-    const insecureDocumentSecrets = new Set([
-      "replace-with-a-long-secret",
-      "test-document-secret",
-      "changemechangeme"
-    ]);
 
     if (env.SERVICE_AUTH_TOKEN.length < 16 || insecureAuthTokens.has(env.SERVICE_AUTH_TOKEN)) {
       context.addIssue({
         code: "custom",
         path: ["SERVICE_AUTH_TOKEN"],
         message: "SERVICE_AUTH_TOKEN is too weak for production"
-      });
-    }
-
-    if (
-      env.QUOTE_DOCUMENT_REF_SECRET.length < 32 ||
-      insecureDocumentSecrets.has(env.QUOTE_DOCUMENT_REF_SECRET)
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["QUOTE_DOCUMENT_REF_SECRET"],
-        message: "QUOTE_DOCUMENT_REF_SECRET is too weak for production"
       });
     }
   })

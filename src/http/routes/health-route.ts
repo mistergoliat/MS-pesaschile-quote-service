@@ -61,13 +61,6 @@ function toEmailProviderView(emailEnabled: boolean, job: BackgroundJobStatus): E
   };
 }
 
-const ISSUANCE_WORKER_NOT_PRESENT: BackgroundJobStatus = {
-  enabled: false,
-  lastPollAt: null,
-  lastSuccessAt: null,
-  lastIterationFailed: false
-};
-
 /**
  * Liveness, readiness and dependency detail. None of these handlers probes a
  * dependency: they read the DependencyMonitor's cached state, so they answer
@@ -119,7 +112,7 @@ export function registerHealthRoute(app: FastifyInstance, deps: HealthRouteDepen
         emailProvider: toEmailProviderView(emailEnabled, jobs.emailDelivery)
       },
       workers: {
-        issuance: toWorkerView(ISSUANCE_WORKER_NOT_PRESENT),
+        issuance: toWorkerView(jobs.issuance),
         expiry: toWorkerView(jobs.expiry),
         emailDelivery: toWorkerView(jobs.emailDelivery)
       }

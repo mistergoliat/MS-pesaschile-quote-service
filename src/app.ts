@@ -1,47 +1,28 @@
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { DependencyMonitor } from "./application/health/dependency-monitor";
-import type { ClockPort } from "./application/ports/clock-port";
-import type { EmailSenderPort } from "./application/quote-delivery/ports/email-sender-port";
-import { QuoteDeliveryService } from "./application/quote-delivery/quote-delivery-service";
-import { QuoteEmailWorker } from "./application/quote-delivery/quote-email-worker";
-import type { DocumentIssuancePort } from "./application/quote/ports/document-issuance-port";
-import { QuoteService } from "./application/quote/quote-service";
 import type { AppEnv } from "./infrastructure/config/env";
-import { QuoteDocumentAccessService } from "./infrastructure/documents/document-access-service";
-import { DocumentReferenceCodec } from "./infrastructure/documents/document-reference";
 import { FilesystemDocumentArtifactStorage } from "./infrastructure/documents/filesystem-document-artifact-storage";
-import { OrphanDocumentCleanupService } from "./infrastructure/documents/orphan-document-cleanup-service";
 import { NativePdfRenderer, type PdfRendererPort } from "./infrastructure/documents/native-pdf-renderer";
-import { RealDocumentIssuanceAdapter } from "./infrastructure/documents/real-document-issuance";
-import { GmailEmailSender } from "./infrastructure/email/gmail-email-sender";
 import {
   createDefaultPesasChileSenderSignatureV1,
-  createPesasChileBrandV1,
-  QUOTE_EMAIL_TEMPLATE_VERSION
+  createPesasChileBrandV1
 } from "./infrastructure/branding/pesaschile-brand-v1";
 import { buildConnectionConfig, PostgresDatabase } from "./infrastructure/persistence/postgres/postgres";
 import { PostgresDependencyProbe } from "./infrastructure/persistence/postgres/postgres-dependency-probe";
-import { PostgresQuoteDeliveryRepository } from "./infrastructure/persistence/postgres/quote-delivery-repository";
-import { PostgresQuoteRepository } from "./infrastructure/persistence/postgres/quote-repository";
 import { loadMigrationManifest } from "./infrastructure/persistence/postgres/schema-head";
 import { ApplicationLifecycleState } from "./infrastructure/runtime/application-lifecycle-state";
 import { BackgroundJobManager } from "./infrastructure/runtime/background-job-manager";
-import { SystemClock } from "./infrastructure/time/system-clock";
 import { sendErrorResponse, toHttpError } from "./http/errors";
-import { registerRoutes } from "./http/routes";
+import { registerRoutes, type BusinessRouteRegistrar } from "./http/routes";
 
 export type ShutdownOutcome = "completed" | "timed_out" | "failed";
 
 export interface ApplicationContext {
   app: FastifyInstance;
   database: PostgresDatabase;
-  quoteService: QuoteService;
-  quoteDeliveryService: QuoteDeliveryService;
-  quoteEmailWorker: QuoteEmailWorker | null;
-  clock: ClockPort;
-  documentIssuancePort: DocumentIssuancePort;
-  documentAccessService: QuoteDocumentAccessService;
+  artifactStorage: FilesystemDocumentArtifactStorage;
+  pdfRenderer: PdfRendererPort;
   backgroundJobs: BackgroundJobManager;
   lifecycleState: ApplicationLifecycleState;
   dependencyMonitor: DependencyMonitor;
@@ -54,16 +35,21 @@ export interface ApplicationContext {
 }
 
 export interface BuildApplicationOverrides {
-  readonly clock?: ClockPort;
-  readonly documentIssuancePort?: DocumentIssuancePort;
-  readonly emailSenderPort?: EmailSenderPort;
   readonly pdfRenderer?: PdfRendererPort;
+  /** Business routes mounted behind the readiness gate. */
+  readonly businessRoutes?: readonly BusinessRouteRegistrar[];
 }
 
 /**
  * Builds the application without touching any external dependency. Throws
- * only for local initialization corruption (e.g. an inconsistent packaged
- * migration set); dependency availability is the DependencyMonitor's concern.
+ * only for local initialization corruption (e.g. packaged migrations that do
+ * not match the compiled manifest); dependency availability is the
+ * DependencyMonitor's concern.
+ *
+ * R1.4 state: the V1 API and its workers are retired (their persistence
+ * model was replaced by the V2 schema); the V2 API arrives in R1.5. The
+ * runtime therefore serves health only, with the readiness gate in place for
+ * the business routes to come.
  */
 export function buildApplication(
   env: AppEnv,
@@ -84,42 +70,20 @@ export function buildApplication(
   });
 
   const database = new PostgresDatabase(env);
-  const quoteRepository = new PostgresQuoteRepository(database);
-  const quoteDeliveryRepository = new PostgresQuoteDeliveryRepository(database);
-  const quoteService = new QuoteService(quoteRepository);
-  const quoteDeliveryService = new QuoteDeliveryService(
-    quoteDeliveryRepository,
-    env.QUOTE_EMAIL_PROVIDER !== "disabled"
-  );
-  const clock = overrides.clock ?? new SystemClock();
-  const brandTheme = createPesasChileBrandV1({
-    legalName: env.QUOTE_COMPANY_NAME
-  });
   const artifactStorage = new FilesystemDocumentArtifactStorage(env.QUOTE_DOCUMENT_STORAGE_ROOT);
-  const documentReferenceCodec = new DocumentReferenceCodec(env.QUOTE_DOCUMENT_REF_SECRET);
-  const senderSignature = createDefaultPesasChileSenderSignatureV1();
   const pdfRenderer =
     overrides.pdfRenderer ??
     new NativePdfRenderer({
       renderVersion: env.QUOTE_RENDER_VERSION,
-      brand: brandTheme,
-      senderSignature
+      brand: createPesasChileBrandV1({
+        legalName: env.QUOTE_COMPANY_NAME
+      }),
+      senderSignature: createDefaultPesasChileSenderSignatureV1()
     });
-  const realDocumentIssuanceAdapter = new RealDocumentIssuanceAdapter(artifactStorage, pdfRenderer, {
-    renderVersion: env.QUOTE_RENDER_VERSION,
-    emailTemplateVersion: QUOTE_EMAIL_TEMPLATE_VERSION,
-    brandTheme,
-    senderSignature
-  });
-  const documentIssuancePort = overrides.documentIssuancePort ?? realDocumentIssuanceAdapter;
-  const documentAccessService = new QuoteDocumentAccessService(
-    artifactStorage,
-    documentReferenceCodec
-  );
   const lifecycleState = new ApplicationLifecycleState();
   const dependencyMonitor = new DependencyMonitor(
     {
-      database: new PostgresDependencyProbe(buildConnectionConfig(env), migrationManifest.names),
+      database: new PostgresDependencyProbe(buildConnectionConfig(env), migrationManifest),
       artifactStorage,
       renderer: pdfRenderer
     },
@@ -136,41 +100,7 @@ export function buildApplication(
   database.onConnectionError(() => {
     dependencyMonitor.requestProbe();
   });
-  const cleanupService = new OrphanDocumentCleanupService(artifactStorage, quoteService);
-  const emailSenderPort =
-    overrides.emailSenderPort ??
-    (env.QUOTE_EMAIL_PROVIDER === "gmail"
-      ? new GmailEmailSender({
-          clientId: env.GOOGLE_GMAIL_CLIENT_ID!,
-          clientSecret: env.GOOGLE_GMAIL_CLIENT_SECRET!,
-          refreshToken: env.GOOGLE_GMAIL_REFRESH_TOKEN!,
-          user: env.GOOGLE_GMAIL_USER!
-        })
-      : undefined);
-  const quoteEmailWorker =
-    emailSenderPort && env.QUOTE_EMAIL_PROVIDER !== "disabled"
-      ? new QuoteEmailWorker(
-          quoteDeliveryRepository,
-          artifactStorage,
-          emailSenderPort,
-          {
-            address: env.QUOTE_EMAIL_FROM_ADDRESS!,
-            name: env.QUOTE_EMAIL_FROM_NAME!
-          },
-          env.QUOTE_EMAIL_REPLY_TO ?? null,
-          env.QUOTE_EMAIL_DELIVERY_MAX_ATTEMPTS
-        )
-      : null;
-  const backgroundJobs = new BackgroundJobManager({
-    env,
-    clock,
-    quoteService,
-    quoteEmailWorker,
-    cleanupService,
-    database,
-    logger: app.log,
-    canRun: () => dependencyMonitor.isReady()
-  });
+  const backgroundJobs = new BackgroundJobManager();
 
   app.setErrorHandler((error, request, reply) => {
     // A request that hit a dead connection is a cheap, early outage signal.
@@ -208,13 +138,10 @@ export function buildApplication(
     env,
     monitor: dependencyMonitor,
     backgroundJobs,
-    emailEnabled: quoteEmailWorker !== null,
+    // The email subsystem was retired with V1 and returns in R1.6.
+    emailEnabled: false,
     startedAt: new Date(),
-    quoteService,
-    quoteDeliveryService,
-    clock,
-    documentIssuancePort,
-    documentAccessService
+    businessRoutes: overrides.businessRoutes ?? []
   });
 
   let shutdownPromise: Promise<ShutdownOutcome> | null = null;
@@ -267,12 +194,8 @@ export function buildApplication(
   return {
     app,
     database,
-    quoteService,
-    quoteDeliveryService,
-    quoteEmailWorker,
-    clock,
-    documentIssuancePort,
-    documentAccessService,
+    artifactStorage,
+    pdfRenderer,
     backgroundJobs,
     lifecycleState,
     dependencyMonitor,

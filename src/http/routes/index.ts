@@ -1,17 +1,13 @@
 import type { FastifyInstance } from "fastify";
 
 import type { DependencyMonitor } from "../../application/health/dependency-monitor";
-import type { ClockPort } from "../../application/ports/clock-port";
-import type { QuoteDeliveryService } from "../../application/quote-delivery/quote-delivery-service";
-import type { DocumentIssuancePort } from "../../application/quote/ports/document-issuance-port";
-import type { QuoteService } from "../../application/quote/quote-service";
 import type { AppEnv } from "../../infrastructure/config/env";
-import type { QuoteDocumentAccessService } from "../../infrastructure/documents/document-access-service";
 import type { BackgroundJobManager } from "../../infrastructure/runtime/background-job-manager";
 import { createReadinessGate } from "../readiness-gate";
-import { registerDocumentRoute } from "./document-route";
 import { registerHealthRoute } from "./health-route";
-import { registerQuoteRoute } from "./quote-route";
+
+/** Registers business routes inside the readiness-gated context. */
+export type BusinessRouteRegistrar = (businessApp: FastifyInstance) => void;
 
 export interface RegisterRoutesInput {
   readonly env: AppEnv;
@@ -19,29 +15,22 @@ export interface RegisterRoutesInput {
   readonly backgroundJobs: BackgroundJobManager;
   readonly emailEnabled: boolean;
   readonly startedAt: Date;
-  readonly quoteService: QuoteService;
-  readonly quoteDeliveryService: QuoteDeliveryService;
-  readonly clock: ClockPort;
-  readonly documentIssuancePort: DocumentIssuancePort;
-  readonly documentAccessService: QuoteDocumentAccessService;
+  readonly businessRoutes: readonly BusinessRouteRegistrar[];
 }
 
 export function registerRoutes(app: FastifyInstance, input: RegisterRoutesInput): void {
   registerHealthRoute(app, input);
 
-  // Every business route inherits the readiness gate from this context.
+  // Every business route inherits the readiness gate from this context. The
+  // V1 routes were retired in R1.4 (their persistence no longer exists); the
+  // V2 routes (R1.5) register here.
   app.register((businessApp, _options, done) => {
     businessApp.addHook("onRequest", createReadinessGate(input.monitor));
-    registerQuoteRoute(
-      businessApp,
-      input.env,
-      input.quoteService,
-      input.quoteDeliveryService,
-      input.clock,
-      input.documentIssuancePort,
-      input.documentAccessService
-    );
-    registerDocumentRoute(businessApp, input.env, input.quoteService, input.documentAccessService);
+
+    for (const register of input.businessRoutes) {
+      register(businessApp);
+    }
+
     done();
   });
 }

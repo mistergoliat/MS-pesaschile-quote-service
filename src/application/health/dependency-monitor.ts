@@ -241,7 +241,11 @@ export class DependencyMonitor {
           database.status === "up" && this.schemaState !== "READY"
             ? {
                 status: "degraded",
-                failureCategory: "schema_mismatch",
+                failureCategory:
+                  this.schemaState === "SCHEMA_INTEGRITY_MISMATCH" ||
+                  this.schemaState === "SCHEMA_INTEGRITY_UNVERIFIED"
+                    ? "integrity"
+                    : "schema_mismatch",
                 lastSuccessAt: database.lastSuccessAt
               }
             : this.toView(database),

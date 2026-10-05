@@ -55,7 +55,7 @@ Invariants:
 | Resource | Identity | Notes |
 |---|---|---|
 | Quote | `quoteId` (UUID, owner) | Business identifier `quoteNumber` assigned at issue acceptance |
-| Issuance operation | `operationId` (UUID, owner) | One per issue acceptance; durable; `GET /v2/operations/{id}` |
+| Issuance operation | `operationId` (UUID, owner) | Created by issue acceptance; durable; `GET /v2/operations/{id}`. Separate lifecycle from the quote: an operator retry after a `failed` operation creates a new one for the same quote; `issuance.operationId` names the current one |
 | Idempotency binding | `(principal, operation, key)` | Lookup `GET /v2/idempotency/current` |
 | Delivery | `deliveryId` (UUID, owner) | Email only in 2.0 |
 | Audit event | `eventId`, per-quote `sequence` | Append-only |
@@ -85,8 +85,10 @@ One database transaction (the **acceptance transaction**):
 
 After commit the document is rendered under the operation lease
 (§9, [recovery](QUOTE_V2_IDEMPOTENCY_AND_RECOVERY.md)). The handler MAY render
-inline for up to `syncIssueBudgetMs` (configuration, default 5000 ms, range
-0–10000):
+inline for a bounded, server-configured budget (`syncIssueBudgetMs`). The
+budget's value is an implementation parameter, **not an API invariant**: a
+client MUST handle both outcomes below for every request and MUST NOT rely on
+any particular synchronous wait (amendment A2).
 
 - manifest committed within the budget → **`201`**, `quote.status = issued`;
 - otherwise → **`202`**, `quote.status = issuing`, `Location:
@@ -263,8 +265,9 @@ Callers MUST NOT send `validUntil`. A principal with
   `pesaschile-cl-v1`), sequence from PostgreSQL `quote_number_seq` (bigint),
   left-padded to **at least** 6 digits and never truncated
   (`PC-000137`, `PC-999999`, `PC-1000000`).
-- Unique (database constraint). Gaps are permitted (rolled-back acceptance,
-  `issuance_failed`).
+- Unique (database constraint). Gaps are permitted (rolled-back acceptance;
+  a number whose quote was cancelled after a failed issuance never appears on
+  a document).
 - Consumers MUST treat it as opaque and MUST NOT construct it.
 - V2 continues the V1 sequence; V1 numbers are never reused.
 
@@ -355,7 +358,8 @@ failed, issued, issue failed, cancelled, expired, delivery
 requested/sent/failed/unknown, idempotency replayed/conflict, legacy V1 event.
 
 Each event records the authenticated `principalId` (or `system`), operation,
-`correlationId`, `idempotencyKeyHash` (SHA-256; never the raw key), from/to
+`correlationId` (the producing request's `X-Correlation-Id`, request/trace
+correlation only), `idempotencyKeyHash` (SHA-256; never the raw key), from/to
 status and minimal non-PII data (counts, totals, versions, codes). Customer
 PII, recipient addresses and line payloads are never placed in audit data or
 logs.
@@ -416,12 +420,18 @@ recovery mechanism.
 
 ## 14. Correlation
 
-`externalCorrelation {sourceSystem, externalReferenceType?, externalReference?,
-correlationId?}` is required on create and stored on the quote.
-`externalReferenceType` and `externalReference` are given together. Several
-quotes may share a reference. `GET /v2/quotes?sourceSystem=…` lists them.
-`correlationId` is excluded from the fingerprint; the stored value is the one
-of the committing request, and each request's value appears in its audit event.
+Two distinct concepts (amendment A3):
+
+- **Durable business correlation** — `externalCorrelation {sourceSystem,
+  externalReferenceType?, externalReference?}` is required on create and
+  stored on the quote. `externalReferenceType` and `externalReference` are
+  given together. Several quotes may share a reference.
+  `GET /v2/quotes?sourceSystem=…` lists them. It is part of the request body
+  and therefore of the fingerprint.
+- **Request/trace correlation** — the optional `X-Correlation-Id` header. It
+  identifies one HTTP request for tracing, is recorded on the audit events
+  and logs that request produces, and is never stored on the quote, never
+  part of the fingerprint and never quote or idempotency identity.
 
 ## 15. Customer snapshot
 

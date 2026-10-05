@@ -6,6 +6,7 @@ import pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApplication, type ApplicationContext, type BuildApplicationOverrides } from "../../src/app";
+import type { BusinessRouteRegistrar } from "../../src/http/routes";
 import { probeFailed } from "../../src/application/health/dependency-state";
 import { runMigrations } from "../../src/infrastructure/persistence/postgres/migrator";
 import { EXPECTED_SCHEMA_HEAD } from "../../src/infrastructure/persistence/postgres/schema-head";
@@ -37,6 +38,8 @@ async function startHarness(options: {
   readonly proxyEnabled?: boolean;
   readonly envOverrides?: Record<string, string>;
   readonly appOverrides?: BuildApplicationOverrides;
+  /** Resolves the gated test route POST /probe/hang. */
+  readonly hang?: Promise<void>;
 } = {}): Promise<Harness> {
   const database = await createTestDatabase(process.env.TEST_DATABASE_ADMIN_URL!);
   cleanups.push(() => database.dispose());
@@ -60,7 +63,28 @@ async function startHarness(options: {
     storageRoot,
     ...(options.envOverrides ? { overrides: options.envOverrides } : {})
   });
-  const context = buildApplication(env, options.appOverrides);
+  // The V1 business routes were retired in R1.4 and V2 routes arrive in
+  // R1.5, so the readiness gate is exercised through test-only business
+  // routes mounted in the same gated context. GET /probe/quotes reads the V2
+  // quotes table through the request pool.
+  const holder: { context?: ApplicationContext } = {};
+  const probeRoutes: BusinessRouteRegistrar = (businessApp) => {
+    businessApp.get("/probe/quotes", async () => {
+      const result = await holder.context!.database.query<{ count: number }>(
+        "select count(*)::int as count from quote_service.quotes"
+      );
+      return { quotes: result.rows[0]!.count };
+    });
+    businessApp.post("/probe/hang", async () => {
+      await options.hang;
+      return { done: true };
+    });
+  };
+  const context = buildApplication(env, {
+    ...options.appOverrides,
+    businessRoutes: [probeRoutes, ...(options.appOverrides?.businessRoutes ?? [])]
+  });
+  holder.context = context;
   cleanups.push(async () => {
     await context.shutdown("test-cleanup");
   });
@@ -95,28 +119,6 @@ async function readyStatus(harness: Harness): Promise<number> {
   return (await harness.get("/health/ready")).status;
 }
 
-function createQuoteBody() {
-  return {
-    opportunityId: "opp-runtime-1",
-    actor: { type: "sales_agent", id: "agent-runtime-1" },
-    source: { system: "crm_customer_360", correlationId: "corr-runtime-1" },
-    currency: "CLP",
-    customerSnapshot: { name: "Runtime Test", email: "runtime@example.com" },
-    items: [
-      {
-        type: "product",
-        externalItemId: "sku-1",
-        description: "Item",
-        quantity: "1",
-        unitPrice: "1000",
-        taxIncluded: true,
-        taxRate: "0.19"
-      }
-    ],
-    validUntil: "2099-01-01T00:00:00.000Z"
-  };
-}
-
 describe("runtime reliability: database outage and recovery", () => {
   it("A+B: starts live/not-ready with the database down, then becomes ready without restart", async () => {
     const harness = await startHarness({ proxyEnabled: false });
@@ -133,7 +135,7 @@ describe("runtime reliability: database outage and recovery", () => {
     });
 
     // Business traffic fails closed with a contract error, not a raw driver error.
-    const list = await harness.get("/v1/quotes", true);
+    const list = await harness.get("/probe/quotes");
     expect(list.status).toBe(503);
     expect(list.headers.get("retry-after")).toBe("5");
     expect(list.body).toEqual({
@@ -155,7 +157,7 @@ describe("runtime reliability: database outage and recovery", () => {
       status: "ready",
       checks: { database: "ok", schema: "ok", artifactStorage: "ok", renderer: "ok", lifecycle: "ok" }
     });
-    expect((await harness.get("/v1/quotes", true)).status).toBe(200);
+    expect((await harness.get("/probe/quotes")).status).toBe(200);
   }, TEST_TIMEOUT_MS);
 
   it("C: loses the database after ready, stays live, then recovers without restart", async () => {
@@ -164,22 +166,22 @@ describe("runtime reliability: database outage and recovery", () => {
 
     // Warm the pool so idle clients exist when the connection drops: their
     // 'error' events must be absorbed, not crash the process.
-    const created = await harness.post("/v1/quotes", createQuoteBody(), { "Idempotency-Key": "runtime-c-1" });
-    expect(created.status).toBe(201);
+    expect((await harness.get("/probe/quotes")).status).toBe(200);
 
     await harness.proxy.disable();
     await waitFor(async () => (await readyStatus(harness)) === 503, 10_000);
 
     expect((await harness.get("/health/live")).status).toBe(200);
-    const duringOutage = await harness.post("/v1/quotes", createQuoteBody(), { "Idempotency-Key": "runtime-c-2" });
+    const duringOutage = await harness.get("/probe/quotes");
     expect(duringOutage.status).toBe(503);
     expect((duringOutage.body as { error: { code: string } }).error.code).toBe("dependency_unavailable");
 
     await harness.proxy.enable();
     await waitFor(async () => (await readyStatus(harness)) === 200, 10_000);
 
-    const afterRecovery = await harness.post("/v1/quotes", createQuoteBody(), { "Idempotency-Key": "runtime-c-3" });
-    expect(afterRecovery.status).toBe(201);
+    const afterRecovery = await harness.get("/probe/quotes");
+    expect(afterRecovery.status).toBe(200);
+    expect(afterRecovery.body).toEqual({ quotes: 0 });
   }, TEST_TIMEOUT_MS);
 
   it("maps a request that races an outage past the gate to 503, not 500", async () => {
@@ -190,7 +192,7 @@ describe("runtime reliability: database outage and recovery", () => {
     await harness.context.dependencyMonitor.stop();
     await harness.proxy.disable();
 
-    const response = await harness.get("/v1/quotes", true);
+    const response = await harness.get("/probe/quotes");
     expect(response.status).toBe(503);
     expect(response.body).toMatchObject({ error: { code: "dependency_unavailable" } });
     expect(response.text).not.toContain("ECONNREFUSED");
@@ -213,7 +215,7 @@ describe("runtime reliability: schema head", () => {
     expect(ready.status).toBe(503);
     expect(ready.body).toMatchObject({ checks: { database: "ok", schema: "fail" } });
 
-    const list = await harness.get("/v1/quotes", true);
+    const list = await harness.get("/probe/quotes");
     expect(list.status).toBe(503);
     expect(list.body).toMatchObject({ error: { code: "schema_not_ready" } });
 
@@ -229,9 +231,9 @@ describe("runtime reliability: schema head", () => {
     await harness.context.dependencyMonitor.probeNow();
 
     expect(await readyStatus(harness)).toBe(503);
-    expect((await harness.get("/v1/quotes", true)).body).toMatchObject({ error: { code: "schema_not_ready" } });
+    expect((await harness.get("/probe/quotes")).body).toMatchObject({ error: { code: "schema_not_ready" } });
     expect(harness.context.dependencyMonitor.details().schema.state).toBe("SCHEMA_BEHIND");
-    expect((await schemaBody(harness)).schema.actualHead).toBe("000004_quote_line_external_identity");
+    expect((await schemaBody(harness)).schema.actualHead).toBe("000007_quote_v2_persistence");
 
     await runMigrations({ databaseUrl: harness.database.connectionString, direction: "up" });
     await waitFor(async () => (await readyStatus(harness)) === 200, 10_000);
@@ -274,7 +276,7 @@ describe("runtime reliability: storage and renderer", () => {
       status: "not_ready",
       checks: { artifactStorage: "fail", database: "ok" }
     });
-    expect((await harness.get("/v1/quotes", true)).body).toMatchObject({
+    expect((await harness.get("/probe/quotes")).body).toMatchObject({
       error: { code: "dependency_unavailable", details: { dependency: "artifactStorage" } }
     });
 
@@ -297,7 +299,7 @@ describe("runtime reliability: storage and renderer", () => {
       status: "not_ready",
       checks: { renderer: "fail", database: "ok", schema: "ok", artifactStorage: "ok" }
     });
-    expect((await harness.get("/v1/quotes", true)).body).toMatchObject({
+    expect((await harness.get("/probe/quotes")).body).toMatchObject({
       error: { code: "dependency_unavailable", details: { dependency: "renderer" } }
     });
   }, TEST_TIMEOUT_MS);
@@ -353,9 +355,7 @@ describe("runtime reliability: diagnostics", () => {
 
 describe("runtime reliability: graceful shutdown", () => {
   it("J: marks not-ready, stops probes and jobs before closing HTTP, closes the pool last", async () => {
-    const harness = await startHarness({
-      envOverrides: { QUOTE_EXPIRATION_SCHEDULER_ENABLED: "true" }
-    });
+    const harness = await startHarness();
     const { context } = harness;
     const order: string[] = [];
     const lifecycleAt: Record<string, boolean> = {};
@@ -393,36 +393,20 @@ describe("runtime reliability: graceful shutdown", () => {
   }, TEST_TIMEOUT_MS);
 
   it("J: shutdown is bounded by APP_SHUTDOWN_TIMEOUT_MS when a request never finishes", async () => {
-    let releaseIssuance: () => void = () => undefined;
-    const issuanceReleased = new Promise<void>((resolve) => {
-      releaseIssuance = resolve;
+    let releaseRequest: () => void = () => undefined;
+    const requestReleased = new Promise<void>((resolve) => {
+      releaseRequest = resolve;
     });
     const harness = await startHarness({
       envOverrides: { APP_SHUTDOWN_TIMEOUT_MS: "1000" },
-      appOverrides: {
-        documentIssuancePort: {
-          async issueForQuote() {
-            await issuanceReleased;
-            throw new Error("released");
-          },
-          async cleanupIssuedArtifacts() {}
-        }
-      }
+      hang: requestReleased
     });
     cleanups.push(() => {
-      releaseIssuance();
+      releaseRequest();
       return Promise.resolve();
     });
 
-    const created = await harness.post("/v1/quotes", createQuoteBody(), { "Idempotency-Key": "runtime-j-1" });
-    const quoteId = (created.body as { quoteId: string }).quoteId;
-    const hangingRequest = harness
-      .post(
-        `/v1/quotes/${quoteId}/issue`,
-        { expectedVersion: 1, actor: createQuoteBody().actor, source: createQuoteBody().source },
-        { "Idempotency-Key": "runtime-j-issue" }
-      )
-      .catch(() => null);
+    const hangingRequest = harness.post("/probe/hang", {}).catch(() => null);
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     const startedAt = Date.now();
@@ -433,7 +417,7 @@ describe("runtime reliability: graceful shutdown", () => {
     expect(elapsedMs).toBeGreaterThanOrEqual(900);
     expect(elapsedMs).toBeLessThan(3_000);
 
-    releaseIssuance();
+    releaseRequest();
     await hangingRequest;
   }, TEST_TIMEOUT_MS);
 });

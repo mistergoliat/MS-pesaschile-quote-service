@@ -20,6 +20,11 @@ export type SchemaHeadState =
   | "SCHEMA_MISSING"
   | "SCHEMA_BEHIND"
   | "SCHEMA_AHEAD_OR_UNKNOWN"
+  // At the expected head, but an applied migration's recorded checksum
+  // differs from the packaged file (same name, changed bytes).
+  | "SCHEMA_INTEGRITY_MISMATCH"
+  // At the expected head, but some applied migration has no recorded checksum.
+  | "SCHEMA_INTEGRITY_UNVERIFIED"
   | "DB_UNAVAILABLE";
 
 export type ProbeOutcome =

@@ -82,6 +82,7 @@ neg('rut with dots', 'CreateQuoteRequest', (d) => { d.customer = { kind: 'person
 neg('quote status accepted', 'QuoteStatus', () => 'accepted');
 neg('quote status paid', 'QuoteStatus', () => 'paid');
 neg('update draft without changes', 'UpdateDraftRequest', () => ({ expectedVersion: 1 }));
+neg('trace correlationId inside externalCorrelation (A3)', 'CreateQuoteRequest', (d) => { d.externalCorrelation.correlationId = 'req-1'; });
 check('positive: guest customer minimal', S('Customer')({ kind: 'guest' }));
 check('positive: canonical quantities', ['2', '12.5', '0.25', '9999.999999'].every((q) => S('Quantity')(q)));
 
@@ -121,9 +122,8 @@ const issueReq = read('examples/issue.request.json');
 check('expectedTotals equal owner totals (issue)', ['net', 'tax', 'gross'].every((k) => issueReq.expectedTotals[k] === i200.quote.totals[k]));
 check('issue expectedVersion follows draft update', read('examples/draft-update.request.json').expectedVersion === 1 && issueReq.expectedVersion === 2 && i200.quote.version === 4);
 const jcs = (v) => v === null || typeof v !== 'object' ? JSON.stringify(v) : Array.isArray(v) ? `[${v.map(jcs).join(',')}]` : `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${jcs(v[k])}`).join(',')}}`;
-const body = clone(createReq); delete body.externalCorrelation.correlationId;
-const fp = createHash('sha256').update(jcs({ operation: 'quote.create_and_issue', pathParameters: {}, body })).digest('hex');
-check('idempotency lookup fingerprint = fingerprint(create request without correlationId)', read('examples/idempotency-lookup.bound.json').binding.requestFingerprint === fp);
+const fp = createHash('sha256').update(jcs({ operation: 'quote.create_and_issue', pathParameters: {}, body: createReq })).digest('hex');
+check('idempotency lookup fingerprint = fingerprint(unmodified create request body) (A3)', read('examples/idempotency-lookup.bound.json').binding.requestFingerprint === fp);
 check('lookup binding refers to the issued quote', read('examples/idempotency-lookup.bound.json').binding.quoteId === r201.quote.quoteId);
 
 // 6. operation-level contract checks
@@ -180,6 +180,18 @@ const scrub = (f, s) => f === 'QUOTE_V2_CONTRACT_FREEZE.md' ? s.replace(/`R4-J3A
 for (const f of ownerFiles) { const m = scrub(f, text(f)).match(r4Terms); check(`no R4/Opportunity primitive in ${f}`, !m, m ? m[0] : ''); }
 check('openapi never mentions opportunity', !/opportunit/i.test(text('openapi.yaml')));
 check('no Catalog/Shipping call surface in OpenAPI (no outbound URLs, no lookup params)', !/catalog\.|carrier\/v1|productLookup|priceLookup|currentPrice/i.test(text('openapi.yaml')));
+
+// 9. R1.4 contract amendments (QUOTE_V2_CONTRACT_FREEZE.md §3a)
+const amendedDocs = ['openapi.yaml', 'QUOTE_V2_STATE_MACHINE.md', 'QUOTE_V2_IDEMPOTENCY_AND_RECOVERY.md', 'QUOTE_V2_DOMAIN_CONTRACT.md'];
+check('A1: no deadline-driven quote cancellation (issuance_failed) in normative docs', amendedDocs.every((f) => !/issuance_failed/.test(text(f))));
+check('A1: state machine T6 keeps the quote issuing', /^\| T6 \| `issuing` \| `issuing` \|/m.test(sm));
+check('A1: cancel from issuing only after failed operation (T11)', /^\| T11 \| `issuing` \| `cancelled` \|.*current operation `failed`/m.test(sm));
+check('A2: no fixed synchronous wait in OpenAPI', !/5000|\b5 ?s\b/.test(text('openapi.yaml')));
+check('A3: ExternalCorrelation has no correlationId', !('correlationId' in doc.components.schemas.ExternalCorrelation.properties));
+check('A3: X-Correlation-Id header parameter on every mutation', ops.filter((o) => o.method === 'post' || o.method === 'patch').every((o) => (o.op.parameters ?? []).some((p) => p.$ref === '#/components/parameters/CorrelationId')) && doc.components.parameters.CorrelationId.name === 'X-Correlation-Id');
+const corrHolders = [];
+(function walk(o) { if (o && typeof o === 'object') { if (o.externalCorrelation && 'correlationId' in o.externalCorrelation) corrHolders.push(o); for (const v of Object.values(o)) walk(v); } })(readdirSync(`${DIR}/examples`).map((f) => read(`examples/${f}`)));
+check('A3: no example carries correlationId inside externalCorrelation', corrHolders.length === 0);
 
 const failed = results.filter((r) => !r.ok);
 console.log(`checks: ${results.length}, passed: ${results.length - failed.length}, failed: ${failed.length}`);

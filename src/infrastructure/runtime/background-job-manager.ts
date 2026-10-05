@@ -1,18 +1,6 @@
-import type { QuoteService } from "../../application/quote/quote-service";
-import type { QuoteEmailWorker } from "../../application/quote-delivery/quote-email-worker";
-import type { ClockPort } from "../../application/ports/clock-port";
-import type { AppEnv } from "../config/env";
-import type { PostgresDatabase } from "../persistence/postgres/postgres";
-import type { OrphanDocumentCleanupService } from "../documents/orphan-document-cleanup-service";
-import { PeriodicJobRunner, type PeriodicJobStatus } from "./periodic-job-runner";
+import type { PeriodicJobRunner, PeriodicJobStatus } from "./periodic-job-runner";
 
-const DOCUMENT_CLEANUP_LOCK_KEY = 4_204_001;
-
-type Logger = {
-  info(payload: Record<string, unknown>, message: string): void;
-  warn(payload: Record<string, unknown>, message: string): void;
-  error(payload: Record<string, unknown>, message: string): void;
-};
+export type BackgroundJobName = "issuance" | "expiry" | "emailDelivery";
 
 export interface BackgroundJobStatus extends PeriodicJobStatus {
   readonly enabled: boolean;
@@ -25,161 +13,34 @@ const DISABLED_JOB_STATUS: BackgroundJobStatus = {
   lastIterationFailed: false
 };
 
+/**
+ * Owns the lifecycle of the service's periodic workers. The V1 jobs (V1
+ * expiry, V1 email outbox, V1 orphan cleanup) were retired with the V1
+ * persistence model in R1.4; the V2 issuance worker (R1.5), expiry
+ * materialization (R1.5) and email delivery (R1.6) register here. Every
+ * runner is expected to be built with a readiness `canRun` gate.
+ */
 export class BackgroundJobManager {
-  private readonly expirationRunner: PeriodicJobRunner | null;
-  private readonly cleanupRunner: PeriodicJobRunner | null;
-  private readonly emailDeliveryRunner: PeriodicJobRunner | null;
+  constructor(private readonly jobs: Partial<Record<BackgroundJobName, PeriodicJobRunner>> = {}) {}
 
-  constructor(input: {
-    readonly env: AppEnv;
-    readonly clock: ClockPort;
-    readonly quoteService: QuoteService;
-    readonly quoteEmailWorker: QuoteEmailWorker | null;
-    readonly cleanupService: OrphanDocumentCleanupService;
-    readonly database: PostgresDatabase;
-    readonly logger: Logger;
-    /** Iterations are skipped while this returns false. */
-    readonly canRun: () => boolean;
-  }) {
-    this.expirationRunner = input.env.QUOTE_EXPIRATION_SCHEDULER_ENABLED
-      ? new PeriodicJobRunner({
-          name: "quote-expiration",
-          intervalMs: input.env.QUOTE_EXPIRATION_INTERVAL_MS,
-          logger: input.logger,
-          canRun: input.canRun,
-          execute: async () => {
-            const now = input.clock.now().toISOString();
-            const result = await input.quoteService.expireQuotesBatch({
-              now,
-              limit: input.env.QUOTE_EXPIRATION_BATCH_SIZE,
-              actor: {
-                type: "service",
-                id: "quote-expiration-scheduler"
-              },
-              source: {
-                system: "scheduler",
-                correlationId: null
-              }
-            });
-
-            input.logger.info(
-              {
-                job: "quote-expiration",
-                processedCount: result.processedCount,
-                quoteIds: result.quoteIds
-              },
-              "Expiration iteration completed"
-            );
-          }
-        })
-      : null;
-    this.emailDeliveryRunner = input.quoteEmailWorker
-      ? new PeriodicJobRunner({
-          name: "quote-email-delivery",
-          intervalMs: input.env.QUOTE_EMAIL_DELIVERY_INTERVAL_MS,
-          logger: input.logger,
-          canRun: input.canRun,
-          execute: async () => {
-            const quoteEmailWorker = input.quoteEmailWorker;
-
-            if (!quoteEmailWorker) {
-              return;
-            }
-
-            const now = input.clock.now().toISOString();
-            const result = await quoteEmailWorker.runPendingDeliveries({
-              now,
-              limit: input.env.QUOTE_EMAIL_DELIVERY_BATCH_SIZE,
-              leaseMs: input.env.QUOTE_EMAIL_DELIVERY_LEASE_MS
-            });
-
-            input.logger.info(
-              {
-                job: "quote-email-delivery",
-                processedCount: result.processedCount,
-                deliveryIds: result.deliveryIds
-              },
-              "Email delivery iteration completed"
-            );
-          }
-        })
-      : null;
-    this.cleanupRunner = input.env.QUOTE_DOCUMENT_CLEANUP_ENABLED
-      ? new PeriodicJobRunner({
-          name: "document-cleanup",
-          intervalMs: input.env.QUOTE_DOCUMENT_CLEANUP_INTERVAL_MS,
-          logger: input.logger,
-          canRun: input.canRun,
-          execute: async () => {
-            const lock = await input.database.withAdvisoryLock(DOCUMENT_CLEANUP_LOCK_KEY, async () =>
-              input.cleanupService.cleanupOrphans({
-                now: input.clock.now().toISOString(),
-                minAgeMs: input.env.QUOTE_DOCUMENT_ORPHAN_MIN_AGE_MS
-              })
-            );
-
-            if (!lock.acquired) {
-              input.logger.warn(
-                {
-                  job: "document-cleanup"
-                },
-                "Cleanup iteration skipped because another instance holds the lock"
-              );
-              return;
-            }
-
-            input.logger.info(
-              {
-                job: "document-cleanup",
-                scannedCount: lock.result?.scannedCount ?? 0,
-                deletedCount: lock.result?.deletedCount ?? 0,
-                protectedCount: lock.result?.protectedCount ?? 0
-              },
-              "Document cleanup iteration completed"
-            );
-          }
-        })
-      : null;
-  }
-
-  status(): {
-    readonly expiry: BackgroundJobStatus;
-    readonly emailDelivery: BackgroundJobStatus;
-    readonly documentCleanup: BackgroundJobStatus;
-  } {
-    const toStatus = (runner: PeriodicJobRunner | null): BackgroundJobStatus =>
+  status(): Record<BackgroundJobName, BackgroundJobStatus> {
+    const toStatus = (runner: PeriodicJobRunner | undefined): BackgroundJobStatus =>
       runner ? { enabled: true, ...runner.status } : DISABLED_JOB_STATUS;
 
     return {
-      expiry: toStatus(this.expirationRunner),
-      emailDelivery: toStatus(this.emailDeliveryRunner),
-      documentCleanup: toStatus(this.cleanupRunner)
+      issuance: toStatus(this.jobs.issuance),
+      expiry: toStatus(this.jobs.expiry),
+      emailDelivery: toStatus(this.jobs.emailDelivery)
     };
   }
 
   start(): void {
-    this.expirationRunner?.start();
-    this.emailDeliveryRunner?.start();
-    this.cleanupRunner?.start();
+    for (const runner of Object.values(this.jobs)) {
+      runner.start();
+    }
   }
 
   async stop(): Promise<void> {
-    await Promise.all([
-      this.expirationRunner?.stop(),
-      this.emailDeliveryRunner?.stop(),
-      this.cleanupRunner?.stop()
-    ]);
-  }
-
-  async runExpirationNow(): Promise<void> {
-    await this.expirationRunner?.runNow();
-  }
-
-  async runCleanupNow(): Promise<void> {
-    await this.cleanupRunner?.runNow();
-  }
-
-  async runEmailDeliveryNow(): Promise<void> {
-    await this.emailDeliveryRunner?.runNow();
+    await Promise.all(Object.values(this.jobs).map((runner) => runner.stop()));
   }
 }

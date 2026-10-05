@@ -1,18 +1,21 @@
 # Runbook (DRAFT): Quote Service production bootstrap
 
-> **Status: DRAFT, not approved for production use.** R1.3 makes the
-> runtime survive dependency outages. It does **not** make the Quote Service
-> production-ready: database role separation, backup/restore and the V2
-> domain are still outstanding (see `docs/runtime-lifecycle.md` §13). Do not
-> run this against production until the owner readiness gate (R1.7) passes.
+> **Status: DRAFT, not approved for production use.** As of R1.4 the runtime
+> survives dependency outages and the V2 schema is in place, but the V2 API
+> (R1.5), delivery (R1.6) and the production readiness gate (R1.7) are still
+> outstanding. The service currently serves health endpoints only. Do not run
+> this against production until the owner readiness gate passes.
 
-Lifecycle and health semantics: [`docs/runtime-lifecycle.md`](../runtime-lifecycle.md).
+References:
+
+- lifecycle and health: [`docs/runtime-lifecycle.md`](../runtime-lifecycle.md);
+- schema, roles, integrity and recovery: [`docs/v2-persistence.md`](../v2-persistence.md).
 
 ## Order of operations
 
 ```
-provision DB → run explicit migration command → validate schema head
-→ start service → verify live → verify ready
+backup (if any prior data) → provision roles + DB → run explicit migration command
+→ validate schema head → verify legacy artifacts → start service → verify live → verify ready
 ```
 
 Never reorder. The service never migrates by itself.
@@ -20,41 +23,68 @@ Never reorder. The service never migrates by itself.
 ### 0. Prerequisites
 
 - Build artifact from `npm run build` (`dist/` includes
-  `dist/infrastructure/persistence/postgres/migrations/*.cjs`), or the Docker image.
+  `dist/infrastructure/persistence/postgres/migrations/*.cjs`), or the
+  Docker image.
 - Secrets in the host's secret store, never in shell history:
-  `DATABASE_URL`, `MIGRATION_DATABASE_URL` (optional), `SERVICE_AUTH_TOKEN`
-  (≥ 16 chars), `QUOTE_DOCUMENT_REF_SECRET` (≥ 32 chars).
-- A persistent volume for `QUOTE_DOCUMENT_STORAGE_ROOT`, owned by the service user.
-- `QUOTE_EMAIL_PROVIDER=disabled` unless email has been approved separately.
-- `QUOTE_EXPIRATION_SCHEDULER_ENABLED=false` and
-  `QUOTE_DOCUMENT_CLEANUP_ENABLED=false` unless approved separately.
+  - `MIGRATION_DATABASE_URL`: migration principal;
+  - `DATABASE_URL`: runtime login;
+  - `SERVICE_AUTH_TOKEN`: at least 16 characters.
+- PostgreSQL ≥ 15.
+- A persistent volume for `QUOTE_DOCUMENT_STORAGE_ROOT`, owned by the
+  service user.
+- `QUOTE_EMAIL_PROVIDER=disabled`. Email delivery is not wired until R1.6.
 
-### 1. Provision the database
+### 0b. Backup first (any database or document root that may hold V1 data)
 
-Create the database and the role(s). Until R1.4 introduces separate grants,
-the runtime and migration roles may be the same role. If they differ, set
-`MIGRATION_DATABASE_URL` for steps 2–3 only.
+`000007` migrates V1 data one-way and drops the V1 tables. Before migrating:
 
-### 2. Run the migration command (explicit DDL)
+1. Back up the database (`pg_dump -Fc`) and the document root.
+2. Verify the restore in an isolated environment.
 
-```bash
-NODE_ENV=production node dist/scripts/migrate.js up      # npm run db:migrate:runtime
+If anything below fails, the recovery is: **restore → fix → migrate forward.**
+Never use `down` in production.
+
+### 1. Provision roles and the database (DBA, out of band)
+
+```sql
+create role quote_runtime nologin;                                  -- privilege group
+create role quote_migrator login password :'migrator_secret';       -- migration principal
+create role quote_app login password :'app_secret' in role quote_runtime;  -- runtime login
+create database pesaschile_quote_service owner quote_migrator;
 ```
 
-Expected output: `{"status":"ok","direction":"up"}` and exit 0. Any other
-exit: stop and investigate. Do not start the service.
+The migration principal owns the database. The runtime login owns nothing
+and receives only DML through `quote_runtime`.
+
+### 2. Run the migration command (explicit DDL, migration principal)
+
+```bash
+MIGRATION_DATABASE_URL=… node dist/scripts/migrate.js up     # npm run db:migrate:runtime
+```
+
+Expected output: `{"status":"ok","direction":"up"}` and exit 0.
+
+| Failure | Meaning | Action |
+|---|---|---|
+| `V1 -> V2 migration exceptions: N row(s) …` | V1 data violates the frozen mapping; **nothing was changed** | Resolve the listed `<quote_id> <code>` rows on a restored copy, or by an approved data fix, then rerun |
+| `MigrationIntegrityError` | An applied migration differs from this build's file | **Stop.** Wrong build or tampered database |
+| `MigrationManifestError` | The packaged migrations differ from the build manifest | **Stop.** Broken package |
+
+If `quote_runtime` was created after migrating, run
+`node dist/scripts/apply-runtime-grants.js` (`npm run db:grants:runtime`)
+as the migration principal.
 
 ### 3. Validate the schema head
 
 ```bash
-node dist/scripts/db-check.js                             # npm run db:check:runtime
+MIGRATION_DATABASE_URL=… node dist/scripts/db-check.js       # npm run db:check:runtime
 ```
 
 Proceed only if the exit code is 0 and the output shows:
 
 ```json
 { "status": "ok", "database": "ok",
-  "schema": { "state": "READY", "expectedHead": "000005_quote_line_shipping", "actualHead": "000005_quote_line_shipping" } }
+  "schema": { "state": "READY", "expectedHead": "000008_quote_v2_runtime_grants", "actualHead": "000008_quote_v2_runtime_grants" } }
 ```
 
 | Output | Meaning | Action |
@@ -62,7 +92,20 @@ Proceed only if the exit code is 0 and the output shows:
 | `database: unreachable/timeout` | network / host | fix connectivity, rerun step 3 |
 | `database: authentication` | credentials | fix secret, rerun step 3 |
 | `SCHEMA_MISSING` / `SCHEMA_BEHIND` | not migrated | rerun step 2 |
+| `SCHEMA_INTEGRITY_UNVERIFIED` | checksum record missing | rerun step 2 (backfills records) |
+| `SCHEMA_INTEGRITY_MISMATCH` | applied migration bytes differ | **stop** |
 | `SCHEMA_AHEAD_OR_UNKNOWN` | DB migrated by newer or foreign code | **stop**. Do not start this build against it |
+
+### 3b. Verify preserved legacy artifacts (only if V1 data was migrated)
+
+```bash
+MIGRATION_DATABASE_URL=… QUOTE_DOCUMENT_STORAGE_ROOT=… \
+  node dist/scripts/verify-document-artifacts.js --record-byte-length   # npm run documents:verify:runtime
+```
+
+Exit 0: every manifest's file matches its SHA-256. Exit 2 lists `missing` or
+`hash_mismatch` documents (ids only). These are data exceptions: restore the
+file from backup. **Never regenerate a historical PDF.**
 
 ### 4. Start the service
 
@@ -76,8 +119,8 @@ Supervisor settings (PM2 example):
 
 - `kill_timeout` must exceed `APP_SHUTDOWN_TIMEOUT_MS` (default 10 s).
 - Restarts are for class A exits only (bad config, bad package, port taken)
-  and are capped. **Alert on any restart.** A dependency outage never
-  causes one.
+  and are capped. **Alert on any restart.** A dependency outage never causes
+  one.
 - Liveness checks use `/health/live`. Never use `/health/ready` for restart
   decisions.
 
@@ -88,7 +131,8 @@ curl -fsS http://127.0.0.1:3000/health/live         # {"status":"live"}
 ```
 
 If this fails, the process is not running or not bound. Check for
-`runtime.config_invalid`, `runtime.init_failed` or `runtime.bind_failed` in the logs.
+`runtime.config_invalid`, `runtime.init_failed` (for example a packaged
+migration manifest mismatch) or `runtime.bind_failed` in the logs.
 
 ### 6. Verify ready
 
@@ -108,12 +152,12 @@ Only route traffic once ready returns `200`.
 
 - **Database outage:** expect `dependency.down` → `runtime.unready` in the
   logs. Callers receive `503 dependency_unavailable` with `Retry-After: 5`.
-  Do not restart the service. When the DB returns, expect
+  Do not restart the service. When the database returns, expect
   `dependency.recovered` → `runtime.ready`.
-- **Deploying a build with a new migration (R1.4+):** run steps 2–3 with the
-  new build *before* switching processes. An old process seeing a newer
-  schema reports `SCHEMA_AHEAD_OR_UNKNOWN` and goes not ready, so plan the
-  cut-over accordingly.
+- **Deploying a build with a new migration:** run steps 2–3 with the new
+  build *before* switching processes. An old process seeing a newer schema
+  reports `SCHEMA_AHEAD_OR_UNKNOWN` and goes not ready, so plan the cut-over
+  accordingly.
 - **Shutdown:** `SIGTERM` drains within `APP_SHUTDOWN_TIMEOUT_MS`. Look for
   `shutdown.completed` with `outcome: "completed"`. `timed_out` means a
   request or job was cut off.
