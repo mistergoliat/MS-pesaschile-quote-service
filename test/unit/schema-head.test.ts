@@ -105,7 +105,7 @@ describe("loadMigrationManifest", () => {
     const manifest = loadMigrationManifest();
 
     expect(manifest.expectedHead).toBe(EXPECTED_SCHEMA_HEAD);
-    expect(EXPECTED_SCHEMA_HEAD).toBe("000008_quote_v2_runtime_grants");
+    expect(EXPECTED_SCHEMA_HEAD).toBe("000009_quote_snapshot_child_insert_guard");
     expect(manifest.names).toEqual(
       fs
         .readdirSync(MIGRATIONS_DIRECTORY)

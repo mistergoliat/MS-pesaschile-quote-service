@@ -15,5 +15,6 @@ export const MIGRATION_MANIFEST: readonly MigrationManifestEntry[] = [
   { name: "000005_quote_line_shipping", sha256: "1d142aa26edec4127bd7d81c03f14d149456852c22d2c7dd119f0e6130cec12c" },
   { name: "000006_migration_integrity", sha256: "b365fc8bbb105e6efa970a647a83c37a8c11486e5da3cfdb3d88bb5097c15258" },
   { name: "000007_quote_v2_persistence", sha256: "b9ed8d0736dc77b2c6542b6252a1b8962b8d57673a02869af16fd5789b5d71ca" },
-  { name: "000008_quote_v2_runtime_grants", sha256: "d67ec4e0e5ddccd01510108318d5baa4db951ffc02acf080561e27087c4c3162" }
+  { name: "000008_quote_v2_runtime_grants", sha256: "d67ec4e0e5ddccd01510108318d5baa4db951ffc02acf080561e27087c4c3162" },
+  { name: "000009_quote_snapshot_child_insert_guard", sha256: "1da7c8e97ba8ffb8710de1b5f932eb496823411dae574f5490f5477e2b7fd304" }
 ];

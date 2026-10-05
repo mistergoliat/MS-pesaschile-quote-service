@@ -70,7 +70,7 @@ credentials: [docs/principals.md](docs/principals.md); the V1 global
 V2 schema (`quote_service`), the one-way V1 → V2 data migration, migration
 checksums, the migration/runtime role separation and the recovery model:
 [docs/v2-persistence.md](docs/v2-persistence.md). Schema head:
-`000008_quote_v2_runtime_grants`.
+`000009_quote_snapshot_child_insert_guard`.
 
 ## Document rendering and branding
 

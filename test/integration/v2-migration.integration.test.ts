@@ -110,7 +110,7 @@ describe("V2 migration: fresh database (A, Q, S)", () => {
 
     expect((await probeSchema(handle.connectionString)).schema).toEqual({
       state: "READY",
-      actualHead: "000008_quote_v2_runtime_grants"
+      actualHead: "000009_quote_snapshot_child_insert_guard"
     });
     const checksums = await rows<{ name: string; sha256: string; provenance: string }>(
       client,

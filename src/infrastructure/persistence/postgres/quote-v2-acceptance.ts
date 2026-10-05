@@ -18,7 +18,12 @@ import {
   toFieldErrors,
   type CreateQuoteRequest
 } from "../../../application/quote-v2/create-quote-request";
-import { formatInstant, OverrideOutOfRangeError, resolveValidity } from "../../../application/quote-v2/validity";
+import {
+  formatInstant,
+  OverrideOutOfRangeError,
+  resolveValidity,
+  type ResolvedValidity
+} from "../../../application/quote-v2/validity";
 import { PostgresIdempotencyBindingStore } from "./idempotency-binding-store";
 import type { PostgresDatabase } from "./postgres";
 
@@ -333,6 +338,39 @@ async function appendAudit(
   );
 }
 
+/** Transition `draft → issuing` that freezes number, issuance and validity; version unchanged (T4 commits at 1). */
+async function freezeIssue(
+  client: PoolClient,
+  quoteId: string,
+  { issuedAt, quoteNumber, validity }: { issuedAt: Date; quoteNumber: string; validity: ResolvedValidity },
+  operationId: string
+): Promise<void> {
+  await client.query(
+    `update quote_service.quotes
+     set status = 'issuing', quote_number = $2, issued_at = $3, issuer_profile_id = $4, current_operation_id = $5,
+         validity_source = $6, validity_policy_id = $7, validity_issuer_zone = $8, validity_tzdb_version = $9,
+         validity_issue_local_date = $10, validity_through_local_date = $11, valid_until_exclusive = $12,
+         validity_override_principal_id = $13, validity_override_reason_code = $14, updated_at = $3
+     where quote_id = $1 and status = 'draft'`,
+    [
+      quoteId,
+      quoteNumber,
+      issuedAt,
+      ISSUER_PROFILE_ID,
+      operationId,
+      validity.source,
+      validity.policyId,
+      validity.issuerZone,
+      validity.tzdbVersion,
+      validity.issueLocalDate,
+      validity.validThroughLocalDate,
+      validity.validUntilExclusive,
+      validity.override?.principalId ?? null,
+      validity.override?.reasonCode ?? null
+    ]
+  );
+}
+
 function parseRequest(body: unknown): CreateQuoteRequest {
   const parsed = createQuoteRequestSchema.safeParse(body);
 
@@ -451,18 +489,15 @@ export async function acceptCreateAndIssue(database: PostgresDatabase, input: Ac
     const operationId = crypto.randomUUID();
     const correlation = request.externalCorrelation;
 
+    // Snapshot first (as a draft row, invisible outside this transaction), then freeze: snapshot
+    // children are insertable only under a draft (migration 000009). Commits as issuing v1.
     await client.query(
       `insert into quote_service.quotes (
-         quote_id, status, version, quote_number, currency, source_system, external_reference_type, external_reference,
-         customer, net_amount, tax_amount, gross_amount, exempt_net_amount, issued_at, issuer_profile_id,
-         current_operation_id, validity_source, validity_policy_id, validity_issuer_zone, validity_tzdb_version,
-         validity_issue_local_date, validity_through_local_date, valid_until_exclusive, validity_override_principal_id,
-         validity_override_reason_code, created_by_principal_id, created_at, updated_at
-       ) values ($1, 'issuing', 1, $2, 'CLP', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
-                 $19, $20, $21, $22, $23, $11, $11)`,
+         quote_id, status, version, currency, source_system, external_reference_type, external_reference,
+         customer, net_amount, tax_amount, gross_amount, exempt_net_amount, created_by_principal_id, created_at, updated_at
+       ) values ($1, 'draft', 1, 'CLP', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)`,
       [
         quoteId,
-        quoteNumber,
         correlation.sourceSystem,
         correlation.externalReferenceType ?? null,
         correlation.externalReference ?? null,
@@ -471,19 +506,8 @@ export async function acceptCreateAndIssue(database: PostgresDatabase, input: Ac
         totals.tax.toString(),
         totals.gross.toString(),
         totals.exemptNet.toString(),
-        issuedAt,
-        ISSUER_PROFILE_ID,
-        operationId,
-        validity.source,
-        validity.policyId,
-        validity.issuerZone,
-        validity.tzdbVersion,
-        validity.issueLocalDate,
-        validity.validThroughLocalDate,
-        validity.validUntilExclusive,
-        validity.override?.principalId ?? null,
-        validity.override?.reasonCode ?? null,
-        input.principal.principalId
+        input.principal.principalId,
+        issuedAt
       ]
     );
 
@@ -549,6 +573,8 @@ export async function acceptCreateAndIssue(database: PostgresDatabase, input: Ac
         ]
       );
     }
+
+    await freezeIssue(client, quoteId, { issuedAt, quoteNumber, validity }, operationId);
 
     // The operation is created last so it can carry the snapshot hash read back
     // from what was actually persisted (quotes.current_operation_id is deferred).

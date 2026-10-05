@@ -759,7 +759,7 @@ async function runSmoke() {
       .filter((value) => value.length > 0);
     state.summary.appliedMigrations = appliedMigrations;
     assert(
-      appliedMigrations.at(-1) === "000008_quote_v2_runtime_grants",
+      appliedMigrations.at(-1) === "000009_quote_snapshot_child_insert_guard",
       `Unexpected migration head: ${appliedMigrations.join(", ")}`
     );
     const checksums = (await queryDatabase("select count(*) from quote_service.schema_migration_checksums;")).trim();
@@ -799,7 +799,7 @@ async function runSmoke() {
     const details = await fetchJson("/health/dependencies", { headers: { Authorization: authHeader }, timeoutMs: 5_000 });
     assert(details.status === 200, `Expected 200, got ${details.status}`);
     assert(
-      details.body.schema.expectedHead === "000008_quote_v2_runtime_grants" &&
+      details.body.schema.expectedHead === "000009_quote_snapshot_child_insert_guard" &&
         details.body.schema.actualHead === details.body.schema.expectedHead,
       `Unexpected schema head: ${JSON.stringify(details.body.schema)}`
     );

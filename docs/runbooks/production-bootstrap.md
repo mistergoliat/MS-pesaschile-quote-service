@@ -86,7 +86,7 @@ Proceed only if the exit code is 0 and the output shows:
 
 ```json
 { "status": "ok", "database": "ok",
-  "schema": { "state": "READY", "expectedHead": "000008_quote_v2_runtime_grants", "actualHead": "000008_quote_v2_runtime_grants" } }
+  "schema": { "state": "READY", "expectedHead": "000009_quote_snapshot_child_insert_guard", "actualHead": "000009_quote_snapshot_child_insert_guard" } }
 ```
 
 | Output | Meaning | Action |

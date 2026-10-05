@@ -222,7 +222,7 @@ Never logged by these paths: credentials, DSNs, auth tokens, customer PII.
 
 - `EXPECTED_SCHEMA_HEAD` is the last entry of the generated migration
   manifest (`migration-manifest.ts`, names plus SHA-256), currently
-  `000008_quote_v2_runtime_grants`.
+  `000009_quote_snapshot_child_insert_guard`.
 - At startup the packaged migration files must equal the manifest exactly:
   names, order and checksums. This catches a build that forgot to copy
   migrations, an edited historical migration, or a code/migration mismatch.

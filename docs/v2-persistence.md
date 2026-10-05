@@ -33,8 +33,9 @@ and the static validator (446/446 checks) pins all three.
 | `000006_migration_integrity` | `schema_migration_checksums` table; `reject_mutation()` trigger function | yes (local only) |
 | `000007_quote_v2_persistence` | V2 schema plus the one-way V1 → V2 data migration; integrity triggers | **no** (`down = false`) |
 | `000008_quote_v2_runtime_grants` | `apply_runtime_grants()` and runtime privilege grants | yes (local only) |
+| `000009_quote_snapshot_child_insert_guard` | **R1.4 erratum (found in R1.5A.3):** `quote_lines` / `quote_shipping` INSERT allowed only while the parent quote is `draft` (000007 guarded only UPDATE/DELETE) | yes (local only) |
 
-**Expected head:** `000008_quote_v2_runtime_grants`.
+**Expected head:** `000009_quote_snapshot_child_insert_guard`.
 
 All pending migrations run in **one transaction**. The migrator sets
 `singleTransaction: true` explicitly, because node-pg-migrate's programmatic

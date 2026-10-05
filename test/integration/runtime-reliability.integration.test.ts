@@ -235,7 +235,7 @@ describe("runtime reliability: schema head", () => {
     expect(await readyStatus(harness)).toBe(503);
     expect((await harness.get("/probe/quotes", true)).body).toMatchObject({ error: { code: "schema_not_ready" } });
     expect(harness.context.dependencyMonitor.details().schema.state).toBe("SCHEMA_BEHIND");
-    expect((await schemaBody(harness)).schema.actualHead).toBe("000007_quote_v2_persistence");
+    expect((await schemaBody(harness)).schema.actualHead).toBe("000008_quote_v2_runtime_grants");
 
     await runMigrations({ databaseUrl: harness.database.connectionString, direction: "up" });
     await waitFor(async () => (await readyStatus(harness)) === 200, 10_000);
