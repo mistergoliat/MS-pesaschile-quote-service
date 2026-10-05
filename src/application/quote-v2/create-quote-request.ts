@@ -121,27 +121,62 @@ const shippingInput = z.strictObject({
   sourceQuote: z.strictObject({ sourceSystem: systemCode, reference: opaqueReference.optional(), asOf: inputInstant }).optional()
 });
 
+const externalCorrelation = z
+  .strictObject({
+    sourceSystem: systemCode,
+    externalReferenceType: systemCode.optional(),
+    externalReference: opaqueReference.optional()
+  })
+  .refine((value) => (value.externalReferenceType === undefined) === (value.externalReference === undefined), {
+    params: { code: "required" },
+    message: "externalReferenceType and externalReference are given together"
+  });
+const draftLines = z.array(lineInput).max(100);
+const expectedTotals = z.strictObject({ net: clpAmount, tax: clpAmount, gross: clpAmount });
+const validityOverride = z.strictObject({ validThroughLocalDate: localDate, reasonCode, note: text(500).optional() });
+const expectedVersion = z.number().int().min(1);
+
 export const createQuoteRequestSchema = z.strictObject({
-  externalCorrelation: z
-    .strictObject({
-      sourceSystem: systemCode,
-      externalReferenceType: systemCode.optional(),
-      externalReference: opaqueReference.optional()
-    })
-    .refine((value) => (value.externalReferenceType === undefined) === (value.externalReference === undefined), {
-      params: { code: "required" },
-      message: "externalReferenceType and externalReference are given together"
-    }),
+  externalCorrelation,
   customer,
-  lines: z.array(lineInput).min(1).max(100),
+  lines: draftLines.min(1),
   shipping: shippingInput.optional(),
-  expectedTotals: z.strictObject({ net: clpAmount, tax: clpAmount, gross: clpAmount }).optional(),
-  validityOverride: z
-    .strictObject({ validThroughLocalDate: localDate, reasonCode, note: text(500).optional() })
-    .optional()
+  expectedTotals: expectedTotals.optional(),
+  validityOverride: validityOverride.optional()
+});
+
+/** `CreateDraftRequest`: like create-and-issue but zero lines allowed, no totals or validity. */
+export const createDraftRequestSchema = z.strictObject({
+  externalCorrelation,
+  customer,
+  lines: draftLines,
+  shipping: shippingInput.optional()
+});
+
+/** `UpdateDraftRequest`: each present member replaces the stored one; `shipping: null` removes it. */
+export const updateDraftRequestSchema = z
+  .strictObject({
+    expectedVersion,
+    externalCorrelation: externalCorrelation.optional(),
+    customer: customer.optional(),
+    lines: draftLines.optional(),
+    shipping: shippingInput.nullable().optional()
+  })
+  .refine((value) => Object.keys(value).length >= 2, {
+    params: { code: "required" },
+    message: "at least one member to replace is required"
+  });
+
+export const issueDraftRequestSchema = z.strictObject({
+  expectedVersion,
+  expectedTotals: expectedTotals.optional(),
+  validityOverride: validityOverride.optional()
 });
 
 export type CreateQuoteRequest = z.infer<typeof createQuoteRequestSchema>;
+export type CreateDraftRequest = z.infer<typeof createDraftRequestSchema>;
+export type UpdateDraftRequest = z.infer<typeof updateDraftRequestSchema>;
+export type IssueDraftRequest = z.infer<typeof issueDraftRequestSchema>;
 export type LineInput = CreateQuoteRequest["lines"][number];
 export type ShippingInput = NonNullable<CreateQuoteRequest["shipping"]>;
 
@@ -176,14 +211,24 @@ export function toFieldErrors(error: z.ZodError): FieldError[] {
   });
 }
 
-/** 422 rejection of a create request; nothing is committed. */
+/** Contract HTTP status of each command rejection code (Domain §12). */
+export const REJECTION_STATUS = {
+  validation_error: 422,
+  arithmetic_mismatch: 422,
+  quote_not_found: 404,
+  invalid_state_transition: 409,
+  version_conflict: 409,
+  operation_in_progress: 409
+} as const;
+
+/** 4xx rejection of a quote command; the transaction rolls back and nothing is bound. */
 export class QuoteRequestRejected extends Error {
   override readonly name = "QuoteRequestRejected";
 
   constructor(
-    readonly code: "validation_error" | "arithmetic_mismatch",
+    readonly code: keyof typeof REJECTION_STATUS,
     message: string,
-    readonly details: Record<string, unknown>
+    readonly details?: Record<string, unknown>
   ) {
     super(message);
   }

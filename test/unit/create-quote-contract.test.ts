@@ -7,9 +7,12 @@ import { describe, expect, it } from "vitest";
 import { canonicalizeJcs, sha256Jcs } from "../../src/application/quote/canonical-json";
 import { chargeAmounts, sumTotals } from "../../src/application/quote-v2/arithmetic";
 import {
+  createDraftRequestSchema,
   createQuoteRequestSchema,
   isValidRut,
-  toFieldErrors
+  issueDraftRequestSchema,
+  toFieldErrors,
+  updateDraftRequestSchema
 } from "../../src/application/quote-v2/create-quote-request";
 
 const example = (name: string): Record<string, unknown> =>
@@ -137,6 +140,31 @@ describe("closed V2 request schema (openapi CreateQuoteRequest)", () => {
       ])
     );
     expect(toFieldErrors(empty.error!)).toEqual([expect.objectContaining({ path: "/lines", code: "lines_required" })]);
+  });
+});
+
+describe("closed draft request schemas (openapi CreateDraftRequest, UpdateDraftRequest, IssueDraftRequest)", () => {
+  it("accept the frozen manual-flow examples", () => {
+    expect(createDraftRequestSchema.safeParse(example("draft-create.request.json")).success).toBe(true);
+    expect(updateDraftRequestSchema.safeParse(example("draft-update.request.json")).success).toBe(true);
+    expect(issueDraftRequestSchema.safeParse(example("issue.request.json")).success).toBe(true);
+  });
+
+  it("follow the frozen member rules", () => {
+    const draft = example("draft-create.request.json");
+    // Drafts may have zero lines and never carry issue-time members.
+    expect(createDraftRequestSchema.safeParse({ ...draft, lines: [] }).success).toBe(true);
+    expect(createDraftRequestSchema.safeParse({ ...draft, expectedTotals: { net: 0, tax: 0, gross: 0 } }).success).toBe(false);
+    expect(createDraftRequestSchema.safeParse({ ...draft, validityOverride: { validThroughLocalDate: "2026-01-01", reasonCode: "ab" } }).success).toBe(false);
+    // Update: expectedVersion plus at least one member; shipping may be null; closed.
+    expect(updateDraftRequestSchema.safeParse({ expectedVersion: 1, shipping: null }).success).toBe(true);
+    expect(updateDraftRequestSchema.safeParse({ expectedVersion: 1 }).success).toBe(false);
+    expect(updateDraftRequestSchema.safeParse({ lines: [] }).success).toBe(false);
+    expect(updateDraftRequestSchema.safeParse({ expectedVersion: 1, expectedTotals: { net: 0, tax: 0, gross: 0 } }).success).toBe(false);
+    expect(updateDraftRequestSchema.safeParse({ expectedVersion: 1.5, lines: [] }).success).toBe(false);
+    // Issue: no commercial members.
+    expect(issueDraftRequestSchema.safeParse({ expectedVersion: 2, lines: [] }).success).toBe(false);
+    expect(issueDraftRequestSchema.safeParse({}).success).toBe(false);
   });
 });
 

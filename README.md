@@ -8,7 +8,7 @@ Owner service for PesasChile commercial quotes, being rebuilt on the frozen
 | R1.2 V2 contract | frozen (amendments A1–A3 applied in R1.4) |
 | R1.3 runtime reliability and health | done: [docs/runtime-lifecycle.md](docs/runtime-lifecycle.md) |
 | R1.4 V2 schema and migration foundation | done: [docs/v2-persistence.md](docs/v2-persistence.md) |
-| R1.5 V2 API, idempotency, durable issuance | in progress: principal registry (A.1) and transactional acceptance (A.2) done |
+| R1.5 V2 API, idempotency, durable issuance | in progress: principal registry (A.1), transactional acceptance (A.2) and draft workflow (A.3) done |
 
 **Current runtime:** health endpoints and the readiness-gated business
 context. The V1 API (`/v1/*`), its repositories and workers were retired in
@@ -59,6 +59,9 @@ curl -i localhost:3000/health/ready
 | `GET /health/dependencies` | principal with `service:health:dependencies` | sanitized dependency and worker detail (contract `DependencyHealth`) |
 | `GET /health` | none | deprecated liveness alias |
 | `POST /v2/quotes` | `quotes:create` (+ `quotes:validity:override` for `validityOverride`) | transactional create-and-issue **acceptance**: one quote, number, validity, pending issuance operation, binding and audit in one transaction → `202` `issuing`. Replays return the same quote; a changed body under the same key → `409`. No PDF yet (R1.5B) |
+| `POST /v2/quotes/drafts` | `quotes:draft:write` | editable draft, version 1, owner totals; no number, validity, operation or document → `201` |
+| `PATCH /v2/quotes/{quoteId}/draft` | `quotes:draft:write` | replaces the present top-level members (`shipping: null` removes), recomputes totals, version + 1, fenced by `expectedVersion` (`409 version_conflict`) → `200` |
+| `POST /v2/quotes/{quoteId}/issue` | `quotes:issue` (+ `quotes:validity:override`) | same acceptance as `POST /v2/quotes` applied to the draft at `expectedVersion`: same `quoteId`, number, validity, pending operation → `202` `issuing`. No PDF yet (R1.5B) |
 
 Semantics, failure policy and configuration:
 [docs/runtime-lifecycle.md](docs/runtime-lifecycle.md). Principals, scopes and

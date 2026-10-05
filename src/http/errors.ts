@@ -1,7 +1,7 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 
-import { QuoteRequestRejected } from "../application/quote-v2/create-quote-request";
+import { QuoteRequestRejected, REJECTION_STATUS } from "../application/quote-v2/create-quote-request";
 import { CommitOutcomeUnknownError } from "../infrastructure/persistence/postgres/postgres";
 import {
   isDatabaseUnavailableError,
@@ -19,6 +19,10 @@ type HttpErrorCode =
   | "validation_error"
   | "arithmetic_mismatch"
   | "idempotency_key_conflict"
+  | "quote_not_found"
+  | "version_conflict"
+  | "invalid_state_transition"
+  | "operation_in_progress"
   | "payload_too_large"
   | "dependency_unavailable"
   | "schema_not_ready";
@@ -85,7 +89,7 @@ export function toHttpError(error: unknown): HttpError {
   }
 
   if (error instanceof QuoteRequestRejected) {
-    return new HttpError({ statusCode: 422, code: error.code, message: error.message, details: error.details });
+    return new HttpError({ statusCode: REJECTION_STATUS[error.code], code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) });
   }
 
   const fastifyCode =
