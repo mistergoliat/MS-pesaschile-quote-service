@@ -40,7 +40,8 @@ w('customer.person.json', person);
 w('customer.company.json', company);
 
 // ---- transactional flow ----
-const corr = { sourceSystem: 'sales-integration', externalReferenceType: 'conversation', externalReference: 'conv-7f3a91c2', correlationId: 'req-4b1e9d0a-77' };
+const corr = { sourceSystem: 'sales-integration', externalReferenceType: 'conversation', externalReference: 'conv-7f3a91c2' };
+const requestCorrelationId = 'req-4b1e9d0a-77'; // X-Correlation-Id header of the create request (amendment A3)
 const lineInputs = [
   { kind: 'product', item: { sourceSystem: 'pesaschile-catalog', productRef: '1042', variantRef: '3317', sku: 'MH-10', description: 'Mancuerna hexagonal 10 kg', attributes: [{ name: 'Peso', value: '10 kg' }] }, quantity: { value: '2', unit: 'unit' }, unitPrice: { amount: 24990, taxBasis: 'included', taxRate: '0.19' }, pricingProvenance: { sourceSystem: 'pesaschile-catalog', reference: 'price-engine-v2', asOf: '2026-10-04T17:58:12Z' } },
   { kind: 'product', item: { sourceSystem: 'pesaschile-catalog', productRef: '2210', sku: 'BP-200', description: 'Banco plano reforzado' }, quantity: { value: '1', unit: 'unit' }, unitPrice: { amount: 89990, taxBasis: 'included', taxRate: '0.19' }, pricingProvenance: { sourceSystem: 'pesaschile-catalog', reference: 'price-engine-v2', asOf: '2026-10-04T17:58:12Z' } },
@@ -74,7 +75,7 @@ w('quote-list.response.json', { items: [issuedQuote], nextCursor: null });
 
 // ---- manual flow ----
 const draftId = 'c41a7e09-2b6d-4f3e-8a1c-9d5e0b7f2a44', dOp = 'e7b2d4f1-9c3a-4e5b-a6d8-1f0c3b5e9a72';
-const draftCorr = { sourceSystem: 'backoffice', externalReferenceType: 'case', externalReference: 'CASE-2026-0912', correlationId: 'bo-req-5521' };
+const draftCorr = { sourceSystem: 'backoffice', externalReferenceType: 'case', externalReference: 'CASE-2026-0912' };
 const draftLinesIn = [
   { kind: 'product', item: { sourceSystem: 'pesaschile-catalog', productRef: '3301', variantRef: '8810', sku: 'PG-15', description: 'Piso de goma 15 mm', attributes: [{ name: 'Ancho', value: '1 m' }] }, quantity: { value: '12.5', unit: 'm' }, unitPrice: { amount: 18990, taxBasis: 'included', taxRate: '0.19' } },
   { kind: 'service', item: { sourceSystem: 'backoffice', description: 'Servicio exento (ejemplo de cálculo)' }, quantity: { value: '1', unit: 'unit' }, unitPrice: { amount: 35000, taxBasis: 'exempt' } },
@@ -99,13 +100,12 @@ w('email-delivery.request.json', { recipient: { email: 'camila.rojas@example.com
 w('delivery.response.json', { deliveryId: '7d2f9b1e-3a4c-4e8d-9f0a-6b5c2e1d8a90', quoteId, channel: 'email', status: 'pending', recipientMasked: 'ca***@example.com', documentSha256: pdfSha, requestedAt: '2026-10-04T18:05:00Z', sentAt: null, attempts: { count: 0, lastAttemptAt: null, lastErrorCode: null } });
 
 // ---- idempotency ----
-const { correlationId: _c, ...corrForFp } = corr;
-const fp = sha(jcs({ operation: 'quote.create_and_issue', pathParameters: {}, body: { ...createReq, externalCorrelation: corrForFp } }));
+const fp = sha(jcs({ operation: 'quote.create_and_issue', pathParameters: {}, body: createReq }));
 w('idempotency-lookup.bound.json', { operation: 'quote.create_and_issue', state: 'bound', binding: { boundAt: issuedAt, requestFingerprint: fp, resourceType: 'quote', quoteId, operationId: opId, deliveryId: null, quoteStatus: 'issued' } });
 w('idempotency-lookup.not-found.json', { operation: 'quote.create_and_issue', state: 'not_found', binding: null });
 w('audit.response.json', { items: [
-  { eventId: 'b1e2c3d4-0001-4a5b-8c6d-7e8f9a0b1c2d', sequence: 1, type: 'quote.issue.accepted', occurredAt: issuedAt, principalId: 'sales-integration', operationId: opId, correlationId: corr.correlationId, idempotencyKeyHash: sha('example-idempotency-key'), fromStatus: null, toStatus: 'issuing', data: { lineCount: 2, hasShipping: true, gross: tot.gross, validityPolicyId: 'cl-retail-5-calendar-days-v1', quoteNumber: 'PC-000137' } },
-  { eventId: 'b1e2c3d4-0002-4a5b-8c6d-7e8f9a0b1c2d', sequence: 2, type: 'quote.issued', occurredAt: '2026-10-04T18:00:01.412Z', principalId: 'system', operationId: opId, correlationId: corr.correlationId, idempotencyKeyHash: null, fromStatus: 'issuing', toStatus: 'issued', data: { pdfSha256: pdfSha, rendererVersion: 'quote-pdf-v4', templateVersion: 'quote-template-v4', attempts: 1 } },
+  { eventId: 'b1e2c3d4-0001-4a5b-8c6d-7e8f9a0b1c2d', sequence: 1, type: 'quote.issue.accepted', occurredAt: issuedAt, principalId: 'sales-integration', operationId: opId, correlationId: requestCorrelationId, idempotencyKeyHash: sha('example-idempotency-key'), fromStatus: null, toStatus: 'issuing', data: { lineCount: 2, hasShipping: true, gross: tot.gross, validityPolicyId: 'cl-retail-5-calendar-days-v1', quoteNumber: 'PC-000137' } },
+  { eventId: 'b1e2c3d4-0002-4a5b-8c6d-7e8f9a0b1c2d', sequence: 2, type: 'quote.issued', occurredAt: '2026-10-04T18:00:01.412Z', principalId: 'system', operationId: opId, correlationId: requestCorrelationId, idempotencyKeyHash: null, fromStatus: 'issuing', toStatus: 'issued', data: { pdfSha256: pdfSha, rendererVersion: 'quote-pdf-v4', templateVersion: 'quote-template-v4', attempts: 1 } },
 ], nextCursor: null });
 
 // ---- errors ----
@@ -122,6 +122,6 @@ w('error.delivery-recipient-missing.json', err('delivery_recipient_missing', 'No
 // ---- health ----
 w('health-live.response.json', { status: 'live' });
 w('health-ready.not-ready.json', { status: 'not_ready', checks: { database: 'fail', schema: 'fail', artifactStorage: 'ok', renderer: 'ok', lifecycle: 'ok' } });
-w('health-dependencies.response.json', { service: { name: 'pesaschile-quote-service', version: '2.0.0', startedAt: '2026-10-04T12:00:00Z' }, schema: { expectedHead: '000006_quote_v2', actualHead: null }, dependencies: { database: { status: 'down', failureCategory: 'unreachable', lastSuccessAt: null }, artifactStorage: { status: 'up', failureCategory: null, lastSuccessAt: '2026-10-04T12:00:30Z' }, renderer: { status: 'up', failureCategory: null, lastSuccessAt: '2026-10-04T12:00:01Z' }, emailProvider: { status: 'disabled', failureCategory: null, lastSuccessAt: null } }, workers: { issuance: { enabled: true, lastPollAt: '2026-10-04T12:00:30Z', queueDepth: 0, oldestPendingAgeSeconds: null }, expiry: { enabled: true, lastPollAt: '2026-10-04T12:00:30Z', queueDepth: 0, oldestPendingAgeSeconds: null }, emailDelivery: { enabled: false, lastPollAt: null, queueDepth: 0, oldestPendingAgeSeconds: null } } });
+w('health-dependencies.response.json', { service: { name: 'pesaschile-quote-service', version: '2.0.0', startedAt: '2026-10-04T12:00:00Z' }, schema: { expectedHead: '000008_quote_v2_runtime_grants', actualHead: null }, dependencies: { database: { status: 'down', failureCategory: 'unreachable', lastSuccessAt: null }, artifactStorage: { status: 'up', failureCategory: null, lastSuccessAt: '2026-10-04T12:00:30Z' }, renderer: { status: 'up', failureCategory: null, lastSuccessAt: '2026-10-04T12:00:01Z' }, emailProvider: { status: 'disabled', failureCategory: null, lastSuccessAt: null } }, workers: { issuance: { enabled: true, lastPollAt: '2026-10-04T12:00:30Z', queueDepth: 0, oldestPendingAgeSeconds: null }, expiry: { enabled: true, lastPollAt: '2026-10-04T12:00:30Z', queueDepth: 0, oldestPendingAgeSeconds: null }, emailDelivery: { enabled: false, lastPollAt: null, queueDepth: 0, oldestPendingAgeSeconds: null } } });
 
 console.log(JSON.stringify({ lines: lines.map((l) => l.amounts), shipping: shipping.amounts, tot, draftLines: dLines.map((l) => l.amounts), draftTot: totals(dLines, null), updLines: uLines.map((l) => l.amounts), uTot, rut: company.rut, fp }));

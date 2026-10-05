@@ -5,7 +5,7 @@
     "startedAt": "2026-10-04T12:00:00Z"
   },
   "schema": {
-    "expectedHead": "000006_quote_v2",
+    "expectedHead": "000008_quote_v2_runtime_grants",
     "actualHead": null
   },
   "dependencies": {

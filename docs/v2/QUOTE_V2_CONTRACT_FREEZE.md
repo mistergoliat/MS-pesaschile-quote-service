@@ -54,11 +54,11 @@ Each is normative and recorded where it lives.
 | C1 | Replays return the bound resource in its **current** state; status code is a function of state (`201/202` create-and-issue, `200/202` issue) plus `Idempotent-Replay: true` | Domain §4.3, Idempotency §3.2 |
 | C2 | Bindings have no `in_progress` state: binding and effect commit in one transaction; long work lives in the issuance operation | Idempotency §3.1 |
 | C3 | Evaluation order: size/parse → auth → scope → **binding lookup** → 404 → 422 → state → accept; 4xx/503 never bind | Domain §12 |
-| C4 | `externalCorrelation.correlationId` excluded from the fingerprint | Idempotency §2 |
+| C4 | ~~`externalCorrelation.correlationId` excluded from the fingerprint~~ — superseded by **A3** | Idempotency §2 |
 | C5 | Fingerprint = SHA-256 of RFC 8785 JCS of `{operation, pathParameters, body′}`; canonical decimal strings enforced by schema | Idempotency §2, OpenAPI |
 | C6 | Acceptance timeout 10 s (makes lookup `not_found` decidable) | Idempotency §3.3 |
-| C7 | Issuance retries every failure with fixed backoff until a deadline (default 24 h); at the deadline the quote becomes `cancelled` (`issuance_failed`) and the operation `failed` | State machine §6, Idempotency §4 |
-| C8 | Inline render budget `syncIssueBudgetMs` (default 5 s) decides `201` vs `202`; never `201` before manifest commit | Domain §4.1, Idempotency §4.4 |
+| C7 | Issuance retries every failure with fixed backoff until a deadline (default 24 h); at the deadline the operation becomes `failed` — ~~and the quote `cancelled` (`issuance_failed`)~~, superseded by **A1** | State machine §6, Idempotency §4 |
+| C8 | `201` vs `202` (`200` vs `202`) is decided by whether the manifest committed within the server's inline budget; never `201` before manifest commit. ~~Default 5 s as contract~~ — the budget value is not an API invariant, **A2** | Domain §4.1, Idempotency §4.4 |
 | C9 | `issuedAt` = acceptance commit instant (validity base, printed issue date); document time is `document.generatedAt` | Validity §1 |
 | C10 | Expiry is a read projection with `expiredAt = validUntilExclusive`; the job only materializes | State machine T9 |
 | C11 | Cancel allowed from `draft` and from `issued` before the validity boundary; rejected while `issuing` | State machine §3–4 |
@@ -72,6 +72,19 @@ Each is normative and recorded where it lives.
 | C19 | Tax rate in (0, 1]; zero-rated charges use `exempt` | Domain §6.2 |
 | C20 | V1 `shipping` lines migrate as `service` lines (no fabricated carrier/destination); pending V1 email deliveries migrate as `failed` so nothing is sent after cutover | Migration §1 |
 | C21 | No quote or binding is deleted until a retention policy is ratified | Idempotency §3.4 |
+
+## 3a. Contract amendments (R1.4)
+
+Applied before R1.4 implementation, by explicit owner decision. They correct
+contradictions with final R1.2 decisions; nothing else in the frozen
+contract was reinterpreted. **CONTRACT_FROZEN = YES** still holds for the
+amended set.
+
+| # | Amendment | Supersedes | Where |
+|---|---|---|---|
+| A1 | Quote lifecycle and issuance-operation lifecycle are separate. A technical issuance failure never cancels the quote: at the deadline the operation becomes `failed` (`issuance_deadline_exceeded`) and the quote stays `issuing` (number kept, no document). Resolution is an operator retry (new operation for the same quote, T10) or an explicit principal cancel (T11, allowed from `issuing` only when the current operation is `failed`). A quote may have several operations: at most one active, at most one `succeeded`. | C7 (quote part), T6 | State machine §1–§6, Idempotency §4, Domain §2/§8, OpenAPI `Operation`, `Cancellation`, cancel operation |
+| A2 | `201`/`202` (`200`/`202`) semantics stay frozen; the length of the synchronous wait (`syncIssueBudgetMs`, default 5000 ms) is an implementation parameter, not an API invariant. Clients handle both outcomes for every request. | C8 (5 s as contract) | Domain §4.1, Idempotency §4.2/§4.4, OpenAPI create/issue descriptions |
+| A3 | Request/trace correlation is distinct from durable business correlation. `externalCorrelation` = `{sourceSystem, externalReferenceType?, externalReference?}` (durable, in the body and the fingerprint). Trace correlation is the optional `X-Correlation-Id` header, recorded on audit events and logs only, never on the quote. The fingerprint is computed over the unmodified body. V1 `source_correlation_id` migrates to legacy data. | C4, C5 (`body′` exclusion) | Domain §11/§14, Idempotency §2/§3.1, OpenAPI conventions, `ExternalCorrelation`, `CorrelationId` parameter, `AuditEvent.correlationId`, examples, migration §1.1 |
 
 ## 4. Static validation performed
 
@@ -94,7 +107,7 @@ dependencies. Result on 2026-10-04: **437 checks, 437 passed, 0 failed.**
 | Examples validate against schemas | every `externalValue` example validated against its request/response schema; standalone customer/shipping/update/cancel/delivery examples validated; every example file covered | pass |
 | Negative cases | 19 invalid payloads rejected (caller `validUntil`, `opportunityId`, non-canonical/zero quantity, float amount, numeric tax rate, exempt with rate, included without rate, reference without type, empty lines, customer kinds, non-CL destination, shipping as string, RUT with dots, statuses `accepted`/`paid`, empty draft update) | pass |
 | State transitions match API operations | transition table states == `QuoteStatus`; transition endpoints exist; no expire/accept/paid/revision routes | pass |
-| Idempotency non-contradictory | every mutation requires `Idempotency-Key`; each operation name used exactly once; lookup fingerprint recomputed from the create example (JCS, `correlationId` removed) matches; replay/conflict/order rules cross-referenced (manual review) | pass |
+| Idempotency non-contradictory | every mutation requires `Idempotency-Key`; each operation name used exactly once; lookup fingerprint recomputed from the create example (JCS over the unmodified body, A3) matches; replay/conflict/order rules cross-referenced (manual review) | pass |
 | 201/202 explicit | create-and-issue has exactly `201`/`202`; issue has `200`/`202`; `201` example not `issuing`, `202` example `issuing` | pass |
 | Validity deterministic | all 7 table rows recomputed with IANA tz (incl. 25-hour day, skipped midnight, 23-hour day); quote examples' validity recomputed | pass |
 | Arithmetic | every line, shipping and total in every quote example recomputed with the normative integer formulas; `gross = net + tax`; `expectedTotals` equal owner totals | pass |

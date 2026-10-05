@@ -1,41 +1,36 @@
 import type { FastifyInstance } from "fastify";
 
-import type { ClockPort } from "../../application/ports/clock-port";
-import type { QuoteDeliveryService } from "../../application/quote-delivery/quote-delivery-service";
-import type { DocumentIssuancePort } from "../../application/quote/ports/document-issuance-port";
-import type { QuoteService } from "../../application/quote/quote-service";
+import type { DependencyMonitor } from "../../application/health/dependency-monitor";
 import type { AppEnv } from "../../infrastructure/config/env";
-import type { QuoteDocumentAccessService } from "../../infrastructure/documents/document-access-service";
-import type { FilesystemDocumentArtifactStorage } from "../../infrastructure/documents/filesystem-document-artifact-storage";
-import type { PdfRendererPort } from "../../infrastructure/documents/native-pdf-renderer";
-import type { PostgresDatabase } from "../../infrastructure/persistence/postgres/postgres";
-import type { ApplicationLifecycleState } from "../../infrastructure/runtime/application-lifecycle-state";
-import { registerDocumentRoute } from "./document-route";
+import type { BackgroundJobManager } from "../../infrastructure/runtime/background-job-manager";
+import { createReadinessGate } from "../readiness-gate";
 import { registerHealthRoute } from "./health-route";
-import { registerQuoteRoute } from "./quote-route";
 
-export function registerRoutes(
-  app: FastifyInstance,
-  env: AppEnv,
-  database: PostgresDatabase,
-  storage: FilesystemDocumentArtifactStorage,
-  pdfRenderer: PdfRendererPort,
-  lifecycleState: ApplicationLifecycleState,
-  quoteService: QuoteService,
-  quoteDeliveryService: QuoteDeliveryService,
-  clock: ClockPort,
-  documentIssuancePort: DocumentIssuancePort,
-  documentAccessService: QuoteDocumentAccessService
-): void {
-  registerHealthRoute(app, env, database, storage, pdfRenderer, lifecycleState);
-  registerQuoteRoute(
-    app,
-    env,
-    quoteService,
-    quoteDeliveryService,
-    clock,
-    documentIssuancePort,
-    documentAccessService
-  );
-  registerDocumentRoute(app, env, quoteService, documentAccessService);
+/** Registers business routes inside the readiness-gated context. */
+export type BusinessRouteRegistrar = (businessApp: FastifyInstance) => void;
+
+export interface RegisterRoutesInput {
+  readonly env: AppEnv;
+  readonly monitor: DependencyMonitor;
+  readonly backgroundJobs: BackgroundJobManager;
+  readonly emailEnabled: boolean;
+  readonly startedAt: Date;
+  readonly businessRoutes: readonly BusinessRouteRegistrar[];
+}
+
+export function registerRoutes(app: FastifyInstance, input: RegisterRoutesInput): void {
+  registerHealthRoute(app, input);
+
+  // Every business route inherits the readiness gate from this context. The
+  // V1 routes were retired in R1.4 (their persistence no longer exists); the
+  // V2 routes (R1.5) register here.
+  app.register((businessApp, _options, done) => {
+    businessApp.addHook("onRequest", createReadinessGate(input.monitor));
+
+    for (const register of input.businessRoutes) {
+      register(businessApp);
+    }
+
+    done();
+  });
 }

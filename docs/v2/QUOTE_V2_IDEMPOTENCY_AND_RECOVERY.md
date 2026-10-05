@@ -32,7 +32,7 @@ Status: **FROZEN (R1.2)**. Normative. Shapes: [openapi.yaml](openapi.yaml)
 | Operation names | `quote.create_and_issue`, `quote.draft.create`, `quote.draft.update`, `quote.issue`, `quote.cancel`, `quote.delivery.email` |
 | Cross-principal | Impossible: a principal never sees, replays or conflicts with another principal's keys |
 | Cross-operation | Independent bindings: the same key value may be used for different operations |
-| Fingerprint | `SHA-256(JCS({"operation": <name>, "pathParameters": {...}, "body": <body′>}))` where JCS is RFC 8785 canonical JSON, `pathParameters` is `{}` or `{"quoteId": "<uuid>"}`, and `body′` is the received JSON body with `externalCorrelation.correlationId` removed |
+| Fingerprint | `SHA-256(JCS({"operation": <name>, "pathParameters": {...}, "body": <body′>}))` where JCS is RFC 8785 canonical JSON, `pathParameters` is `{}` or `{"quoteId": "<uuid>"}`, and `body′` is the received JSON body, unmodified. Request/trace correlation travels in the `X-Correlation-Id` header and is never part of the fingerprint |
 | Normalization | None beyond JCS. Decimal strings are canonical by schema; strings are not trimmed or case-folded. Different spellings of the same value are rejected by schema rather than silently equated |
 
 ## 3. Bindings
@@ -40,8 +40,8 @@ Status: **FROZEN (R1.2)**. Normative. Shapes: [openapi.yaml](openapi.yaml)
 ### 3.1 Persisted record
 
 `principal_id`, `operation`, `key_hash`, `request_fingerprint`,
-`request_snapshot` (the full received body, immutable, including the
-committing request's `correlationId`), `resource_type` (`quote` | `delivery`),
+`request_snapshot` (the full received body, immutable), `resource_type`
+(`quote` | `delivery`),
 `quote_id`, `operation_id` (issuance) or `delivery_id`, `bound_at`.
 Unique constraint on `(principal_id, operation, key_hash)`.
 
@@ -99,13 +99,16 @@ failed`), `generation` (fencing token, bigint), `lease_owner` (instance id),
 `next_attempt_at`, `accepted_at`, `deadline_at`, `completed_at`.
 
 Created `pending` in the acceptance transaction together with the frozen
-snapshot, number and validity.
+snapshot, number and validity. Operation and quote lifecycles are separate
+(amendment A1): a quote may have several operations over its life (an
+operator retry after a `failed` one), with at most one active
+(`pending`/`running`) and at most one `succeeded`.
 
 ### 4.2 Configuration
 
 | Parameter | Default | Range |
 |---|---|---|
-| `syncIssueBudgetMs` | 5000 | 0–10000 |
+| `syncIssueBudgetMs` | 5000 (implementation default; **not an API invariant**, amendment A2) | 0–10000 |
 | `issuanceLeaseMs` | 60000 | 10000–300000 (renewed every third of the lease) |
 | `issuancePollIntervalMs` | 2000 | 500–60000 |
 | `issuanceDeadline` | 24 h | 1 h–72 h (copied to `deadline_at` at acceptance) |
@@ -141,20 +144,26 @@ lease renewal: UPDATE … SET lease_expires_at=now()+lease
 
 Deadline sweep (worker): for operations with `now() ≥ deadline_at` that are
 `pending`, or `running` with an expired lease, in one transaction: bump
-`generation`, set operation `failed` (`issuance_deadline_exceeded`), quote
-`cancelled` (`reasonCode = issuance_failed`, `initiatedBy = system`), audit
-`quote.issue.failed` + `quote.cancelled`. A holder with a live lease is never
-pre-empted; it either commits or fails before its lease expires, and a commit
-after the sweep is impossible because the generation changed.
+`generation`, set the operation `failed` (`issuance_deadline_exceeded`,
+`completed_at`), audit `quote.issue.failed`, raise an operator alert. The
+**quote stays `issuing`** (number kept, no document): a technical failure
+never cancels a quote. It is resolved by an operator retry (a new operation
+for the same quote, same snapshot and number) or by a principal cancel (state
+machine T10/T11). A holder with a live lease is never pre-empted; it either
+commits or fails before its lease expires, and a commit after the sweep is
+impossible because the generation changed.
 
 ### 4.4 Inline (synchronous) path
 
 After the acceptance commit the request handler performs a normal claim (it
 obtains generation 1) and runs the attempt. If the manifest commits within
-`syncIssueBudgetMs` it answers `201`/`200`; otherwise it answers `202` and
+the server's bounded inline budget (`syncIssueBudgetMs`, configuration) it
+answers `201`/`200`; otherwise it answers `202` and
 the attempt continues under its lease (or, if the handler's process dies, the
 worker reclaims it after the lease). The handler never answers `201`/`200`
-before the manifest commit.
+before the manifest commit. The budget value is not part of the API: a
+client MUST handle `201`/`200` and `202` for every request and MUST NOT rely
+on any particular synchronous wait.
 
 ### 4.5 Process death and restart
 
@@ -173,7 +182,7 @@ exits; unfinished leases simply expire.
 | After artifact write, before manifest commit | as above; complete content-addressed file | new attempt re-renders or reuses and verifies the same address; commits | same quote; same bytes if renderer deterministic, otherwise the committed manifest's bytes |
 | After manifest commit, before response | quote `issued` | caller replay → `201`/`200`; lookup → `bound`, `quoteStatus = issued` | same quote |
 | Zombie holder after lease loss | — | its commit/renewal/failure updates match 0 rows (stale generation) | no effect |
-| Storage/renderer down until deadline | operation `pending` with backoff | deadline sweep | quote `cancelled` (`issuance_failed`), number never on a document; caller needs a new key for a new quote |
+| Storage/renderer down until deadline | operation `pending` with backoff | deadline sweep → operation `failed`, operator alert | quote stays `issuing` with its number; operator retry (new operation, same quote) or principal cancel; a replay keeps returning `202` with the current operation |
 
 ## 5. Email delivery idempotency (when enabled)
 
@@ -218,7 +227,8 @@ stateDiagram-v2
     Unbound --> Bound_Issuing: acceptance tx commits (quote issuing, number, validity, operation pending)
     Bound_Issuing --> Bound_Issuing: replay same fingerprint → 202 / lookup → bound(issuing)
     Bound_Issuing --> Bound_Issued: manifest commit (fenced attempt)
-    Bound_Issuing --> Bound_Cancelled: deadline exceeded → issuance_failed
+    Bound_Issuing --> Bound_Issuing: deadline exceeded → operation failed (quote stays issuing); operator retry → new operation
+    Bound_Issuing --> Bound_Cancelled: principal cancel after operation failed
     Bound_Issued --> Bound_Issued: replay → 201 (issued / expired / cancelled by principal)
     Bound_Cancelled --> Bound_Cancelled: replay → 201 (cancelled)
     Bound_Issuing --> Bound_Issuing: different fingerprint → 409 idempotency_key_conflict
@@ -237,7 +247,9 @@ ASCII equivalent:
            ▼
    [Bound: issuing] ──replay──► 202 (same quote)        any state + different
        │         │                                     fingerprint → 409
-       │         └─deadline─► [Bound: cancelled/issuance_failed] ──replay──► 201
+       │         │  (deadline → operation failed; quote stays issuing;
+       │         │   operator retry → new operation, same quote)
+       │         └─principal cancel after failed op─► [Bound: cancelled] ──replay──► 201
        │ fenced manifest commit
        ▼
    [Bound: issued*] ──replay──► 201 (same quote; *issued, expired or cancelled)

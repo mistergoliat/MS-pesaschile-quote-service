@@ -1,59 +1,109 @@
 import "dotenv/config";
 
-import { buildApplication } from "./app";
-import { loadEnv } from "./infrastructure/config/env";
+import { buildApplication, type ApplicationContext } from "./app";
+import { describeConfigError, loadEnv, type AppEnv } from "./infrastructure/config/env";
 
-async function main(): Promise<void> {
-  const env = loadEnv();
-  const application = buildApplication(env);
-  const { app, lifecycleState } = application;
+/*
+ * Top-level failure policy (docs/runtime-lifecycle.md):
+ *
+ *   A. terminate (exit 1): invalid static configuration, local initialization
+ *      corruption (e.g. packaged migration set inconsistent), cannot bind the
+ *      port, programmer errors (uncaught exception / unhandled rejection).
+ *   B. stay live, not ready: database unreachable, schema not at expected
+ *      head, document storage unusable, renderer unusable. Recovery is
+ *      automatic; no restart required.
+ *   C. degrade an optional subsystem only: email provider failures affect
+ *      email delivery, never readiness.
+ */
 
-  await app.listen({
-    host: env.HOST,
-    port: env.PORT
-  });
+function writeFatal(event: string, payload: Record<string, unknown>): void {
+  process.stderr.write(
+    `${JSON.stringify({ level: "fatal", time: Date.now(), event, ...payload })}\n`
+  );
+}
 
-  let shutdownPromise: Promise<void> | null = null;
+function errorSummary(error: unknown): Record<string, unknown> {
+  return error instanceof Error
+    ? { errorName: error.name, errorMessage: error.message, stack: error.stack }
+    : { errorName: typeof error };
+}
 
-  const shutdown = (signal: NodeJS.Signals) => {
-    if (shutdownPromise) {
-      return shutdownPromise;
+let application: ApplicationContext | null = null;
+let termination: Promise<void> | null = null;
+
+/** Single exit path. shutdown() is bounded by APP_SHUTDOWN_TIMEOUT_MS, so this always exits. */
+function terminate(exitCode: number, reason: string): Promise<void> {
+  termination ??= (async () => {
+    const outcome = application ? await application.shutdown(reason) : "completed";
+    process.exit(outcome === "completed" ? exitCode : 1);
+  })();
+
+  return termination;
+}
+
+function installProcessHandlers(): void {
+  const onProgrammerError = (kind: string) => (error: unknown) => {
+    if (application) {
+      application.app.log.fatal({ event: "runtime.fatal", kind, ...errorSummary(error) }, "Programmer error");
+    } else {
+      writeFatal("runtime.fatal", { kind, ...errorSummary(error) });
     }
 
-    lifecycleState.markShuttingDown();
-    app.log.info({ signal }, "Shutdown signal received");
-
-    shutdownPromise = Promise.race([
-      app.close(),
-      new Promise<never>((_, reject) => {
-        const timer = setTimeout(() => {
-          reject(new Error("Graceful shutdown timed out"));
-        }, env.APP_SHUTDOWN_TIMEOUT_MS);
-        timer.unref();
-      })
-    ])
-      .then(() => {
-        app.log.info({ signal }, "Application shutdown completed");
-      })
-      .catch((error) => {
-        app.log.error(
-          {
-            signal,
-            error: error instanceof Error ? error.message : "unknown"
-          },
-          "Application shutdown failed"
-        );
-        process.exitCode = 1;
-      });
-
-    return shutdownPromise;
+    void terminate(1, kind);
   };
+
+  process.on("uncaughtException", onProgrammerError("uncaughtException"));
+  process.on("unhandledRejection", onProgrammerError("unhandledRejection"));
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.once(signal, () => {
-      void shutdown(signal);
+      void terminate(0, signal);
     });
   }
 }
 
-void main();
+async function main(): Promise<void> {
+  let env: AppEnv;
+
+  try {
+    env = loadEnv();
+  } catch (error) {
+    writeFatal("runtime.config_invalid", describeConfigError(error) ?? { errorName: "unknown" });
+    process.exit(1);
+  }
+
+  installProcessHandlers();
+
+  try {
+    application = buildApplication(env);
+  } catch (error) {
+    writeFatal("runtime.init_failed", errorSummary(error));
+    process.exit(1);
+  }
+
+  try {
+    await application.app.listen({
+      host: env.HOST,
+      port: env.PORT
+    });
+  } catch (error) {
+    application.app.log.fatal({ event: "runtime.bind_failed", ...errorSummary(error) }, "Could not bind");
+    await terminate(1, "bind_failed");
+    return;
+  }
+
+  application.app.log.info(
+    {
+      event: "runtime.started",
+      service: env.SERVICE_NAME,
+      version: env.SERVICE_VERSION,
+      ready: application.dependencyMonitor.isReady()
+    },
+    "Runtime started"
+  );
+}
+
+main().catch((error: unknown) => {
+  writeFatal("runtime.fatal", { kind: "main", ...errorSummary(error) });
+  process.exit(1);
+});

@@ -1,32 +1,5 @@
 import { z } from "zod";
 
-function booleanEnvSchema(defaultValue: boolean) {
-  return z
-    .preprocess((value) => {
-      if (value === undefined) {
-        return undefined;
-      }
-
-      if (typeof value === "boolean") {
-        return value;
-      }
-
-      if (typeof value === "string") {
-        return value.trim().toLowerCase();
-      }
-
-      return value;
-    }, z.union([z.boolean(), z.enum(["true", "false"])]))
-    .optional()
-    .transform((value) => {
-      if (value === undefined) {
-        return defaultValue;
-      }
-
-      return value === true || value === "true";
-    });
-}
-
 const envSchema = z
   .object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -49,22 +22,19 @@ const envSchema = z
   SERVICE_NAME: z.string().min(1).default("pesaschile-quote-service"),
   SERVICE_VERSION: z.string().min(1).default("0.1.0"),
   SERVICE_AUTH_TOKEN: z.string().min(1),
-  HEALTHCHECK_DATABASE_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
+  // Deprecated alias for HEALTH_PROBE_TIMEOUT_MS; used only when the new key is unset.
+  HEALTHCHECK_DATABASE_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(2000),
+  HEALTH_PROBE_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).optional(),
+  HEALTH_PROBE_INTERVAL_MS: z.coerce.number().int().min(1_000).max(300_000).default(10_000),
+  HEALTH_PROBE_RETRY_MIN_MS: z.coerce.number().int().min(50).max(60_000).default(1_000),
+  HEALTH_PROBE_RETRY_MAX_MS: z.coerce.number().int().min(50).max(300_000).default(30_000),
   QUOTE_COMPANY_NAME: z.string().min(1).default("Pesas Chile SPA"),
   QUOTE_DOCUMENT_STORAGE_ROOT: z.string().min(1),
-  QUOTE_DOCUMENT_REF_SECRET: z.string().min(16),
   QUOTE_RENDER_VERSION: z.string().min(1).default("quote-pdf-v3"),
-  QUOTE_EXPIRATION_SCHEDULER_ENABLED: booleanEnvSchema(false),
-  QUOTE_EXPIRATION_INTERVAL_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(30_000),
-  QUOTE_EXPIRATION_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(25),
-  QUOTE_DOCUMENT_CLEANUP_ENABLED: booleanEnvSchema(false),
-  QUOTE_DOCUMENT_CLEANUP_INTERVAL_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
-  QUOTE_DOCUMENT_ORPHAN_MIN_AGE_MS: z.coerce.number().int().min(1_000).max(86_400_000).default(300_000),
+  // Email provider configuration, used only by the email smoke script until
+  // the V2 delivery subsystem (R1.6). The V1 expiry, cleanup and email worker
+  // settings were retired with the V1 runtime in R1.4.
   QUOTE_EMAIL_PROVIDER: z.enum(["disabled", "gmail"]).default("disabled"),
-  QUOTE_EMAIL_DELIVERY_INTERVAL_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(30_000),
-  QUOTE_EMAIL_DELIVERY_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(25),
-  QUOTE_EMAIL_DELIVERY_LEASE_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(120_000),
-  QUOTE_EMAIL_DELIVERY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
   QUOTE_EMAIL_FROM_ADDRESS: z.string().trim().min(1).optional(),
   QUOTE_EMAIL_FROM_NAME: z.string().trim().min(1).optional(),
   QUOTE_EMAIL_REPLY_TO: z.string().trim().min(1).optional(),
@@ -74,6 +44,14 @@ const envSchema = z
   GOOGLE_GMAIL_USER: z.string().trim().min(1).optional()
 })
   .superRefine((env, context) => {
+    if (env.HEALTH_PROBE_RETRY_MIN_MS > env.HEALTH_PROBE_RETRY_MAX_MS) {
+      context.addIssue({
+        code: "custom",
+        path: ["HEALTH_PROBE_RETRY_MIN_MS"],
+        message: "HEALTH_PROBE_RETRY_MIN_MS must not exceed HEALTH_PROBE_RETRY_MAX_MS"
+      });
+    }
+
     if (env.QUOTE_EMAIL_PROVIDER === "gmail") {
       const requiredKeys = [
         "GOOGLE_GMAIL_CLIENT_ID",
@@ -100,11 +78,6 @@ const envSchema = z
     }
 
     const insecureAuthTokens = new Set(["replace-me", "token", "changeme"]);
-    const insecureDocumentSecrets = new Set([
-      "replace-with-a-long-secret",
-      "test-document-secret",
-      "changemechangeme"
-    ]);
 
     if (env.SERVICE_AUTH_TOKEN.length < 16 || insecureAuthTokens.has(env.SERVICE_AUTH_TOKEN)) {
       context.addIssue({
@@ -113,20 +86,64 @@ const envSchema = z
         message: "SERVICE_AUTH_TOKEN is too weak for production"
       });
     }
+  })
+  .transform((env) => ({
+    ...env,
+    HEALTH_PROBE_TIMEOUT_MS: env.HEALTH_PROBE_TIMEOUT_MS ?? env.HEALTHCHECK_DATABASE_TIMEOUT_MS
+  }));
 
-    if (
-      env.QUOTE_DOCUMENT_REF_SECRET.length < 32 ||
-      insecureDocumentSecrets.has(env.QUOTE_DOCUMENT_REF_SECRET)
-    ) {
-      context.addIssue({
+export type AppEnv = z.output<typeof envSchema>;
+
+/**
+ * Configuration for the explicit migration/schema commands only. The
+ * migration connection may use a different (DDL-capable) role than the
+ * runtime; the server never reads MIGRATION_DATABASE_URL.
+ */
+const migrationEnvSchema = z.object({
+  DATABASE_URL: z.string().url().optional(),
+  MIGRATION_DATABASE_URL: z.string().url().optional()
+});
+
+export interface MigrationEnv {
+  readonly databaseUrl: string;
+}
+
+export function loadMigrationEnv(rawEnv: NodeJS.ProcessEnv = process.env): MigrationEnv {
+  const env = migrationEnvSchema.parse(rawEnv);
+  const databaseUrl = env.MIGRATION_DATABASE_URL ?? env.DATABASE_URL;
+
+  if (databaseUrl === undefined) {
+    throw new z.ZodError([
+      {
         code: "custom",
-        path: ["QUOTE_DOCUMENT_REF_SECRET"],
-        message: "QUOTE_DOCUMENT_REF_SECRET is too weak for production"
-      });
-    }
-  });
+        path: ["MIGRATION_DATABASE_URL"],
+        message: "MIGRATION_DATABASE_URL or DATABASE_URL is required",
+        input: undefined
+      }
+    ]);
+  }
 
-export type AppEnv = z.infer<typeof envSchema>;
+  return {
+    databaseUrl
+  };
+}
+
+/**
+ * Sanitized description of a configuration failure: variable names and rule
+ * messages only, never the offending values.
+ */
+export function describeConfigError(error: unknown): { readonly issues: Array<{ path: string; message: string }> } | null {
+  if (!(error instanceof z.ZodError)) {
+    return null;
+  }
+
+  return {
+    issues: error.issues.map((issue) => ({
+      path: issue.path.join("."),
+      message: issue.message
+    }))
+  };
+}
 
 export function loadEnv(rawEnv: NodeJS.ProcessEnv = process.env): AppEnv {
   return envSchema.parse(rawEnv);

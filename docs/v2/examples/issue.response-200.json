@@ -8,8 +8,7 @@
     "externalCorrelation": {
       "sourceSystem": "backoffice",
       "externalReferenceType": "case",
-      "externalReference": "CASE-2026-0912",
-      "correlationId": "bo-req-5521"
+      "externalReference": "CASE-2026-0912"
     },
     "customer": {
       "kind": "company",
