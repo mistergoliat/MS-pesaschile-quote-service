@@ -48,7 +48,8 @@ PDF generation is native: `CanonicalIssuedQuoteSnapshot → pdfmake → PDF`. No
 
 ## Authentication
 
-- `GET /health` is public.
+- `GET /health/live`, `GET /health/ready` and the deprecated `GET /health` are public.
+- `GET /health/dependencies` requires `Authorization: Bearer <SERVICE_AUTH_TOKEN>`.
 - Every `/v1/quotes...` endpoint requires `Authorization: Bearer <SERVICE_AUTH_TOKEN>`.
 - Missing token returns `401 missing_authentication`.
 - Invalid token returns `401 invalid_authentication`.
@@ -159,8 +160,12 @@ No SQL column names, internal filesystem paths, storage keys, or `Decimal` objec
 
 ### Health
 
-- `GET /health`
-- `GET /health/ready`
+See [docs/runtime-lifecycle.md](docs/runtime-lifecycle.md).
+
+- `GET /health/live`: liveness, never probes dependencies
+- `GET /health/ready`: `200` only when database, schema head, storage, renderer and lifecycle are ok
+- `GET /health/dependencies`: authenticated, sanitized dependency detail
+- `GET /health`: deprecated liveness alias
 
 ### Quote Commands
 
@@ -481,16 +486,14 @@ Configuration:
 - `QUOTE_DOCUMENT_CLEANUP_INTERVAL_MS`
 - `QUOTE_DOCUMENT_ORPHAN_MIN_AGE_MS`
 
-### Readiness And Startup Validation
+### Runtime Lifecycle And Readiness (R1.3)
 
-`GET /health` remains the basic liveness check. `GET /health/ready` verifies operational readiness:
+Full semantics: [docs/runtime-lifecycle.md](docs/runtime-lifecycle.md). Bootstrap runbook (draft): [docs/runbooks/production-bootstrap.md](docs/runbooks/production-bootstrap.md).
 
-- lifecycle phase;
-- PostgreSQL connectivity;
-- document storage writability;
-- Native PDF renderer availability.
-
-Startup now fails fast if the service cannot reach PostgreSQL or write to the configured storage root. The native PDF renderer has no external browser dependency.
+- Only invalid static configuration, a corrupt build (packaged migration set not at `EXPECTED_SCHEMA_HEAD`), an unbindable port or a programmer error stop the process.
+- An unavailable database, schema not at the expected migration head, unusable document storage or an unusable PDF renderer leave the service **live but not ready**. Business routes return `503 dependency_unavailable` / `503 schema_not_ready` with `Retry-After`, and readiness recovers automatically without a restart.
+- A single dependency monitor probes on a bounded cadence (`HEALTH_PROBE_*`). Health requests read its cached state.
+- `npm run db:check` validates connectivity and schema head. It exits `0` only when the schema is at the expected head.
 
 ### Timeouts And Limits
 
@@ -512,13 +515,12 @@ Oversized HTTP payloads return `413`.
 
 On `SIGINT` or `SIGTERM` the service:
 
-1. marks lifecycle as shutting down;
-2. stops background schedulers;
-3. waits for Fastify shutdown within `APP_SHUTDOWN_TIMEOUT_MS`;
-4. closes the PostgreSQL pool;
-5. closes the PostgreSQL pool; the native renderer has no child process to close.
+1. marks lifecycle as shutting down (readiness `503`, business routes rejected);
+2. stops the dependency monitor and background jobs;
+3. closes Fastify, draining in-flight requests;
+4. closes the PostgreSQL pool.
 
-There is no forced `process.exit()` on the happy path.
+The sequence is bounded by `APP_SHUTDOWN_TIMEOUT_MS`. The process exits `0` when it completes and `1` when the deadline passes.
 
 ### Production Runtime
 
@@ -528,7 +530,7 @@ This repository now includes a production-oriented `Dockerfile`.
 - PDF strategy: pdfmake in-process rendering from the issued snapshot.
 - Runtime user: non-root `nodeapp`.
 - Persistent artifacts: mount `/var/lib/pesaschile/quote-documents`.
-- Healthcheck: `/health/ready`.
+- Container healthcheck: `/health/live` (liveness). Route traffic on `/health/ready`.
 
 Build:
 
@@ -550,7 +552,7 @@ docker run --rm \
 
 ### Production Notes
 
-- Run migrations explicitly with `npm run db:migrate`. The server does not auto-migrate on startup.
+- Run migrations explicitly with `npm run db:migrate`, then verify with `npm run db:check`, **before** starting the service. The server never runs DDL. Started against an unmigrated database, it stays not ready (`schema_not_ready`) until the migration runs. `MIGRATION_DATABASE_URL`, if set, is used only by these commands.
 - Filesystem storage is durable only if backed by a persistent volume.
 - Multiple instances that serve document downloads need shared durable storage.
 - Email and WhatsApp delivery remain out of scope; T05/T06 only produce and retain the document artifacts.

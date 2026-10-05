@@ -4,7 +4,7 @@ import type { ClockPort } from "../../application/ports/clock-port";
 import type { AppEnv } from "../config/env";
 import type { PostgresDatabase } from "../persistence/postgres/postgres";
 import type { OrphanDocumentCleanupService } from "../documents/orphan-document-cleanup-service";
-import { PeriodicJobRunner } from "./periodic-job-runner";
+import { PeriodicJobRunner, type PeriodicJobStatus } from "./periodic-job-runner";
 
 const DOCUMENT_CLEANUP_LOCK_KEY = 4_204_001;
 
@@ -12,6 +12,17 @@ type Logger = {
   info(payload: Record<string, unknown>, message: string): void;
   warn(payload: Record<string, unknown>, message: string): void;
   error(payload: Record<string, unknown>, message: string): void;
+};
+
+export interface BackgroundJobStatus extends PeriodicJobStatus {
+  readonly enabled: boolean;
+}
+
+const DISABLED_JOB_STATUS: BackgroundJobStatus = {
+  enabled: false,
+  lastPollAt: null,
+  lastSuccessAt: null,
+  lastIterationFailed: false
 };
 
 export class BackgroundJobManager {
@@ -27,12 +38,15 @@ export class BackgroundJobManager {
     readonly cleanupService: OrphanDocumentCleanupService;
     readonly database: PostgresDatabase;
     readonly logger: Logger;
+    /** Iterations are skipped while this returns false. */
+    readonly canRun: () => boolean;
   }) {
     this.expirationRunner = input.env.QUOTE_EXPIRATION_SCHEDULER_ENABLED
       ? new PeriodicJobRunner({
           name: "quote-expiration",
           intervalMs: input.env.QUOTE_EXPIRATION_INTERVAL_MS,
           logger: input.logger,
+          canRun: input.canRun,
           execute: async () => {
             const now = input.clock.now().toISOString();
             const result = await input.quoteService.expireQuotesBatch({
@@ -64,6 +78,7 @@ export class BackgroundJobManager {
           name: "quote-email-delivery",
           intervalMs: input.env.QUOTE_EMAIL_DELIVERY_INTERVAL_MS,
           logger: input.logger,
+          canRun: input.canRun,
           execute: async () => {
             const quoteEmailWorker = input.quoteEmailWorker;
 
@@ -94,6 +109,7 @@ export class BackgroundJobManager {
           name: "document-cleanup",
           intervalMs: input.env.QUOTE_DOCUMENT_CLEANUP_INTERVAL_MS,
           logger: input.logger,
+          canRun: input.canRun,
           execute: async () => {
             const lock = await input.database.withAdvisoryLock(DOCUMENT_CLEANUP_LOCK_KEY, async () =>
               input.cleanupService.cleanupOrphans({
@@ -124,6 +140,21 @@ export class BackgroundJobManager {
           }
         })
       : null;
+  }
+
+  status(): {
+    readonly expiry: BackgroundJobStatus;
+    readonly emailDelivery: BackgroundJobStatus;
+    readonly documentCleanup: BackgroundJobStatus;
+  } {
+    const toStatus = (runner: PeriodicJobRunner | null): BackgroundJobStatus =>
+      runner ? { enabled: true, ...runner.status } : DISABLED_JOB_STATUS;
+
+    return {
+      expiry: toStatus(this.expirationRunner),
+      emailDelivery: toStatus(this.emailDeliveryRunner),
+      documentCleanup: toStatus(this.cleanupRunner)
+    };
   }
 
   start(): void {

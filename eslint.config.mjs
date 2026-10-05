@@ -3,7 +3,8 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "coverage/**", "eslint.config.mjs"]
+    // docs/v2/tools is a standalone contract-tooling package with its own package.json.
+    ignores: ["dist/**", "node_modules/**", "coverage/**", "eslint.config.mjs", "docs/v2/tools/**"]
   },
   js.configs.recommended,
   {

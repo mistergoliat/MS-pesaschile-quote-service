@@ -1,5 +1,6 @@
 type JobLogger = {
   info(payload: Record<string, unknown>, message: string): void;
+  warn(payload: Record<string, unknown>, message: string): void;
   error(payload: Record<string, unknown>, message: string): void;
 };
 
@@ -8,14 +9,46 @@ export interface PeriodicJobRunnerConfig {
   readonly intervalMs: number;
   readonly logger: JobLogger;
   readonly execute: () => Promise<void>;
+  /**
+   * Checked before every iteration. When false the iteration is skipped (not
+   * failed): jobs never run against an unready dependency set.
+   */
+  readonly canRun?: () => boolean;
+}
+
+export interface PeriodicJobStatus {
+  readonly lastPollAt: string | null;
+  readonly lastSuccessAt: string | null;
+  readonly lastIterationFailed: boolean;
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = error.code;
+    return typeof code === "string" ? code : undefined;
+  }
+
+  return undefined;
 }
 
 export class PeriodicJobRunner {
   private timer: NodeJS.Timeout | null = null;
   private started = false;
   private currentRun: Promise<void> | null = null;
+  private paused = false;
+  private lastPollAt: string | null = null;
+  private lastSuccessAt: string | null = null;
+  private lastIterationFailed = false;
 
   constructor(private readonly config: PeriodicJobRunnerConfig) {}
+
+  get status(): PeriodicJobStatus {
+    return {
+      lastPollAt: this.lastPollAt,
+      lastSuccessAt: this.lastSuccessAt,
+      lastIterationFailed: this.lastIterationFailed
+    };
+  }
 
   start(): void {
     if (this.started) {
@@ -66,13 +99,41 @@ export class PeriodicJobRunner {
   }
 
   private async executeSafely(): Promise<void> {
+    if (this.config.canRun && !this.config.canRun()) {
+      if (!this.paused) {
+        this.paused = true;
+        this.config.logger.warn(
+          { event: "job.paused", job: this.config.name, reason: "dependencies_unready" },
+          "Background job paused until dependencies are ready"
+        );
+      }
+
+      return;
+    }
+
+    if (this.paused) {
+      this.paused = false;
+      this.config.logger.info(
+        { event: "job.resumed", job: this.config.name },
+        "Background job resumed"
+      );
+    }
+
+    this.lastPollAt = new Date().toISOString();
+
     try {
       await this.config.execute();
+      this.lastSuccessAt = this.lastPollAt;
+      this.lastIterationFailed = false;
     } catch (error) {
+      this.lastIterationFailed = true;
+      // Name and driver code only: driver messages can echo row values.
       this.config.logger.error(
         {
+          event: "job.failed",
           job: this.config.name,
-          error: error instanceof Error ? error.message : "unknown"
+          errorName: error instanceof Error ? error.name : "unknown",
+          errorCode: errorCode(error) ?? null
         },
         "Background job iteration failed"
       );

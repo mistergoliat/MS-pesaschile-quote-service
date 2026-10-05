@@ -72,7 +72,7 @@ describe("NativePdfRenderer", () => {
     );
   });
 
-  it("does not require a browser for readiness", async () => {
-    await expect(createPdfRenderer().checkReadiness()).resolves.toEqual({ status: "up" });
+  it("proves readiness by rendering in memory without a browser", async () => {
+    await expect(createPdfRenderer().probe()).resolves.toEqual({ ok: true });
   });
 });

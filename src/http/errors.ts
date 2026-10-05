@@ -6,6 +6,13 @@ import {
   ApplicationError,
   type ApplicationErrorCode
 } from "../application/quote/errors";
+import {
+  isDatabaseUnavailableError,
+  isSchemaNotReadyError
+} from "../infrastructure/persistence/postgres/postgres-errors";
+
+/** Seconds a client should wait before retrying a 503 caused by dependency state. */
+export const DEPENDENCY_RETRY_AFTER_SECONDS = 5;
 
 type HttpErrorCode =
   | DomainErrorCode
@@ -14,13 +21,16 @@ type HttpErrorCode =
   | "invalid_authentication"
   | "document_not_found"
   | "internal_server_error"
-  | "validation_error";
+  | "validation_error"
+  | "dependency_unavailable"
+  | "schema_not_ready";
 
 interface HttpErrorPayload {
   readonly code: HttpErrorCode;
   readonly message: string;
   readonly statusCode: number;
   readonly details?: Record<string, unknown>;
+  readonly retryAfterSeconds?: number;
 }
 
 export class HttpError extends Error {
@@ -28,12 +38,14 @@ export class HttpError extends Error {
   readonly statusCode: number;
   readonly code: HttpErrorCode;
   readonly details: Record<string, unknown> | undefined;
+  readonly retryAfterSeconds: number | undefined;
 
   constructor(payload: HttpErrorPayload) {
     super(payload.message);
     this.statusCode = payload.statusCode;
     this.code = payload.code;
     this.details = payload.details;
+    this.retryAfterSeconds = payload.retryAfterSeconds;
   }
 }
 
@@ -115,6 +127,28 @@ export function createValidationError(
   });
 }
 
+export function createDependencyUnavailableError(dependency: string): HttpError {
+  return new HttpError({
+    statusCode: 503,
+    code: "dependency_unavailable",
+    message: "A required dependency is unavailable; nothing was committed.",
+    details: {
+      dependency,
+      retryable: true
+    },
+    retryAfterSeconds: DEPENDENCY_RETRY_AFTER_SECONDS
+  });
+}
+
+export function createSchemaNotReadyError(): HttpError {
+  return new HttpError({
+    statusCode: 503,
+    code: "schema_not_ready",
+    message: "The database schema is not at the expected migration head.",
+    retryAfterSeconds: DEPENDENCY_RETRY_AFTER_SECONDS
+  });
+}
+
 export function toHttpError(error: unknown): HttpError {
   if (error instanceof HttpError) {
     return error;
@@ -131,6 +165,16 @@ export function toHttpError(error: unknown): HttpError {
       code: "validation_error",
       message: "Request body is too large"
     });
+  }
+
+  // A request that raced a dependency failure past the readiness gate must
+  // still fail as a retryable 503, never as a raw driver error or a 500.
+  if (isDatabaseUnavailableError(error)) {
+    return createDependencyUnavailableError("database");
+  }
+
+  if (isSchemaNotReadyError(error)) {
+    return createSchemaNotReadyError();
   }
 
   if (error instanceof ZodError) {
@@ -189,7 +233,18 @@ export function sendErrorResponse(
 ): FastifyReply {
   const httpError = toHttpError(error);
 
-  if (httpError.statusCode >= 500) {
+  if (httpError.code === "dependency_unavailable" || httpError.code === "schema_not_ready") {
+    // Dependency state is already logged on transition by the monitor; the
+    // raw driver error may carry host details, so it is not logged here.
+    request.log.warn(
+      {
+        code: httpError.code,
+        requestId: request.id,
+        route: request.routeOptions.url
+      },
+      "Request rejected: dependencies not ready"
+    );
+  } else if (httpError.statusCode >= 500) {
     request.log.error(
       {
         err: error,
@@ -207,6 +262,10 @@ export function sendErrorResponse(
       },
       "Handled request failure"
     );
+  }
+
+  if (httpError.retryAfterSeconds !== undefined) {
+    reply.header("Retry-After", String(httpError.retryAfterSeconds));
   }
 
   return reply.status(httpError.statusCode).send({

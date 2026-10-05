@@ -1,6 +1,11 @@
 import { createRequire } from "node:module";
 
-import type { DependencyReadinessStatus } from "../../application/health/readiness-service";
+import {
+  PROBE_OK,
+  probeFailed,
+  type ProbeOutcome,
+  type RendererProbePort
+} from "../../application/health/dependency-state";
 import {
   buildIssuedQuoteDocumentViewModel,
   type CanonicalIssuedQuoteSnapshot,
@@ -37,9 +42,8 @@ interface PdfPrinterConstructor {
 
 const PdfPrinter = pdfMakeRequire("pdfmake/src/printer") as PdfPrinterConstructor;
 
-export interface PdfRendererPort {
+export interface PdfRendererPort extends RendererProbePort {
   renderPdf(snapshot: CanonicalIssuedQuoteSnapshot): Promise<Buffer>;
-  checkReadiness(): Promise<DependencyReadinessStatus>;
 }
 
 export interface NativePdfRendererConfig {
@@ -83,7 +87,35 @@ export class NativePdfRenderer implements PdfRendererPort {
       renderVersion: this.config.renderVersion,
       companyName: this.config.brand.company.legalName
     });
-    const definition = this.buildDefinition(model);
+
+    return this.render(this.buildDefinition(model));
+  }
+
+  /**
+   * Renders a one-line document in memory through the same printer, fonts and
+   * brand logo used for real quotes. Nothing is written anywhere.
+   */
+  async probe(): Promise<ProbeOutcome> {
+    try {
+      const logoOnLight = resolveBrandAsset(this.config.brand.assets.logoOnLight);
+      const buffer = await this.render({
+        content: [
+          ...(logoOnLight ? [{ image: "logoOnLight", width: 40 }] : []),
+          { text: "readiness probe" }
+        ],
+        defaultStyle: { font: "Helvetica" },
+        ...(logoOnLight ? { images: { logoOnLight: toDataUri(logoOnLight) } } : {})
+      });
+
+      return buffer.subarray(0, 5).toString("latin1") === "%PDF-"
+        ? PROBE_OK
+        : probeFailed("renderer_unavailable");
+    } catch {
+      return probeFailed("renderer_unavailable");
+    }
+  }
+
+  private render(definition: PdfDocumentDefinition): Promise<Buffer> {
     const document = new PdfPrinter(FONTS).createPdfKitDocument(definition);
 
     return new Promise<Buffer>((resolve, reject) => {
@@ -95,10 +127,6 @@ export class NativePdfRenderer implements PdfRendererPort {
       document.on("error", reject);
       document.end();
     });
-  }
-
-  checkReadiness(): Promise<DependencyReadinessStatus> {
-    return Promise.resolve({ status: "up" });
   }
 
   private buildDefinition(model: IssuedQuoteDocumentViewModel): PdfDocumentDefinition {

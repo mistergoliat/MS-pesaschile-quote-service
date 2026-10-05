@@ -3,6 +3,39 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 
+import {
+  PROBE_OK,
+  probeFailed,
+  type ArtifactStorageProbePort,
+  type FailureCategory,
+  type ProbeOutcome
+} from "../../application/health/dependency-state";
+
+// Health probes live outside the "quotes/" prefix so they are never customer
+// artifacts and never seen by orphan cleanup.
+const HEALTH_PROBE_DIRECTORY = ".health";
+const STALE_PROBE_AGE_MS = 60_000;
+
+function classifyStorageFailure(error: unknown): FailureCategory {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? (error).code
+      : undefined;
+
+  switch (code) {
+    case "ENOSPC":
+    case "EDQUOT":
+      return "storage_full";
+    case "EROFS":
+      return "storage_read_only";
+    case "EACCES":
+    case "EPERM":
+      return "permission";
+    default:
+      return "unreachable";
+  }
+}
+
 export interface StoredDocumentArtifact {
   readonly storageKey: string;
   readonly sha256: string;
@@ -23,7 +56,7 @@ function normalizeStorageKey(storageKey: string): string {
   return storageKey.replace(/\\/g, "/");
 }
 
-export class FilesystemDocumentArtifactStorage {
+export class FilesystemDocumentArtifactStorage implements ArtifactStorageProbePort {
   readonly #rootPath: string;
 
   constructor(rootPath: string) {
@@ -34,18 +67,55 @@ export class FilesystemDocumentArtifactStorage {
     return this.#rootPath;
   }
 
-  async checkReadiness(): Promise<{ status: "up" | "down"; details?: string }> {
-    try {
-      await this.ensureRootWritable();
+  /**
+   * Proves the root supports the operations issuance needs: create a file,
+   * read it back intact, delete it. Uses a dedicated probe file that is always
+   * removed; probe files left by a crashed process are swept after a minute.
+   */
+  async probe(): Promise<ProbeOutcome> {
+    const probeDirectory = path.join(this.#rootPath, HEALTH_PROBE_DIRECTORY);
+    const probePath = path.join(probeDirectory, `probe-${process.pid}-${crypto.randomUUID()}.tmp`);
+    const nonce = crypto.randomBytes(16).toString("hex");
 
-      return {
-        status: "up"
-      };
+    try {
+      await fsPromises.mkdir(probeDirectory, {
+        recursive: true
+      });
+      await fsPromises.writeFile(probePath, nonce, "utf8");
+      const readBack = await fsPromises.readFile(probePath, "utf8");
+
+      if (readBack !== nonce) {
+        return probeFailed("integrity");
+      }
+
+      return PROBE_OK;
     } catch (error) {
-      return {
-        status: "down",
-        details: error instanceof Error ? error.message : "storage root is unavailable"
-      };
+      return probeFailed(classifyStorageFailure(error));
+    } finally {
+      await fsPromises.rm(probePath, { force: true }).catch(() => undefined);
+      await this.sweepStaleProbes(probeDirectory);
+    }
+  }
+
+  private async sweepStaleProbes(probeDirectory: string): Promise<void> {
+    try {
+      const entries = await fsPromises.readdir(probeDirectory);
+      const cutoff = Date.now() - STALE_PROBE_AGE_MS;
+
+      for (const entry of entries) {
+        if (!entry.startsWith("probe-")) {
+          continue;
+        }
+
+        const entryPath = path.join(probeDirectory, entry);
+        const stat = await fsPromises.stat(entryPath).catch(() => null);
+
+        if (stat && stat.mtimeMs < cutoff) {
+          await fsPromises.rm(entryPath, { force: true }).catch(() => undefined);
+        }
+      }
+    } catch {
+      // Nothing to sweep, or the root is unavailable; the probe already reported it.
     }
   }
 
@@ -110,18 +180,6 @@ export class FilesystemDocumentArtifactStorage {
     }
 
     return this.collectArtifacts(directoryPath, prefixKey.replace(/\\/g, "/"));
-  }
-
-  async ensureRootWritable(): Promise<void> {
-    await fsPromises.mkdir(this.#rootPath, {
-      recursive: true
-    });
-
-    const probePath = path.join(this.#rootPath, `.write-probe-${crypto.randomUUID()}`);
-    await fsPromises.writeFile(probePath, "ok", "utf8");
-    await fsPromises.rm(probePath, {
-      force: true
-    });
   }
 
   private async collectArtifacts(

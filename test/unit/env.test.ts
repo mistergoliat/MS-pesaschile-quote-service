@@ -1,6 +1,77 @@
 import { describe, expect, it } from "vitest";
 
-import { loadEnv } from "../../src/infrastructure/config/env";
+import {
+  describeConfigError,
+  loadEnv,
+  loadMigrationEnv
+} from "../../src/infrastructure/config/env";
+
+const MINIMAL_ENV = {
+  DATABASE_URL: "postgres://app:app-secret-password@db.internal:5432/quotes",
+  SERVICE_AUTH_TOKEN: "token",
+  QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
+  QUOTE_DOCUMENT_REF_SECRET: "test-document-secret"
+};
+
+describe("runtime health configuration", () => {
+  it("defaults probe cadence and falls back to the deprecated database timeout key", () => {
+    const env = loadEnv({ ...MINIMAL_ENV, HEALTHCHECK_DATABASE_TIMEOUT_MS: "1500" });
+
+    expect(env.HEALTH_PROBE_TIMEOUT_MS).toBe(1500);
+    expect(env.HEALTH_PROBE_INTERVAL_MS).toBe(10_000);
+    expect(env.HEALTH_PROBE_RETRY_MIN_MS).toBe(1_000);
+    expect(env.HEALTH_PROBE_RETRY_MAX_MS).toBe(30_000);
+  });
+
+  it("prefers HEALTH_PROBE_TIMEOUT_MS when both keys are set", () => {
+    const env = loadEnv({
+      ...MINIMAL_ENV,
+      HEALTHCHECK_DATABASE_TIMEOUT_MS: "1500",
+      HEALTH_PROBE_TIMEOUT_MS: "800"
+    });
+
+    expect(env.HEALTH_PROBE_TIMEOUT_MS).toBe(800);
+  });
+
+  it("rejects a retry floor above the retry cap", () => {
+    expect(() =>
+      loadEnv({ ...MINIMAL_ENV, HEALTH_PROBE_RETRY_MIN_MS: "5000", HEALTH_PROBE_RETRY_MAX_MS: "1000" })
+    ).toThrow();
+  });
+
+  it("describes configuration errors without echoing values", () => {
+    let caught: unknown;
+
+    try {
+      loadEnv({ ...MINIMAL_ENV, DATABASE_URL: "not-a-url-with-secret-sauce" });
+    } catch (error) {
+      caught = error;
+    }
+
+    const description = describeConfigError(caught);
+    expect(description?.issues.map((issue) => issue.path)).toContain("DATABASE_URL");
+    expect(JSON.stringify(description)).not.toContain("secret-sauce");
+    expect(describeConfigError(new Error("other"))).toBeNull();
+  });
+});
+
+describe("loadMigrationEnv", () => {
+  it("uses MIGRATION_DATABASE_URL when present and needs no runtime secrets", () => {
+    expect(
+      loadMigrationEnv({
+        DATABASE_URL: "postgres://app@db/quotes",
+        MIGRATION_DATABASE_URL: "postgres://migrator@db/quotes"
+      })
+    ).toEqual({ databaseUrl: "postgres://migrator@db/quotes" });
+  });
+
+  it("falls back to DATABASE_URL and fails without either", () => {
+    expect(loadMigrationEnv({ DATABASE_URL: "postgres://app@db/quotes" })).toEqual({
+      databaseUrl: "postgres://app@db/quotes"
+    });
+    expect(() => loadMigrationEnv({})).toThrow();
+  });
+});
 
 describe("loadEnv", () => {
   it("parses a valid environment", () => {

@@ -49,7 +49,12 @@ const envSchema = z
   SERVICE_NAME: z.string().min(1).default("pesaschile-quote-service"),
   SERVICE_VERSION: z.string().min(1).default("0.1.0"),
   SERVICE_AUTH_TOKEN: z.string().min(1),
-  HEALTHCHECK_DATABASE_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
+  // Deprecated alias for HEALTH_PROBE_TIMEOUT_MS; used only when the new key is unset.
+  HEALTHCHECK_DATABASE_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(2000),
+  HEALTH_PROBE_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).optional(),
+  HEALTH_PROBE_INTERVAL_MS: z.coerce.number().int().min(1_000).max(300_000).default(10_000),
+  HEALTH_PROBE_RETRY_MIN_MS: z.coerce.number().int().min(50).max(60_000).default(1_000),
+  HEALTH_PROBE_RETRY_MAX_MS: z.coerce.number().int().min(50).max(300_000).default(30_000),
   QUOTE_COMPANY_NAME: z.string().min(1).default("Pesas Chile SPA"),
   QUOTE_DOCUMENT_STORAGE_ROOT: z.string().min(1),
   QUOTE_DOCUMENT_REF_SECRET: z.string().min(16),
@@ -74,6 +79,14 @@ const envSchema = z
   GOOGLE_GMAIL_USER: z.string().trim().min(1).optional()
 })
   .superRefine((env, context) => {
+    if (env.HEALTH_PROBE_RETRY_MIN_MS > env.HEALTH_PROBE_RETRY_MAX_MS) {
+      context.addIssue({
+        code: "custom",
+        path: ["HEALTH_PROBE_RETRY_MIN_MS"],
+        message: "HEALTH_PROBE_RETRY_MIN_MS must not exceed HEALTH_PROBE_RETRY_MAX_MS"
+      });
+    }
+
     if (env.QUOTE_EMAIL_PROVIDER === "gmail") {
       const requiredKeys = [
         "GOOGLE_GMAIL_CLIENT_ID",
@@ -124,9 +137,64 @@ const envSchema = z
         message: "QUOTE_DOCUMENT_REF_SECRET is too weak for production"
       });
     }
-  });
+  })
+  .transform((env) => ({
+    ...env,
+    HEALTH_PROBE_TIMEOUT_MS: env.HEALTH_PROBE_TIMEOUT_MS ?? env.HEALTHCHECK_DATABASE_TIMEOUT_MS
+  }));
 
-export type AppEnv = z.infer<typeof envSchema>;
+export type AppEnv = z.output<typeof envSchema>;
+
+/**
+ * Configuration for the explicit migration/schema commands only. The
+ * migration connection may use a different (DDL-capable) role than the
+ * runtime; the server never reads MIGRATION_DATABASE_URL.
+ */
+const migrationEnvSchema = z.object({
+  DATABASE_URL: z.string().url().optional(),
+  MIGRATION_DATABASE_URL: z.string().url().optional()
+});
+
+export interface MigrationEnv {
+  readonly databaseUrl: string;
+}
+
+export function loadMigrationEnv(rawEnv: NodeJS.ProcessEnv = process.env): MigrationEnv {
+  const env = migrationEnvSchema.parse(rawEnv);
+  const databaseUrl = env.MIGRATION_DATABASE_URL ?? env.DATABASE_URL;
+
+  if (databaseUrl === undefined) {
+    throw new z.ZodError([
+      {
+        code: "custom",
+        path: ["MIGRATION_DATABASE_URL"],
+        message: "MIGRATION_DATABASE_URL or DATABASE_URL is required",
+        input: undefined
+      }
+    ]);
+  }
+
+  return {
+    databaseUrl
+  };
+}
+
+/**
+ * Sanitized description of a configuration failure: variable names and rule
+ * messages only, never the offending values.
+ */
+export function describeConfigError(error: unknown): { readonly issues: Array<{ path: string; message: string }> } | null {
+  if (!(error instanceof z.ZodError)) {
+    return null;
+  }
+
+  return {
+    issues: error.issues.map((issue) => ({
+      path: issue.path.join("."),
+      message: issue.message
+    }))
+  };
+}
 
 export function loadEnv(rawEnv: NodeJS.ProcessEnv = process.env): AppEnv {
   return envSchema.parse(rawEnv);

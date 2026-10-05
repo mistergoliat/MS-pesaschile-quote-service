@@ -1,26 +1,40 @@
-import { performance } from "node:perf_hooks";
-import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
+import { Pool, type ClientConfig, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 
-import type {
-  DatabaseHealthPort,
-  DatabaseHealthStatus
-} from "../../../application/ports/database-health-port";
 import type { AppEnv } from "../../config/env";
 
-export class PostgresDatabase implements DatabaseHealthPort {
+/** Connection settings shared by the request pool and the dependency probe. */
+export function buildConnectionConfig(env: AppEnv): ClientConfig {
+  return {
+    connectionString: env.DATABASE_URL,
+    ssl: env.DATABASE_SSL_MODE === "require" ? { rejectUnauthorized: false } : false,
+    application_name: env.SERVICE_NAME
+  };
+}
+
+export class PostgresDatabase {
   private readonly pool: Pool;
+  private connectionErrorListener: (error: Error) => void = () => undefined;
 
   public constructor(env: AppEnv) {
     this.pool = new Pool({
-      connectionString: env.DATABASE_URL,
-      ssl: env.DATABASE_SSL_MODE === "require" ? { rejectUnauthorized: false } : false,
+      ...buildConnectionConfig(env),
       max: env.DB_POOL_MAX,
       idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT_MS,
       connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT_MS,
       query_timeout: env.DB_QUERY_TIMEOUT_MS,
-      statement_timeout: env.DB_QUERY_TIMEOUT_MS,
-      application_name: env.SERVICE_NAME
+      statement_timeout: env.DB_QUERY_TIMEOUT_MS
     });
+    // An idle pooled client whose server connection dies (database restart,
+    // network drop) is reported here. Without a listener Node treats it as an
+    // unhandled error event and kills the process.
+    this.pool.on("error", (error) => {
+      this.connectionErrorListener(error);
+    });
+  }
+
+  /** Receives idle-connection failures; the pool already discards the broken client. */
+  public onConnectionError(listener: (error: Error) => void): void {
+    this.connectionErrorListener = listener;
   }
 
   public query<T extends QueryResultRow>(
@@ -43,31 +57,6 @@ export class PostgresDatabase implements DatabaseHealthPort {
       throw error;
     } finally {
       client.release();
-    }
-  }
-
-  public async checkHealth(timeoutMs: number): Promise<DatabaseHealthStatus> {
-    const startedAt = performance.now();
-
-    try {
-      await Promise.race([
-        this.query("select 1"),
-        new Promise((_, reject) => {
-          setTimeout(() => {
-            reject(new Error("database healthcheck timeout"));
-          }, timeoutMs);
-        })
-      ]);
-
-      return {
-        status: "up",
-        latencyMs: Math.round(performance.now() - startedAt)
-      };
-    } catch {
-      return {
-        status: "down",
-        latencyMs: Math.round(performance.now() - startedAt)
-      };
     }
   }
 

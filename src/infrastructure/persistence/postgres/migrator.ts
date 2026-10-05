@@ -2,6 +2,9 @@ import path from "node:path";
 
 import { runner } from "node-pg-migrate";
 
+export const MIGRATIONS_DIRECTORY = path.resolve(__dirname, "migrations");
+export const MIGRATIONS_TABLE = "schema_migrations";
+
 export interface RunMigrationsInput {
   databaseUrl: string;
   direction: "up" | "down";
@@ -13,9 +16,9 @@ export async function runMigrations({
 }: RunMigrationsInput): Promise<void> {
   const options = {
     databaseUrl,
-    dir: path.resolve(__dirname, "migrations"),
+    dir: MIGRATIONS_DIRECTORY,
     direction,
-    migrationsTable: "schema_migrations",
+    migrationsTable: MIGRATIONS_TABLE,
     checkOrder: true,
     noLock: false,
     log: () => undefined

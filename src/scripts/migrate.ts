@@ -1,8 +1,10 @@
 import "dotenv/config";
 
-import { loadEnv } from "../infrastructure/config/env";
+import { describeConfigError, loadMigrationEnv } from "../infrastructure/config/env";
 import { runMigrations } from "../infrastructure/persistence/postgres/migrator";
 
+// Explicit, operator-run DDL path. The server never runs migrations.
+// Uses MIGRATION_DATABASE_URL when set, otherwise DATABASE_URL.
 async function main(): Promise<void> {
   const directionArg = process.argv[2];
 
@@ -10,11 +12,26 @@ async function main(): Promise<void> {
     throw new Error("Usage: npm run db:migrate -- <up|down>");
   }
 
-  const env = loadEnv();
+  const env = loadMigrationEnv();
   await runMigrations({
-    databaseUrl: env.DATABASE_URL,
+    databaseUrl: env.databaseUrl,
     direction: directionArg
   });
+  console.log(JSON.stringify({ status: "ok", direction: directionArg }));
 }
 
-void main();
+main().catch((error: unknown) => {
+  const configError = describeConfigError(error);
+  console.error(
+    JSON.stringify(
+      configError
+        ? { status: "config_invalid", ...configError }
+        : {
+            status: "failed",
+            errorName: error instanceof Error ? error.name : "unknown",
+            errorMessage: error instanceof Error ? error.message : String(error)
+          }
+    )
+  );
+  process.exit(1);
+});
