@@ -11,6 +11,7 @@ import { probeFailed } from "../../src/application/health/dependency-state";
 import { runMigrations } from "../../src/infrastructure/persistence/postgres/migrator";
 import { EXPECTED_SCHEMA_HEAD } from "../../src/infrastructure/persistence/postgres/schema-head";
 import { buildRuntimeTestEnv, waitFor } from "../helpers/runtime-test-env";
+import { bearer, TEST_TOKENS } from "../helpers/test-principals";
 import { createTestDatabase, type TestDatabaseHandle } from "../helpers/test-database";
 import { ToggleableTcpProxy } from "../helpers/toggleable-tcp-proxy";
 
@@ -69,13 +70,13 @@ async function startHarness(options: {
   // quotes table through the request pool.
   const holder: { context?: ApplicationContext } = {};
   const probeRoutes: BusinessRouteRegistrar = (businessApp) => {
-    businessApp.get("/probe/quotes", async () => {
+    businessApp.get("/probe/quotes", { config: { requiredScope: "quotes:read" } }, async () => {
       const result = await holder.context!.database.query<{ count: number }>(
         "select count(*)::int as count from quote_service.quotes"
       );
       return { quotes: result.rows[0]!.count };
     });
-    businessApp.post("/probe/hang", async () => {
+    businessApp.post("/probe/hang", { config: { requiredScope: "quotes:read" } }, async () => {
       await options.hang;
       return { done: true };
     });
@@ -98,7 +99,7 @@ async function startHarness(options: {
     proxy,
     async get(pathname, auth = false) {
       const response = await fetch(`${baseUrl}${pathname}`, {
-        headers: auth ? { Authorization: "Bearer token" } : {}
+        headers: auth ? { Authorization: bearer(TEST_TOKENS.monitoring) } : {}
       });
       const text = await response.text();
       return { status: response.status, body: text ? JSON.parse(text) : null, text, headers: response.headers };
@@ -106,7 +107,7 @@ async function startHarness(options: {
     async post(pathname, body, headers = {}) {
       const response = await fetch(`${baseUrl}${pathname}`, {
         method: "POST",
-        headers: { Authorization: "Bearer token", "Content-Type": "application/json", ...headers },
+        headers: { Authorization: bearer(TEST_TOKENS.monitoring), "Content-Type": "application/json", ...headers },
         body: JSON.stringify(body)
       });
       const text = await response.text();
@@ -135,13 +136,14 @@ describe("runtime reliability: database outage and recovery", () => {
     });
 
     // Business traffic fails closed with a contract error, not a raw driver error.
-    const list = await harness.get("/probe/quotes");
+    const list = await harness.get("/probe/quotes", true);
     expect(list.status).toBe(503);
     expect(list.headers.get("retry-after")).toBe("5");
     expect(list.body).toEqual({
       error: {
         code: "dependency_unavailable",
         message: "A required dependency is unavailable; nothing was committed.",
+        requestId: expect.any(String) as string,
         details: { dependency: "database", retryable: true }
       }
     });
@@ -157,7 +159,7 @@ describe("runtime reliability: database outage and recovery", () => {
       status: "ready",
       checks: { database: "ok", schema: "ok", artifactStorage: "ok", renderer: "ok", lifecycle: "ok" }
     });
-    expect((await harness.get("/probe/quotes")).status).toBe(200);
+    expect((await harness.get("/probe/quotes", true)).status).toBe(200);
   }, TEST_TIMEOUT_MS);
 
   it("C: loses the database after ready, stays live, then recovers without restart", async () => {
@@ -166,20 +168,20 @@ describe("runtime reliability: database outage and recovery", () => {
 
     // Warm the pool so idle clients exist when the connection drops: their
     // 'error' events must be absorbed, not crash the process.
-    expect((await harness.get("/probe/quotes")).status).toBe(200);
+    expect((await harness.get("/probe/quotes", true)).status).toBe(200);
 
     await harness.proxy.disable();
     await waitFor(async () => (await readyStatus(harness)) === 503, 10_000);
 
     expect((await harness.get("/health/live")).status).toBe(200);
-    const duringOutage = await harness.get("/probe/quotes");
+    const duringOutage = await harness.get("/probe/quotes", true);
     expect(duringOutage.status).toBe(503);
     expect((duringOutage.body as { error: { code: string } }).error.code).toBe("dependency_unavailable");
 
     await harness.proxy.enable();
     await waitFor(async () => (await readyStatus(harness)) === 200, 10_000);
 
-    const afterRecovery = await harness.get("/probe/quotes");
+    const afterRecovery = await harness.get("/probe/quotes", true);
     expect(afterRecovery.status).toBe(200);
     expect(afterRecovery.body).toEqual({ quotes: 0 });
   }, TEST_TIMEOUT_MS);
@@ -192,7 +194,7 @@ describe("runtime reliability: database outage and recovery", () => {
     await harness.context.dependencyMonitor.stop();
     await harness.proxy.disable();
 
-    const response = await harness.get("/probe/quotes");
+    const response = await harness.get("/probe/quotes", true);
     expect(response.status).toBe(503);
     expect(response.body).toMatchObject({ error: { code: "dependency_unavailable" } });
     expect(response.text).not.toContain("ECONNREFUSED");
@@ -215,7 +217,7 @@ describe("runtime reliability: schema head", () => {
     expect(ready.status).toBe(503);
     expect(ready.body).toMatchObject({ checks: { database: "ok", schema: "fail" } });
 
-    const list = await harness.get("/probe/quotes");
+    const list = await harness.get("/probe/quotes", true);
     expect(list.status).toBe(503);
     expect(list.body).toMatchObject({ error: { code: "schema_not_ready" } });
 
@@ -231,7 +233,7 @@ describe("runtime reliability: schema head", () => {
     await harness.context.dependencyMonitor.probeNow();
 
     expect(await readyStatus(harness)).toBe(503);
-    expect((await harness.get("/probe/quotes")).body).toMatchObject({ error: { code: "schema_not_ready" } });
+    expect((await harness.get("/probe/quotes", true)).body).toMatchObject({ error: { code: "schema_not_ready" } });
     expect(harness.context.dependencyMonitor.details().schema.state).toBe("SCHEMA_BEHIND");
     expect((await schemaBody(harness)).schema.actualHead).toBe("000007_quote_v2_persistence");
 
@@ -276,7 +278,7 @@ describe("runtime reliability: storage and renderer", () => {
       status: "not_ready",
       checks: { artifactStorage: "fail", database: "ok" }
     });
-    expect((await harness.get("/probe/quotes")).body).toMatchObject({
+    expect((await harness.get("/probe/quotes", true)).body).toMatchObject({
       error: { code: "dependency_unavailable", details: { dependency: "artifactStorage" } }
     });
 
@@ -299,7 +301,7 @@ describe("runtime reliability: storage and renderer", () => {
       status: "not_ready",
       checks: { renderer: "fail", database: "ok", schema: "ok", artifactStorage: "ok" }
     });
-    expect((await harness.get("/probe/quotes")).body).toMatchObject({
+    expect((await harness.get("/probe/quotes", true)).body).toMatchObject({
       error: { code: "dependency_unavailable", details: { dependency: "renderer" } }
     });
   }, TEST_TIMEOUT_MS);
@@ -338,8 +340,7 @@ describe("runtime reliability: diagnostics", () => {
       String(harness.proxy.port),
       harness.database.databaseName,
       harness.storageRoot,
-      "token",
-      "test-document-secret",
+      TEST_TOKENS.monitoring,
       "ECONNREFUSED",
       "stack",
       "    at "

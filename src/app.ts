@@ -1,7 +1,8 @@
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { DependencyMonitor } from "./application/health/dependency-monitor";
-import type { AppEnv } from "./infrastructure/config/env";
+import { PrincipalRegistry } from "./infrastructure/auth/principal-registry";
+import { principalRegistrySource, type AppEnv } from "./infrastructure/config/env";
 import { FilesystemDocumentArtifactStorage } from "./infrastructure/documents/filesystem-document-artifact-storage";
 import { NativePdfRenderer, type PdfRendererPort } from "./infrastructure/documents/native-pdf-renderer";
 import {
@@ -26,6 +27,7 @@ export interface ApplicationContext {
   backgroundJobs: BackgroundJobManager;
   lifecycleState: ApplicationLifecycleState;
   dependencyMonitor: DependencyMonitor;
+  principalRegistry: PrincipalRegistry;
   /**
    * Ordered, bounded shutdown: not-ready → stop probes and jobs → close HTTP
    * (drains in-flight requests) → close the database pool. Resolves within
@@ -36,6 +38,9 @@ export interface ApplicationContext {
 
 export interface BuildApplicationOverrides {
   readonly pdfRenderer?: PdfRendererPort;
+  readonly principalRegistry?: PrincipalRegistry;
+  /** Log destination (tests capture logs to prove no secret is written). */
+  readonly logStream?: { write(line: string): void };
   /** Business routes mounted behind the readiness gate. */
   readonly businessRoutes?: readonly BusinessRouteRegistrar[];
 }
@@ -43,8 +48,8 @@ export interface BuildApplicationOverrides {
 /**
  * Builds the application without touching any external dependency. Throws
  * only for local initialization corruption (e.g. packaged migrations that do
- * not match the compiled manifest); dependency availability is the
- * DependencyMonitor's concern.
+ * not match the compiled manifest, a malformed principal registry);
+ * dependency availability is the DependencyMonitor's concern.
  *
  * R1.4 state: the V1 API and its workers are retired (their persistence
  * model was replaced by the V2 schema); the V2 API arrives in R1.5. The
@@ -56,13 +61,15 @@ export function buildApplication(
   overrides: BuildApplicationOverrides = {}
 ): ApplicationContext {
   const migrationManifest = loadMigrationManifest();
+  const principalRegistry = overrides.principalRegistry ?? PrincipalRegistry.load(principalRegistrySource(env));
   const app: FastifyInstance = Fastify({
     bodyLimit: env.HTTP_BODY_LIMIT_BYTES,
     requestTimeout: env.HTTP_REQUEST_TIMEOUT_MS,
     connectionTimeout: env.HTTP_CONNECTION_TIMEOUT_MS,
     keepAliveTimeout: env.HTTP_KEEP_ALIVE_TIMEOUT_MS,
     logger: {
-      level: env.LOG_LEVEL
+      level: env.LOG_LEVEL,
+      ...(overrides.logStream ? { stream: overrides.logStream } : {})
     },
     routerOptions: {
       maxParamLength: 1024
@@ -102,6 +109,8 @@ export function buildApplication(
   });
   const backgroundJobs = new BackgroundJobManager();
 
+  app.decorateRequest("principal", null);
+
   app.setErrorHandler((error, request, reply) => {
     // A request that hit a dead connection is a cheap, early outage signal.
     if (toHttpError(error).code === "dependency_unavailable") {
@@ -137,6 +146,7 @@ export function buildApplication(
   registerRoutes(app, {
     env,
     monitor: dependencyMonitor,
+    principalRegistry,
     backgroundJobs,
     // The email subsystem was retired with V1 and returns in R1.6.
     emailEnabled: false,
@@ -199,6 +209,7 @@ export function buildApplication(
     backgroundJobs,
     lifecycleState,
     dependencyMonitor,
+    principalRegistry,
     shutdown
   };
 }

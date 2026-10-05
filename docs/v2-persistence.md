@@ -273,7 +273,7 @@ for the R1.5 routes, injected through `BuildApplicationOverrides.businessRoutes`
 
 | Item | Owner slice |
 |---|---|
-| V2 routes, closed schemas, error catalog, principal registry and scopes | R1.5 |
+| V2 routes, closed schemas, error catalog (principal registry and scope enforcement: done in R1.5A, [principals.md](principals.md)) | R1.5 |
 | Acceptance transaction: fingerprint (JCS), binding, number allocation `PC-` + ≥ 6 digits, validity resolution with IANA tzdb, operation creation | R1.5 |
 | Issuance worker: claim / lease / fencing / backoff / deadline sweep, inline budget, content-addressed artifact write, manifest commit | R1.5 |
 | Operator retry procedure (A1, T10) and cancel-after-failed-issuance (T11) | R1.5 (state) / R1.6 (tooling) |

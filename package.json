@@ -28,6 +28,8 @@
     "db:manifest": "node scripts/generate-migration-manifest.cjs",
     "db:grants": "tsx src/scripts/apply-runtime-grants.ts",
     "db:grants:runtime": "node dist/scripts/apply-runtime-grants.js",
+    "principals:token": "tsx src/scripts/generate-principal-token.ts",
+    "principals:token:runtime": "node dist/scripts/generate-principal-token.js",
     "documents:verify": "tsx src/scripts/verify-document-artifacts.ts",
     "documents:verify:runtime": "node dist/scripts/verify-document-artifacts.js",
     "email:preview": "tsx src/scripts/preview-quote-email.ts",

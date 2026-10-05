@@ -8,7 +8,7 @@ import {
 
 const MINIMAL_ENV = {
   DATABASE_URL: "postgres://app:app-secret-password@db.internal:5432/quotes",
-  SERVICE_AUTH_TOKEN: "token",
+  QUOTE_PRINCIPAL_REGISTRY_JSON: "{}",
   QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
 };
 
@@ -83,7 +83,7 @@ describe("loadEnv", () => {
       DATABASE_SSL_MODE: "disable",
       SERVICE_NAME: "service",
       SERVICE_VERSION: "1.0.0",
-      SERVICE_AUTH_TOKEN: "token",
+      QUOTE_PRINCIPAL_REGISTRY_JSON: "{}",
       HEALTHCHECK_DATABASE_TIMEOUT_MS: "1500",
       QUOTE_COMPANY_NAME: "Pesas Chile SPA",
       QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
@@ -106,7 +106,7 @@ describe("loadEnv", () => {
     expect(() =>
       loadEnv({
         DATABASE_URL: "not-a-url",
-        SERVICE_AUTH_TOKEN: "token",
+        QUOTE_PRINCIPAL_REGISTRY_JSON: "{}",
         QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
       })
     ).toThrow();

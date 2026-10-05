@@ -28,7 +28,9 @@ Never reorder. The service never migrates by itself.
 - Secrets in the host's secret store, never in shell history:
   - `MIGRATION_DATABASE_URL`: migration principal;
   - `DATABASE_URL`: runtime login;
-  - `SERVICE_AUTH_TOKEN`: at least 16 characters.
+  - principal registry (`QUOTE_PRINCIPAL_REGISTRY_FILE` or `QUOTE_PRINCIPAL_REGISTRY_JSON`):
+    token hashes and scopes only, see [`docs/principals.md`](../principals.md);
+    include a monitoring principal with `service:health:dependencies`.
 - PostgreSQL ≥ 15.
 - A persistent volume for `QUOTE_DOCUMENT_STORAGE_ROOT`, owned by the
   service user.
@@ -138,7 +140,7 @@ migration manifest mismatch) or `runtime.bind_failed` in the logs.
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/health/ready   # 200
-curl -sS -H "Authorization: Bearer $SERVICE_AUTH_TOKEN" \
+curl -sS -H "Authorization: Bearer $MONITORING_TOKEN" \
   http://127.0.0.1:3000/health/dependencies
 ```
 

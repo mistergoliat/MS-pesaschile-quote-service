@@ -89,7 +89,7 @@ lifecycle are all `ok`. Otherwise `503`. The body is only `ok`/`fail` per check:
 Use it for **traffic decisions** (load balancer, smoke tests, deploy gates).
 Never use it as a restart trigger.
 
-### `GET /health/dependencies`: `Authorization: Bearer <SERVICE_AUTH_TOKEN>`
+### `GET /health/dependencies`: principal with scope `service:health:dependencies`
 
 Always `200` when authorized. The shape is the contract's `DependencyHealth`:
 
@@ -108,8 +108,9 @@ contract's `failureCategory` / `lastSuccessAt`.
 Never returned: DSNs, hosts, ports, database names, credentials, filesystem
 paths, stack traces, raw driver errors.
 
-V1 scope note: the contract's `service:health:dependencies` scope needs the
-V2 principal registry (R1.5). Until then the V1 service token guards this route.
+Authentication uses the principal registry ([principals.md](principals.md)):
+`401 unauthenticated` without a valid credential, `403 forbidden` without
+the scope.
 
 ### `GET /health`: deprecated
 
@@ -288,7 +289,7 @@ green without a restart.
 |---|---|---|
 | ~~Separate DB roles and grants~~ | **Done in R1.4** (`000008`, [v2-persistence.md §6](v2-persistence.md#6-database-roles-and-grants)) | — |
 | ~~Migration file checksums~~ | **Done in R1.4** (`000006`, [v2-persistence.md §3](v2-persistence.md#3-migration-integrity)) | — |
-| `service:health:dependencies` scope enforcement | Needs the V2 principal registry | R1.5 |
+| ~~`service:health:dependencies` scope enforcement~~ | **Done in R1.5A** ([principals.md](principals.md)) | — |
 | Worker `queueDepth` / `oldestPendingAgeSeconds` | Measured by the V2 durable workers | R1.5 |
 | Email provider active probe | Health checks must not call Gmail. Status is derived from delivery outcomes | — |
 | Backup/restore rehearsal (DB + document root) | Recovery model documented in R1.4 ([v2-persistence.md §7](v2-persistence.md#7-recovery-model)); rehearsal needs the production environment | R1.7 |

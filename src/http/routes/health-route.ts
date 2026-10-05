@@ -4,16 +4,18 @@ import type {
   DependencyMonitor,
   DependencyStatusView
 } from "../../application/health/dependency-monitor";
+import type { PrincipalRegistry } from "../../infrastructure/auth/principal-registry";
 import type { AppEnv } from "../../infrastructure/config/env";
 import type {
   BackgroundJobManager,
   BackgroundJobStatus
 } from "../../infrastructure/runtime/background-job-manager";
-import { assertServiceAuthentication } from "../service-auth";
+import { requireScope } from "../authentication";
 
 export interface HealthRouteDependencies {
   readonly env: AppEnv;
   readonly monitor: DependencyMonitor;
+  readonly principalRegistry: PrincipalRegistry;
   readonly backgroundJobs: BackgroundJobManager;
   readonly emailEnabled: boolean;
   readonly startedAt: Date;
@@ -67,7 +69,7 @@ function toEmailProviderView(emailEnabled: boolean, job: BackgroundJobStatus): E
  * fast and cannot fan out load onto a struggling database.
  */
 export function registerHealthRoute(app: FastifyInstance, deps: HealthRouteDependencies): void {
-  const { env, monitor, backgroundJobs, emailEnabled, startedAt } = deps;
+  const { env, monitor, principalRegistry, backgroundJobs, emailEnabled, startedAt } = deps;
 
   app.get("/health/live", async (_request, reply) => {
     return reply.header("Cache-Control", "no-store").code(200).send({ status: "live" });
@@ -91,31 +93,33 @@ export function registerHealthRoute(app: FastifyInstance, deps: HealthRouteDepen
       .send(readiness);
   });
 
-  app.get("/health/dependencies", async (request, reply) => {
-    assertServiceAuthentication(request.headers.authorization, env.SERVICE_AUTH_TOKEN);
+  app.get(
+    "/health/dependencies",
+    { preHandler: requireScope(principalRegistry, "service:health:dependencies") },
+    async (_request, reply) => {
+      const details = monitor.details();
+      const jobs = backgroundJobs.status();
 
-    const details = monitor.details();
-    const jobs = backgroundJobs.status();
-
-    return reply.header("Cache-Control", "no-store").code(200).send({
-      service: {
-        name: env.SERVICE_NAME,
-        version: env.SERVICE_VERSION,
-        startedAt: startedAt.toISOString()
-      },
-      schema: {
-        expectedHead: details.schema.expectedHead,
-        actualHead: details.schema.actualHead
-      },
-      dependencies: {
-        ...details.dependencies,
-        emailProvider: toEmailProviderView(emailEnabled, jobs.emailDelivery)
-      },
-      workers: {
-        issuance: toWorkerView(jobs.issuance),
-        expiry: toWorkerView(jobs.expiry),
-        emailDelivery: toWorkerView(jobs.emailDelivery)
-      }
-    });
-  });
+      return reply.header("Cache-Control", "no-store").code(200).send({
+        service: {
+          name: env.SERVICE_NAME,
+          version: env.SERVICE_VERSION,
+          startedAt: startedAt.toISOString()
+        },
+        schema: {
+          expectedHead: details.schema.expectedHead,
+          actualHead: details.schema.actualHead
+        },
+        dependencies: {
+          ...details.dependencies,
+          emailProvider: toEmailProviderView(emailEnabled, jobs.emailDelivery)
+        },
+        workers: {
+          issuance: toWorkerView(jobs.issuance),
+          expiry: toWorkerView(jobs.expiry),
+          emailDelivery: toWorkerView(jobs.emailDelivery)
+        }
+      });
+    }
+  );
 }

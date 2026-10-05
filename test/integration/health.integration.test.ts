@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApplication } from "../../src/app";
 import { runMigrations } from "../../src/infrastructure/persistence/postgres/migrator";
 import { buildRuntimeTestEnv } from "../helpers/runtime-test-env";
+import { bearer, TEST_TOKENS } from "../helpers/test-principals";
 import {
   createTestDatabase,
   type TestDatabaseHandle
@@ -107,7 +108,7 @@ describe("health endpoints", () => {
     await context().app.inject({
       method: "GET",
       url: "/health/dependencies",
-      headers: { authorization: "Bearer token" }
+      headers: { authorization: bearer(TEST_TOKENS.monitoring) }
     });
 
     expect(probeSpy).not.toHaveBeenCalled();

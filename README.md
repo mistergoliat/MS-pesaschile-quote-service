@@ -8,7 +8,7 @@ Owner service for PesasChile commercial quotes, being rebuilt on the frozen
 | R1.2 V2 contract | frozen (amendments A1–A3 applied in R1.4) |
 | R1.3 runtime reliability and health | done: [docs/runtime-lifecycle.md](docs/runtime-lifecycle.md) |
 | R1.4 V2 schema and migration foundation | done: [docs/v2-persistence.md](docs/v2-persistence.md) |
-| R1.5 V2 API, idempotency, durable issuance | not started |
+| R1.5 V2 API, idempotency, durable issuance | in progress: principal registry (A.1) done |
 
 **Current runtime:** health endpoints and the readiness-gated business
 context. The V1 API (`/v1/*`), its repositories and workers were retired in
@@ -43,6 +43,7 @@ curl -i localhost:3000/health/ready
 | `npm run db:check` / `db:check:runtime` | connectivity, schema head and migration integrity, as readiness sees them |
 | `npm run db:manifest` | regenerate the migration manifest after adding a migration |
 | `npm run db:grants` / `db:grants:runtime` | re-apply the `quote_runtime` grants |
+| `npm run principals:token` | new caller token plus the SHA-256 for the principal registry |
 | `npm run documents:verify` / `documents:verify:runtime` | verify stored artifacts against their manifests (`--record-byte-length` for legacy sizes) |
 | `npm run smoke:docker` | build the image and smoke the runtime (migrate, check, health, restart, shutdown) |
 | `npm run pdf:preview`, `pdf:benchmark`, `pdf:concurrency-smoke` | PDF renderer previews and checks |
@@ -55,11 +56,13 @@ curl -i localhost:3000/health/ready
 |---|---|---|
 | `GET /health/live` | none | process answers; never probes dependencies |
 | `GET /health/ready` | none | `200` only when database, schema head (including integrity), storage, renderer and lifecycle are ok |
-| `GET /health/dependencies` | `Bearer SERVICE_AUTH_TOKEN` | sanitized dependency and worker detail (contract `DependencyHealth`) |
+| `GET /health/dependencies` | principal with `service:health:dependencies` | sanitized dependency and worker detail (contract `DependencyHealth`) |
 | `GET /health` | none | deprecated liveness alias |
 
 Semantics, failure policy and configuration:
-[docs/runtime-lifecycle.md](docs/runtime-lifecycle.md).
+[docs/runtime-lifecycle.md](docs/runtime-lifecycle.md). Principals, scopes and
+credentials: [docs/principals.md](docs/principals.md); the V1 global
+`SERVICE_AUTH_TOKEN` is retired.
 
 ## Persistence
 

@@ -62,7 +62,8 @@ const state = {
     storageRoot: "/var/lib/pesaschile/quote-documents"
   },
   credentials: {
-    serviceAuthToken: `smoke-service-auth-${crypto.randomBytes(16).toString("hex")}`
+    // Monitoring principal for /health/dependencies (registry stores only the hash).
+    serviceAuthToken: crypto.randomBytes(32).toString("base64url")
   },
   app: {
     hostPort: null,
@@ -118,7 +119,17 @@ function buildAppEnv() {
     DATABASE_SSL_MODE: "disable",
     SERVICE_NAME: "pesaschile-quote-service",
     SERVICE_VERSION: "0.1.0-smoke",
-    SERVICE_AUTH_TOKEN: state.credentials.serviceAuthToken,
+    QUOTE_PRINCIPAL_REGISTRY_JSON: JSON.stringify({
+      version: 1,
+      principals: [
+        {
+          principalId: "monitoring",
+          principalType: "service",
+          scopes: ["service:health:dependencies"],
+          tokenSha256: [crypto.createHash("sha256").update(state.credentials.serviceAuthToken).digest("hex")]
+        }
+      ]
+    }),
     QUOTE_DOCUMENT_STORAGE_ROOT: state.paths.storageRoot,
     QUOTE_RENDER_VERSION: "quote-pdf-v3"
   };
@@ -326,10 +337,12 @@ async function fetchJson(path, options = {}) {
     timeoutMs = DEFAULT_HTTP_TIMEOUT_MS
   } = options;
   const controller = new AbortController();
+  // Ref'd on purpose: a connection that stalls without holding the event
+  // loop (e.g. Docker's port proxy before the app binds) must be aborted and
+  // retried, not let the process exit silently.
   const timer = setTimeout(() => {
     controller.abort(new Error(`HTTP timeout after ${timeoutMs}ms`));
   }, timeoutMs);
-  timer.unref();
 
   try {
     const response = await fetch(`${state.app.baseUrl}${path}`, {
@@ -588,16 +601,18 @@ async function runPhase(key, timeoutMs, work) {
   const startedAt = Date.now();
   log(`${label} START timeout=${timeoutMs}ms startedAt=${nowIso()}`);
 
+  let phaseTimer;
+
   try {
+    // Ref'd: a phase can never end the process silently; it either finishes or fails.
     const result = await Promise.race([
       work(),
       new Promise((_, reject) => {
-        const timer = setTimeout(() => {
+        phaseTimer = setTimeout(() => {
           reject(new Error(`${label} exceeded phase timeout ${timeoutMs}ms`));
         }, timeoutMs);
-        timer.unref();
       })
-    ]);
+    ]).finally(() => clearTimeout(phaseTimer));
     const durationMs = Date.now() - startedAt;
     state.summary.phases.push({
       phase: label,
@@ -778,6 +793,7 @@ async function runSmoke() {
       `Unexpected schema head: ${JSON.stringify(details.body.schema)}`
     );
     assert(!details.text.includes("postgres://"), "Dependency details leaked a DSN");
+    assert(!details.text.includes(state.credentials.serviceAuthToken), "Dependency details leaked the credential");
   });
 
   await runPhase("v1Retired", PHASE_TIMEOUT_MS.v1Retired, async () => {
