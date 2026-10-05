@@ -1,19 +1,31 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 
+import { QuoteRequestRejected, REJECTION_STATUS } from "../application/quote-v2/create-quote-request";
+import { CommitOutcomeUnknownError } from "../infrastructure/persistence/postgres/postgres";
 import {
   isDatabaseUnavailableError,
   isSchemaNotReadyError
 } from "../infrastructure/persistence/postgres/postgres-errors";
+import { InvalidCursorError } from "../infrastructure/persistence/postgres/quote-v2-reads";
 
 /** Seconds a client should wait before retrying a 503 caused by dependency state. */
 export const DEPENDENCY_RETRY_AFTER_SECONDS = 5;
 
 type HttpErrorCode =
-  | "missing_authentication"
-  | "invalid_authentication"
-  | "internal_server_error"
+  | "unauthenticated"
+  | "forbidden"
+  | "invalid_request"
+  | "internal_error"
   | "validation_error"
+  | "arithmetic_mismatch"
+  | "idempotency_key_conflict"
+  | "quote_not_found"
+  | "operation_not_found"
+  | "version_conflict"
+  | "invalid_state_transition"
+  | "operation_in_progress"
+  | "payload_too_large"
   | "dependency_unavailable"
   | "schema_not_ready";
 
@@ -68,17 +80,34 @@ export function toHttpError(error: unknown): HttpError {
     return error;
   }
 
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "FST_ERR_CTP_BODY_TOO_LARGE"
-  ) {
+  // Never claim "nothing was committed" when COMMIT itself failed: the caller
+  // must reconcile by replaying with the same Idempotency-Key.
+  if (error instanceof CommitOutcomeUnknownError) {
     return new HttpError({
-      statusCode: 413,
-      code: "validation_error",
-      message: "Request body is too large"
+      statusCode: 500,
+      code: "internal_error",
+      message: "The outcome of the request is unknown; retry it with the same Idempotency-Key."
     });
+  }
+
+  if (error instanceof InvalidCursorError) {
+    return new HttpError({ statusCode: 400, code: "invalid_request", message: "cursor is invalid for this query" });
+  }
+
+  if (error instanceof QuoteRequestRejected) {
+    return new HttpError({ statusCode: REJECTION_STATUS[error.code], code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) });
+  }
+
+  const fastifyCode =
+    typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "";
+
+  if (fastifyCode === "FST_ERR_CTP_BODY_TOO_LARGE") {
+    return new HttpError({ statusCode: 413, code: "payload_too_large", message: "Request body is too large" });
+  }
+
+  // Malformed JSON, unsupported media type and other request-parsing failures.
+  if (fastifyCode.startsWith("FST_ERR_CTP_") || fastifyCode === "FST_ERR_VALIDATION") {
+    return new HttpError({ statusCode: 400, code: "invalid_request", message: "The request could not be parsed" });
   }
 
   // A request that raced a dependency failure past the readiness gate must
@@ -107,7 +136,7 @@ export function toHttpError(error: unknown): HttpError {
 
   return new HttpError({
     statusCode: 500,
-    code: "internal_server_error",
+    code: "internal_error",
     message: "Unexpected server error"
   });
 }
@@ -158,6 +187,7 @@ export function sendErrorResponse(
     error: {
       code: httpError.code,
       message: httpError.message,
+      requestId: request.id,
       ...(httpError.details ? { details: httpError.details } : {})
     }
   });

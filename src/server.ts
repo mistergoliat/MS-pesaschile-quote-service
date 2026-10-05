@@ -1,12 +1,14 @@
 import "dotenv/config";
 
 import { buildApplication, type ApplicationContext } from "./app";
+import { PrincipalRegistryError } from "./infrastructure/auth/principal-registry";
 import { describeConfigError, loadEnv, type AppEnv } from "./infrastructure/config/env";
 
 /*
  * Top-level failure policy (docs/runtime-lifecycle.md):
  *
- *   A. terminate (exit 1): invalid static configuration, local initialization
+ *   A. terminate (exit 1): invalid static configuration (including a malformed
+ *      principal registry), local initialization
  *      corruption (e.g. packaged migration set inconsistent), cannot bind the
  *      port, programmer errors (uncaught exception / unhandled rejection).
  *   B. stay live, not ready: database unreachable, schema not at expected
@@ -55,6 +57,28 @@ function installProcessHandlers(): void {
   process.on("uncaughtException", onProgrammerError("uncaughtException"));
   process.on("unhandledRejection", onProgrammerError("unhandledRejection"));
 
+  // Credential rotation/revocation without restart (security contract §4).
+  // An invalid new registry is rejected and the current one stays active.
+  process.on("SIGHUP", () => {
+    if (!application) {
+      return;
+    }
+
+    const result = application.principalRegistry.reload();
+
+    if (result.ok) {
+      application.app.log.info(
+        { event: "principal_registry.reloaded", principals: result.principals },
+        "Principal registry reloaded"
+      );
+    } else {
+      application.app.log.error(
+        { event: "principal_registry.reload_rejected", issues: result.error.issues },
+        "Principal registry reload rejected; previous registry kept"
+      );
+    }
+  });
+
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.once(signal, () => {
       void terminate(0, signal);
@@ -77,7 +101,12 @@ async function main(): Promise<void> {
   try {
     application = buildApplication(env);
   } catch (error) {
-    writeFatal("runtime.init_failed", errorSummary(error));
+    if (error instanceof PrincipalRegistryError) {
+      writeFatal("runtime.config_invalid", { errorMessage: error.message, issues: error.issues });
+    } else {
+      writeFatal("runtime.init_failed", errorSummary(error));
+    }
+
     process.exit(1);
   }
 

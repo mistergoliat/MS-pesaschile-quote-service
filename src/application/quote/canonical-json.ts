@@ -57,3 +57,29 @@ export function toCanonicalJson(value: unknown): string {
 export function createCanonicalRequestHash(value: unknown): string {
   return crypto.createHash("sha256").update(toCanonicalJson(value)).digest("hex");
 }
+
+/**
+ * RFC 8785 (JCS) serialization for JSON values: object keys sorted by UTF-16
+ * code units, ES number/string serialization (identical to JSON.stringify).
+ * Builds the string directly, because JS objects order integer-like keys
+ * numerically, which JCS does not.
+ */
+export function canonicalizeJcs(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalizeJcs).join(",")}]`;
+  }
+
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalizeJcs(record[key])}`)
+    .join(",")}}`;
+}
+
+export function sha256Jcs(value: unknown): string {
+  return crypto.createHash("sha256").update(canonicalizeJcs(value), "utf8").digest("hex");
+}

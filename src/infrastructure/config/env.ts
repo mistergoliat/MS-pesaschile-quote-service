@@ -21,7 +21,11 @@ const envSchema = z
   DB_QUERY_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(15_000),
   SERVICE_NAME: z.string().min(1).default("pesaschile-quote-service"),
   SERVICE_VERSION: z.string().min(1).default("0.1.0"),
-  SERVICE_AUTH_TOKEN: z.string().min(1),
+  // Principal registry (docs/principals.md): exactly one of a file path
+  // (reloadable on SIGHUP) or inline JSON injected by the secret store.
+  // The V1 SERVICE_AUTH_TOKEN is retired and maps to no principal.
+  QUOTE_PRINCIPAL_REGISTRY_FILE: z.string().trim().min(1).optional(),
+  QUOTE_PRINCIPAL_REGISTRY_JSON: z.string().trim().min(1).optional(),
   // Deprecated alias for HEALTH_PROBE_TIMEOUT_MS; used only when the new key is unset.
   HEALTHCHECK_DATABASE_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(2000),
   HEALTH_PROBE_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).optional(),
@@ -52,6 +56,14 @@ const envSchema = z
       });
     }
 
+    if ((env.QUOTE_PRINCIPAL_REGISTRY_FILE === undefined) === (env.QUOTE_PRINCIPAL_REGISTRY_JSON === undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["QUOTE_PRINCIPAL_REGISTRY_FILE"],
+        message: "exactly one of QUOTE_PRINCIPAL_REGISTRY_FILE or QUOTE_PRINCIPAL_REGISTRY_JSON is required"
+      });
+    }
+
     if (env.QUOTE_EMAIL_PROVIDER === "gmail") {
       const requiredKeys = [
         "GOOGLE_GMAIL_CLIENT_ID",
@@ -71,20 +83,6 @@ const envSchema = z
           });
         }
       }
-    }
-
-    if (env.NODE_ENV !== "production") {
-      return;
-    }
-
-    const insecureAuthTokens = new Set(["replace-me", "token", "changeme"]);
-
-    if (env.SERVICE_AUTH_TOKEN.length < 16 || insecureAuthTokens.has(env.SERVICE_AUTH_TOKEN)) {
-      context.addIssue({
-        code: "custom",
-        path: ["SERVICE_AUTH_TOKEN"],
-        message: "SERVICE_AUTH_TOKEN is too weak for production"
-      });
     }
   })
   .transform((env) => ({
@@ -147,4 +145,12 @@ export function describeConfigError(error: unknown): { readonly issues: Array<{ 
 
 export function loadEnv(rawEnv: NodeJS.ProcessEnv = process.env): AppEnv {
   return envSchema.parse(rawEnv);
+}
+
+export function principalRegistrySource(
+  env: Pick<AppEnv, "QUOTE_PRINCIPAL_REGISTRY_FILE" | "QUOTE_PRINCIPAL_REGISTRY_JSON">
+): { readonly kind: "file"; readonly path: string } | { readonly kind: "inline"; readonly json: string } {
+  return env.QUOTE_PRINCIPAL_REGISTRY_FILE !== undefined
+    ? { kind: "file", path: env.QUOTE_PRINCIPAL_REGISTRY_FILE }
+    : { kind: "inline", json: env.QUOTE_PRINCIPAL_REGISTRY_JSON! };
 }

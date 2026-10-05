@@ -1,4 +1,5 @@
 import { loadEnv, type AppEnv } from "../../src/infrastructure/config/env";
+import { testRegistryJson } from "./test-principals";
 
 /**
  * Env with fast, bounded dependency probing so recovery tests finish in
@@ -19,7 +20,7 @@ export function buildRuntimeTestEnv(input: {
     DB_POOL_CONNECTION_TIMEOUT_MS: "1000",
     SERVICE_NAME: "pesaschile-quote-service",
     SERVICE_VERSION: "0.1.0-test",
-    SERVICE_AUTH_TOKEN: "token",
+    QUOTE_PRINCIPAL_REGISTRY_JSON: testRegistryJson(),
     HEALTH_PROBE_TIMEOUT_MS: "1000",
     HEALTH_PROBE_INTERVAL_MS: "1000",
     HEALTH_PROBE_RETRY_MIN_MS: "100",

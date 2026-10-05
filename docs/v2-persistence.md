@@ -33,8 +33,9 @@ and the static validator (446/446 checks) pins all three.
 | `000006_migration_integrity` | `schema_migration_checksums` table; `reject_mutation()` trigger function | yes (local only) |
 | `000007_quote_v2_persistence` | V2 schema plus the one-way V1 → V2 data migration; integrity triggers | **no** (`down = false`) |
 | `000008_quote_v2_runtime_grants` | `apply_runtime_grants()` and runtime privilege grants | yes (local only) |
+| `000009_quote_snapshot_child_insert_guard` | **R1.4 erratum (found in R1.5A.3):** `quote_lines` / `quote_shipping` INSERT allowed only while the parent quote is `draft` (000007 guarded only UPDATE/DELETE) | yes (local only) |
 
-**Expected head:** `000008_quote_v2_runtime_grants`.
+**Expected head:** `000009_quote_snapshot_child_insert_guard`.
 
 All pending migrations run in **one transaction**. The migrator sets
 `singleTransaction: true` explicitly, because node-pg-migrate's programmatic
@@ -273,8 +274,8 @@ for the R1.5 routes, injected through `BuildApplicationOverrides.businessRoutes`
 
 | Item | Owner slice |
 |---|---|
-| V2 routes, closed schemas, error catalog, principal registry and scopes | R1.5 |
-| Acceptance transaction: fingerprint (JCS), binding, number allocation `PC-` + ≥ 6 digits, validity resolution with IANA tzdb, operation creation | R1.5 |
+| V2 routes, closed schemas, error catalog (principal registry and scope enforcement: done in R1.5A, [principals.md](principals.md)) | R1.5 |
+| ~~Acceptance transaction for `POST /v2/quotes`~~ (R1.5A.2, `quote-v2-acceptance.ts`) and ~~drafts / issue-a-draft~~ (R1.5A.3, `quote-v2-drafts.ts`): done | — |
 | Issuance worker: claim / lease / fencing / backoff / deadline sweep, inline budget, content-addressed artifact write, manifest commit | R1.5 |
 | Operator retry procedure (A1, T10) and cancel-after-failed-issuance (T11) | R1.5 (state) / R1.6 (tooling) |
 | Expiry projection and materialization job | R1.5 |

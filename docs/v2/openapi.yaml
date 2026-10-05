@@ -262,6 +262,8 @@ paths:
         replaced, never merged. `shipping: null` removes shipping. Omitted
         members are unchanged. Content type is `application/json`, not JSON
         Merge Patch.
+
+        Creator principal only (amendment A4): `quotes:read:any` grants no mutation authority. For any other principal the quote is answered exactly like a missing one (`404 quote_not_found`).
       x-idempotency-operation: quote.draft.update
       x-required-scopes: [quotes:draft:write]
       parameters:
@@ -319,6 +321,8 @@ paths:
 
         As for create-and-issue, the length of any synchronous wait is not part
         of this contract; clients MUST handle both `200` and `202`.
+
+        Creator principal only (amendment A4): `quotes:read:any` grants no mutation authority. For any other principal the quote is answered exactly like a missing one (`404 quote_not_found`).
 
         No email is sent.
       x-idempotency-operation: quote.issue
@@ -505,6 +509,8 @@ paths:
         `pending` or `running` operation returns `409 operation_in_progress`;
         `expired` and `cancelled` return `409 invalid_state_transition`.
         Never rewrites an issued document.
+
+        Creator principal only (amendment A4): `quotes:read:any` grants no mutation authority. For any other principal the quote is answered exactly like a missing one (`404 quote_not_found`).
       x-idempotency-operation: quote.cancel
       x-required-scopes: [quotes:cancel]
       parameters:
@@ -862,7 +868,7 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     NotFound:
-      description: 'quote_not_found | operation_not_found | delivery_not_found (also returned for resources not visible to the principal).'
+      description: 'quote_not_found | operation_not_found | delivery_not_found (also returned for resources not visible to the principal, and for draft edit, issue and cancel of a quote the principal did not create, A4).'
       content:
         application/json:
           schema:

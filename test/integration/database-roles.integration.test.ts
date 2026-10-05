@@ -128,7 +128,7 @@ describe("database roles", () => {
     ).probe(5_000);
     expect(probe).toEqual({
       connection: { ok: true },
-      schema: { state: "READY", actualHead: "000008_quote_v2_runtime_grants" }
+      schema: { state: "READY", actualHead: "000009_quote_snapshot_child_insert_guard" }
     });
   }, 30_000);
 

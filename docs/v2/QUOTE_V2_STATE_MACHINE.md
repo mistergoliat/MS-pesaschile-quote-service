@@ -49,18 +49,22 @@ never moves the quote out of `issuing` by itself (amendment A1, freeze record).
 | # | From | To | Trigger | Initiator | Endpoint / job | Guard | Version | Timestamps / fields set | Audit event | Side effects | Reversible |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | T1 | — | `draft` | create draft | principal (`quotes:draft:write`) | `POST /v2/quotes/drafts` | valid body | 1 | `createdAt`, `updatedAt` | `quote.draft.created` | DB only | n/a |
-| T2 | `draft` | `draft` | update draft | principal (`quotes:draft:write`) | `PATCH /v2/quotes/{id}/draft` | `expectedVersion` = version | +1 | `updatedAt` | `quote.draft.updated` | DB only | yes (edit again) |
-| T3 | `draft` | `issuing` | issue | principal (`quotes:issue`) | `POST /v2/quotes/{id}/issue` | `expectedVersion` = version; ≥ 1 line; `expectedTotals` match; override authorized | +1 | `quoteNumber`, `issuance.issuedAt`, `validity`, `issuance.operationId` | `quote.issue.accepted` | DB only (number allocated) | no |
+| T2 | `draft` | `draft` | update draft | creator principal (`quotes:draft:write`) | `PATCH /v2/quotes/{id}/draft` | `expectedVersion` = version | +1 | `updatedAt` | `quote.draft.updated` | DB only | yes (edit again) |
+| T3 | `draft` | `issuing` | issue | creator principal (`quotes:issue`) | `POST /v2/quotes/{id}/issue` | `expectedVersion` = version; ≥ 1 line; `expectedTotals` match; override authorized | +1 | `quoteNumber`, `issuance.issuedAt`, `validity`, `issuance.operationId` | `quote.issue.accepted` | DB only (number allocated) | no |
 | T4 | — | `issuing` | create and issue | principal (`quotes:create`) | `POST /v2/quotes` | valid body; ≥ 1 line; `expectedTotals` match; override authorized | 1 | as T3 plus `createdAt` | `quote.issue.accepted` | DB only (number allocated) | no |
 | T5 | `issuing` | `issued` | manifest commit | system (handler inline or issuance worker) | issuance operation | holder of current fencing generation; artifact written and hash-verified | +1 | `document.*`, operation `succeeded`, `completedAt` | `quote.issued` | file written before commit | no |
 | T6 | `issuing` | `issuing` | issuance deadline exceeded | system | issuance worker (deadline sweep) | `now ≥ operation.deadlineAt` and no manifest committed | unchanged | operation `failed` (`issuance_deadline_exceeded`), `completedAt`; quote unchanged | `quote.issue.failed` | operator alert | via T10 or T11 |
-| T7 | `draft` | `cancelled` | cancel | principal (`quotes:cancel`) | `POST /v2/quotes/{id}/cancel` | `expectedVersion` = version | +1 | `cancellation` | `quote.cancelled` | none | no |
-| T8 | `issued` | `cancelled` | cancel | principal (`quotes:cancel`) | `POST /v2/quotes/{id}/cancel` | `expectedVersion` = version; `now < validUntilExclusive` | +1 | `cancellation` | `quote.cancelled` | none; document unchanged; queued email deliveries not yet `sending` become `failed` (`quote_cancelled`) | no |
+| T7 | `draft` | `cancelled` | cancel | creator principal (`quotes:cancel`) | `POST /v2/quotes/{id}/cancel` | `expectedVersion` = version | +1 | `cancellation` | `quote.cancelled` | none | no |
+| T8 | `issued` | `cancelled` | cancel | creator principal (`quotes:cancel`) | `POST /v2/quotes/{id}/cancel` | `expectedVersion` = version; `now < validUntilExclusive` | +1 | `cancellation` | `quote.cancelled` | none; document unchanged; queued email deliveries not yet `sending` become `failed` (`quote_cancelled`) | no |
 | T9 | `issued` | `expired` | validity elapsed | system | read projection + expiry job | `now ≥ validUntilExclusive` | +1 when materialized | `expiration.expiredAt = validUntilExclusive` | `quote.expired` (at materialization) | none; document unchanged | no |
 | T10 | `issuing` | `issuing` | issuance retry | operator | operator procedure (no public endpoint) | current operation `failed` | +1 | new operation `pending` with a new `deadlineAt`; `issuance.operationId` = new operation; same snapshot, number and validity | `quote.issue.accepted` (`data.retryOf` = failed operation) | DB only | no |
-| T11 | `issuing` | `cancelled` | cancel after failed issuance | principal (`quotes:cancel`) | `POST /v2/quotes/{id}/cancel` | `expectedVersion` = version; current operation `failed` | +1 | `cancellation` | `quote.cancelled` | none; the number never appears on a document | no |
+| T11 | `issuing` | `cancelled` | cancel after failed issuance | creator principal (`quotes:cancel`) | `POST /v2/quotes/{id}/cancel` | `expectedVersion` = version; current operation `failed` | +1 | `cancellation` | `quote.cancelled` | none; the number never appears on a document | no |
 
 Notes:
+
+- **Creator-only mutations (A4).** T2, T3, T7, T8 and T11 are allowed only
+  to the quote's creator principal; `quotes:read:any` grants none of them
+  ([security §3](QUOTE_V2_SECURITY_SCOPES.md#3-visibility-and-mutation-authority)).
 
 - **No public expire mutation.** T9 is never caller-triggered.
 - **Expiry projection.** Every read returns `expired` for a stored `issued`

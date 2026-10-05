@@ -26,12 +26,12 @@ Per-operation scopes are also declared in [openapi.yaml](openapi.yaml) as
 | Scope | Grants | Endpoints |
 |---|---|---|
 | `quotes:create` | Transactional create-and-issue | `POST /v2/quotes` |
-| `quotes:draft:write` | Create and edit drafts | `POST /v2/quotes/drafts`, `PATCH /v2/quotes/{id}/draft` |
-| `quotes:issue` | Issue a draft | `POST /v2/quotes/{id}/issue` |
+| `quotes:draft:write` | Create drafts; edit own drafts (§3) | `POST /v2/quotes/drafts`, `PATCH /v2/quotes/{id}/draft` |
+| `quotes:issue` | Issue own drafts (§3) | `POST /v2/quotes/{id}/issue` |
 | `quotes:read` | Read visible quotes, operations, own idempotency bindings, deliveries | `GET /v2/quotes/{id}`, `GET /v2/quotes`, `GET /v2/operations/{id}`, `GET /v2/idempotency/current`, `GET /v2/quotes/{id}/deliveries/{deliveryId}` |
-| `quotes:read:any` | Extends visibility to all quotes (§3) | (modifier) |
+| `quotes:read:any` | Extends **read** visibility to all quotes (§3); grants no mutation authority (A4) | (modifier) |
 | `quotes:document:read` | Download issued PDF bytes of visible quotes | `GET /v2/quotes/{id}/document` |
-| `quotes:cancel` | Cancel visible drafts and issued quotes | `POST /v2/quotes/{id}/cancel` |
+| `quotes:cancel` | Cancel own drafts and issued quotes (§3) | `POST /v2/quotes/{id}/cancel` |
 | `quotes:validity:override` | Send `validityOverride` (additionally to the endpoint's scope) | member of `POST /v2/quotes`, `POST /v2/quotes/{id}/issue` |
 | `quotes:delivery:email` | Queue an email delivery of a visible issued quote | `POST /v2/quotes/{id}/deliveries/email` |
 | `quotes:audit:read` | Read the audit history of visible quotes | `GET /v2/quotes/{id}/audit` |
@@ -40,14 +40,24 @@ Per-operation scopes are also declared in [openapi.yaml](openapi.yaml) as
 Missing scope → `403 forbidden` with `details.requiredScope`, evaluated before
 any idempotency lookup, so a forbidden request never binds or replays.
 
-## 3. Visibility
+## 3. Visibility and mutation authority
 
 A quote is **visible** to principal *P* iff it was created by *P*
 (`createdByPrincipalId = P`) or *P* holds `quotes:read:any`. Operations,
 deliveries, documents and audit events inherit the visibility of their quote.
-Every quote-scoped endpoint (read, list, document, audit, cancel, draft edit,
-issue, deliveries) requires visibility; a non-visible resource is answered
-exactly like a missing one (`404 *_not_found`) to prevent enumeration.
+Every quote-scoped endpoint (read, list, document, audit, deliveries)
+requires visibility; a non-visible resource is answered exactly like a
+missing one (`404 *_not_found`) to prevent enumeration.
+
+**Mutation authority (amendment A4).** Read authority never implies mutation
+authority. Draft edit (`PATCH …/draft`), issue (`POST …/issue`) and cancel
+(`POST …/cancel`) are allowed only to the **creator principal**
+(`createdByPrincipalId = P`), in addition to the endpoint's scope.
+`quotes:read:any` expands read visibility only and grants none of these;
+`principalType` never grants authority. For a principal that is not the
+creator, the quote is answered for these mutations exactly like a missing one
+(`404 quote_not_found`), whether or not that principal can read it. V2
+defines no cross-principal mutation scope.
 
 ## 4. Credential mechanism (initial and target)
 

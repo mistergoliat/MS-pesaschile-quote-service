@@ -1,17 +1,20 @@
 import type { FastifyInstance } from "fastify";
 
 import type { DependencyMonitor } from "../../application/health/dependency-monitor";
+import type { PrincipalRegistry } from "../../infrastructure/auth/principal-registry";
 import type { AppEnv } from "../../infrastructure/config/env";
 import type { BackgroundJobManager } from "../../infrastructure/runtime/background-job-manager";
+import { enforceRouteScopes } from "../authentication";
 import { createReadinessGate } from "../readiness-gate";
 import { registerHealthRoute } from "./health-route";
 
-/** Registers business routes inside the readiness-gated context. */
+/** Registers business routes inside the readiness-gated, scope-enforced context. Every route must set `config.requiredScope`. */
 export type BusinessRouteRegistrar = (businessApp: FastifyInstance) => void;
 
 export interface RegisterRoutesInput {
   readonly env: AppEnv;
   readonly monitor: DependencyMonitor;
+  readonly principalRegistry: PrincipalRegistry;
   readonly backgroundJobs: BackgroundJobManager;
   readonly emailEnabled: boolean;
   readonly startedAt: Date;
@@ -26,9 +29,17 @@ export function registerRoutes(app: FastifyInstance, input: RegisterRoutesInput)
   // V2 routes (R1.5) register here.
   app.register((businessApp, _options, done) => {
     businessApp.addHook("onRequest", createReadinessGate(input.monitor));
+    enforceRouteScopes(businessApp, input.principalRegistry);
 
-    for (const register of input.businessRoutes) {
-      register(businessApp);
+    // A route without a declared scope throws here; report it so startup
+    // fails immediately instead of waiting for the plugin timeout.
+    try {
+      for (const register of input.businessRoutes) {
+        register(businessApp);
+      }
+    } catch (error) {
+      done(error as Error);
+      return;
     }
 
     done();

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
@@ -9,7 +10,8 @@ const BUILD_TIMEOUT_MS = Number.isFinite(configuredBuildTimeoutMs) ? configuredB
 // R1.4: the V1 API was retired with its persistence model and the V2 API
 // arrives in R1.5, so this smoke covers the runtime that exists: image build,
 // explicit migration to the V2 head, schema check, liveness/readiness/
-// dependency health, V1 routes gone, restart with persisted state, graceful
+// dependency health, V2 create/draft/issue, V2 reads, reconciliation and
+// cancel (R1.5A.4), V1 routes gone, restart with persisted state, graceful
 // shutdown.
 const PHASE_TIMEOUT_MS = {
   build: BUILD_TIMEOUT_MS,
@@ -23,6 +25,9 @@ const PHASE_TIMEOUT_MS = {
   liveness: 15_000,
   readiness: 60_000,
   dependencies: 15_000,
+  v2Create: 30_000,
+  v2Draft: 30_000,
+  v2ReadCancel: 30_000,
   v1Retired: 15_000,
   restart: 90_000,
   gracefulShutdown: 30_000
@@ -39,9 +44,12 @@ const phaseDefinitions = [
   { key: "liveness", label: "PHASE 08 liveness" },
   { key: "readiness", label: "PHASE 09 readiness" },
   { key: "dependencies", label: "PHASE 10 dependencies" },
-  { key: "v1Retired", label: "PHASE 11 v1 retired" },
-  { key: "restart", label: "PHASE 12 restart" },
-  { key: "gracefulShutdown", label: "PHASE 13 graceful shutdown" }
+  { key: "v2Create", label: "PHASE 11 v2 create-and-issue" },
+  { key: "v2Draft", label: "PHASE 12 v2 draft, edit and issue" },
+  { key: "v2ReadCancel", label: "PHASE 13 v2 read, reconcile and cancel" },
+  { key: "v1Retired", label: "PHASE 14 v1 retired" },
+  { key: "restart", label: "PHASE 15 restart" },
+  { key: "gracefulShutdown", label: "PHASE 16 graceful shutdown" }
 ];
 
 const imageTag = process.env.SMOKE_IMAGE_TAG ?? "pesaschile-quote-service:t06-smoke";
@@ -62,7 +70,14 @@ const state = {
     storageRoot: "/var/lib/pesaschile/quote-documents"
   },
   credentials: {
-    serviceAuthToken: `smoke-service-auth-${crypto.randomBytes(16).toString("hex")}`
+    // Monitoring principal for /health/dependencies (registry stores only the hash).
+    serviceAuthToken: crypto.randomBytes(32).toString("base64url"),
+    // Transactional caller with quotes:create.
+    salesToken: crypto.randomBytes(32).toString("base64url"),
+    // Manual-flow operator: drafts, issues, reads, audits and cancels its own quotes.
+    backofficeToken: crypto.randomBytes(32).toString("base64url"),
+    // Supervisor with quotes:read:any (reads everything) and quotes:cancel (own quotes only, A4).
+    supervisorToken: crypto.randomBytes(32).toString("base64url")
   },
   app: {
     hostPort: null,
@@ -118,7 +133,35 @@ function buildAppEnv() {
     DATABASE_SSL_MODE: "disable",
     SERVICE_NAME: "pesaschile-quote-service",
     SERVICE_VERSION: "0.1.0-smoke",
-    SERVICE_AUTH_TOKEN: state.credentials.serviceAuthToken,
+    QUOTE_PRINCIPAL_REGISTRY_JSON: JSON.stringify({
+      version: 1,
+      principals: [
+        {
+          principalId: "monitoring",
+          principalType: "service",
+          scopes: ["service:health:dependencies"],
+          tokenSha256: [crypto.createHash("sha256").update(state.credentials.serviceAuthToken).digest("hex")]
+        },
+        {
+          principalId: "smoke-sales",
+          principalType: "service",
+          scopes: ["quotes:create", "quotes:read"],
+          tokenSha256: [crypto.createHash("sha256").update(state.credentials.salesToken).digest("hex")]
+        },
+        {
+          principalId: "smoke-backoffice",
+          principalType: "operator",
+          scopes: ["quotes:draft:write", "quotes:issue", "quotes:read", "quotes:cancel", "quotes:audit:read"],
+          tokenSha256: [crypto.createHash("sha256").update(state.credentials.backofficeToken).digest("hex")]
+        },
+        {
+          principalId: "smoke-supervisor",
+          principalType: "operator",
+          scopes: ["quotes:read", "quotes:read:any", "quotes:cancel", "quotes:audit:read"],
+          tokenSha256: [crypto.createHash("sha256").update(state.credentials.supervisorToken).digest("hex")]
+        }
+      ]
+    }),
     QUOTE_DOCUMENT_STORAGE_ROOT: state.paths.storageRoot,
     QUOTE_RENDER_VERSION: "quote-pdf-v3"
   };
@@ -326,10 +369,12 @@ async function fetchJson(path, options = {}) {
     timeoutMs = DEFAULT_HTTP_TIMEOUT_MS
   } = options;
   const controller = new AbortController();
+  // Ref'd on purpose: a connection that stalls without holding the event
+  // loop (e.g. Docker's port proxy before the app binds) must be aborted and
+  // retried, not let the process exit silently.
   const timer = setTimeout(() => {
     controller.abort(new Error(`HTTP timeout after ${timeoutMs}ms`));
   }, timeoutMs);
-  timer.unref();
 
   try {
     const response = await fetch(`${state.app.baseUrl}${path}`, {
@@ -588,16 +633,18 @@ async function runPhase(key, timeoutMs, work) {
   const startedAt = Date.now();
   log(`${label} START timeout=${timeoutMs}ms startedAt=${nowIso()}`);
 
+  let phaseTimer;
+
   try {
+    // Ref'd: a phase can never end the process silently; it either finishes or fails.
     const result = await Promise.race([
       work(),
       new Promise((_, reject) => {
-        const timer = setTimeout(() => {
+        phaseTimer = setTimeout(() => {
           reject(new Error(`${label} exceeded phase timeout ${timeoutMs}ms`));
         }, timeoutMs);
-        timer.unref();
       })
-    ]);
+    ]).finally(() => clearTimeout(phaseTimer));
     const durationMs = Date.now() - startedAt;
     state.summary.phases.push({
       phase: label,
@@ -733,7 +780,7 @@ async function runSmoke() {
       .filter((value) => value.length > 0);
     state.summary.appliedMigrations = appliedMigrations;
     assert(
-      appliedMigrations.at(-1) === "000008_quote_v2_runtime_grants",
+      appliedMigrations.at(-1) === "000009_quote_snapshot_child_insert_guard",
       `Unexpected migration head: ${appliedMigrations.join(", ")}`
     );
     const checksums = (await queryDatabase("select count(*) from quote_service.schema_migration_checksums;")).trim();
@@ -773,11 +820,166 @@ async function runSmoke() {
     const details = await fetchJson("/health/dependencies", { headers: { Authorization: authHeader }, timeoutMs: 5_000 });
     assert(details.status === 200, `Expected 200, got ${details.status}`);
     assert(
-      details.body.schema.expectedHead === "000008_quote_v2_runtime_grants" &&
+      details.body.schema.expectedHead === "000009_quote_snapshot_child_insert_guard" &&
         details.body.schema.actualHead === details.body.schema.expectedHead,
       `Unexpected schema head: ${JSON.stringify(details.body.schema)}`
     );
     assert(!details.text.includes("postgres://"), "Dependency details leaked a DSN");
+    assert(!details.text.includes(state.credentials.serviceAuthToken), "Dependency details leaked the credential");
+  });
+
+  await runPhase("v2Create", PHASE_TIMEOUT_MS.v2Create, async () => {
+    const body = JSON.parse(readFileSync("docs/v2/examples/create-and-issue.request.json", "utf8"));
+    const headers = { Authorization: `Bearer ${state.credentials.salesToken}`, "Idempotency-Key": `smoke-${suffix}` };
+    const created = await fetchJson("/v2/quotes", { method: "POST", headers: { ...headers, "X-Correlation-Id": "smoke-1" }, body, timeoutMs: 10_000 });
+    assert(created.status === 202, `Expected 202, got ${created.status}: ${created.text}`);
+    assert(created.body.quote.status === "issuing" && created.body.operation.status === "pending", "Accepted quote is not issuing/pending");
+    assert(/^PC-[0-9]{6,}$/.test(created.body.quote.quoteNumber), "Quote number missing");
+    state.summary.v2Quote = { quoteId: created.body.quote.quoteId, quoteNumber: created.body.quote.quoteNumber, operationId: created.body.operation.operationId };
+
+    const replay = await fetchJson("/v2/quotes", { method: "POST", headers: { ...headers, "X-Correlation-Id": "smoke-2" }, body, timeoutMs: 10_000 });
+    assert(replay.status === 202 && replay.headers.get("idempotent-replay") === "true", `Replay failed: ${replay.status}`);
+    assert(
+      replay.body.quote.quoteId === created.body.quote.quoteId &&
+        replay.body.quote.quoteNumber === created.body.quote.quoteNumber &&
+        replay.body.operation.operationId === created.body.operation.operationId,
+      "Replay returned a different quote"
+    );
+
+    const changed = { ...body, lines: [{ ...body.lines[0], quantity: { value: "3", unit: "unit" } }], expectedTotals: undefined };
+    const conflict = await fetchJson("/v2/quotes", { method: "POST", headers, body: changed, timeoutMs: 10_000 });
+    assert(conflict.status === 409 && conflict.body.error.code === "idempotency_key_conflict", `Expected 409, got ${conflict.status}`);
+    const quotes = (await queryDatabase("select count(*) from quote_service.quotes;")).trim();
+    assert(quotes === "1", `Expected exactly one quote, found ${quotes}`);
+  });
+
+  await runPhase("v2Draft", PHASE_TIMEOUT_MS.v2Draft, async () => {
+    const example = (name) => JSON.parse(readFileSync(`docs/v2/examples/${name}`, "utf8"));
+    const auth = { Authorization: `Bearer ${state.credentials.backofficeToken}` };
+    const draft = await fetchJson("/v2/quotes/drafts", {
+      method: "POST",
+      headers: { ...auth, "Idempotency-Key": `smoke-draft-${suffix}` },
+      body: example("draft-create.request.json"),
+      timeoutMs: 10_000
+    });
+    assert(draft.status === 201, `Expected 201, got ${draft.status}: ${draft.text}`);
+    assert(draft.body.status === "draft" && draft.body.version === 1, "Draft is not draft v1");
+    assert(draft.body.quoteNumber === null && draft.body.validity === null && draft.body.issuance === null, "Draft has a number, validity or issuance");
+    const quoteId = draft.body.quoteId;
+
+    const updated = await fetchJson(`/v2/quotes/${quoteId}/draft`, {
+      method: "PATCH",
+      headers: { ...auth, "Idempotency-Key": `smoke-update-${suffix}` },
+      body: example("draft-update.request.json"),
+      timeoutMs: 10_000
+    });
+    assert(updated.status === 200 && updated.body.version === 2, `Draft update failed: ${updated.status}`);
+
+    const issueHeaders = { ...auth, "Idempotency-Key": `smoke-issue-${suffix}` };
+    const issued = await fetchJson(`/v2/quotes/${quoteId}/issue`, { method: "POST", headers: issueHeaders, body: example("issue.request.json"), timeoutMs: 10_000 });
+    assert(issued.status === 202, `Expected 202, got ${issued.status}: ${issued.text}`);
+    assert(issued.body.quote.quoteId === quoteId, "Issue changed the quoteId");
+    assert(/^PC-[0-9]{6,}$/.test(issued.body.quote.quoteNumber), "Quote number missing after issue");
+    assert(issued.body.quote.status === "issuing" && issued.body.operation.status === "pending", "Issued draft is not issuing/pending");
+    state.summary.v2Draft = { quoteId, quoteNumber: issued.body.quote.quoteNumber, operationId: issued.body.operation.operationId };
+
+    const replay = await fetchJson(`/v2/quotes/${quoteId}/issue`, { method: "POST", headers: issueHeaders, body: example("issue.request.json"), timeoutMs: 10_000 });
+    assert(replay.status === 202 && replay.headers.get("idempotent-replay") === "true", `Issue replay failed: ${replay.status}`);
+    assert(
+      replay.body.quote.quoteNumber === issued.body.quote.quoteNumber && replay.body.operation.operationId === issued.body.operation.operationId,
+      "Issue replay returned different ids"
+    );
+    const counts = (await queryDatabase("select count(*) || ':' || (select count(*) from quote_service.issuance_operations) from quote_service.quotes;")).trim();
+    assert(counts === "2:2", `Expected 2 quotes and 2 operations, found ${counts}`);
+  });
+
+  await runPhase("v2ReadCancel", PHASE_TIMEOUT_MS.v2ReadCancel, async () => {
+    const example = (name) => JSON.parse(readFileSync(`docs/v2/examples/${name}`, "utf8"));
+    const as = (token) => ({ Authorization: `Bearer ${token}` });
+    const sales = as(state.credentials.salesToken);
+    const backoffice = as(state.credentials.backofficeToken);
+    const supervisor = as(state.credentials.supervisorToken);
+    const { quoteId, quoteNumber, operationId } = state.summary.v2Quote;
+
+    // GET quote / operation: honest issuing state, same identifiers as create-and-issue.
+    const quote = await fetchJson(`/v2/quotes/${quoteId}`, { headers: sales });
+    assert(quote.status === 200, `GET quote: ${quote.status} ${quote.text}`);
+    assert(
+      quote.body.status === "issuing" && quote.body.quoteNumber === quoteNumber && quote.body.issuance.operationId === operationId,
+      "GET quote disagrees with create-and-issue"
+    );
+    assert(quote.body.document.available === false && quote.body.document.pdfSha256 === null, "Issuing quote claims a document");
+    const operation = await fetchJson(`/v2/operations/${operationId}`, { headers: sales });
+    assert(operation.status === 200 && operation.body.status === "pending" && operation.body.quoteId === quoteId, `GET operation: ${operation.text}`);
+
+    // Visibility: without read:any a foreign quote is a 404 like a missing one; read:any sees it.
+    const hidden = await fetchJson(`/v2/quotes/${quoteId}`, { headers: backoffice });
+    assert(hidden.status === 404 && hidden.body.error.code === "quote_not_found", `Expected hidden quote, got ${hidden.status}`);
+    const anyReader = await fetchJson(`/v2/quotes/${quoteId}`, { headers: supervisor });
+    assert(anyReader.status === 200 && anyReader.body.quoteId === quoteId, `read:any GET failed: ${anyReader.status}`);
+
+    // External-correlation list.
+    const query = Object.entries(example("create-and-issue.request.json").externalCorrelation)
+      .map(([name, value]) => `${name}=${encodeURIComponent(value)}`)
+      .join("&");
+    const listed = await fetchJson(`/v2/quotes?${query}`, { headers: sales });
+    assert(listed.status === 200 && listed.body.items.length === 1 && listed.body.items[0].quoteId === quoteId, `List failed: ${listed.text}`);
+    assert(listed.body.nextCursor === null, "Unexpected next cursor");
+    const foreignList = await fetchJson(`/v2/quotes?${query}`, { headers: backoffice });
+    assert(foreignList.status === 200 && foreignList.body.items.length === 0, "List leaked a foreign quote");
+
+    // Idempotency lookup reconciles to the same quote and operation; never across principals.
+    const lookup = await fetchJson("/v2/idempotency/current?operation=quote.create_and_issue", {
+      headers: { ...sales, "Idempotency-Key": `smoke-${suffix}` }
+    });
+    assert(
+      lookup.status === 200 &&
+        lookup.body.state === "bound" &&
+        lookup.body.binding.quoteId === quoteId &&
+        lookup.body.binding.operationId === operationId &&
+        lookup.body.binding.quoteStatus === "issuing",
+      `Lookup failed: ${lookup.text}`
+    );
+    assert(!lookup.text.includes(`smoke-${suffix}`), "Lookup echoed the raw key");
+    const foreignLookup = await fetchJson("/v2/idempotency/current?operation=quote.create_and_issue", {
+      headers: { ...supervisor, "Idempotency-Key": `smoke-${suffix}` }
+    });
+    assert(foreignLookup.status === 200 && foreignLookup.body.state === "not_found", "Lookup crossed principals");
+
+    // Fresh draft → cancel (creator only, A4) → replay → GET cancelled → one audit event.
+    const draft = await fetchJson("/v2/quotes/drafts", {
+      method: "POST",
+      headers: { ...backoffice, "Idempotency-Key": `smoke-cancel-draft-${suffix}` },
+      body: example("draft-create.request.json")
+    });
+    assert(draft.status === 201, `Draft for cancel failed: ${draft.status}`);
+    const cancelPath = `/v2/quotes/${draft.body.quoteId}/cancel`;
+    const cancelBody = { expectedVersion: 1, reasonCode: "customer_declined" };
+    const foreignCancel = await fetchJson(cancelPath, {
+      method: "POST",
+      headers: { ...supervisor, "Idempotency-Key": `smoke-cancel-${suffix}` },
+      body: cancelBody
+    });
+    assert(foreignCancel.status === 404 && foreignCancel.body.error.code === "quote_not_found", `read:any cancelled: ${foreignCancel.status}`);
+    const cancelHeaders = { ...backoffice, "Idempotency-Key": `smoke-cancel-${suffix}` };
+    const cancelled = await fetchJson(cancelPath, { method: "POST", headers: cancelHeaders, body: cancelBody });
+    assert(cancelled.status === 200, `Cancel failed: ${cancelled.status} ${cancelled.text}`);
+    assert(
+      cancelled.body.status === "cancelled" && cancelled.body.version === 2 && cancelled.body.quoteNumber === null,
+      "Cancelled draft has a wrong state or a number"
+    );
+    const cancelReplay = await fetchJson(cancelPath, { method: "POST", headers: cancelHeaders, body: cancelBody });
+    assert(cancelReplay.status === 200 && cancelReplay.headers.get("idempotent-replay") === "true", "Cancel replay failed");
+    const reread = await fetchJson(`/v2/quotes/${draft.body.quoteId}`, { headers: backoffice });
+    assert(
+      reread.status === 200 && reread.body.status === "cancelled" && reread.body.cancellation.initiatedBy === "smoke-backoffice",
+      "GET cancelled quote failed"
+    );
+    const audit = await fetchJson(`/v2/quotes/${draft.body.quoteId}/audit`, { headers: backoffice });
+    assert(audit.status === 200 && audit.body.items.filter((event) => event.type === "quote.cancelled").length === 1, `Audit failed: ${audit.text}`);
+
+    const counts = (await queryDatabase("select count(*) || ':' || (select count(*) from quote_service.issuance_operations) from quote_service.quotes;")).trim();
+    assert(counts === "3:2", `Expected 3 quotes and 2 operations, found ${counts}`);
   });
 
   await runPhase("v1Retired", PHASE_TIMEOUT_MS.v1Retired, async () => {

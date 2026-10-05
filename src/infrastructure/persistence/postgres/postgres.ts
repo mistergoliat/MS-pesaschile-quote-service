@@ -50,7 +50,15 @@ export class PostgresDatabase {
     try {
       await client.query("begin");
       const result = await work(client);
-      await client.query("commit");
+
+      try {
+        await client.query("commit");
+      } catch (error) {
+        // The server may or may not have committed: never report this as a
+        // known-uncommitted failure.
+        throw new CommitOutcomeUnknownError(error);
+      }
+
       return result;
     } catch (error) {
       await client.query("rollback").catch(() => undefined);
@@ -95,6 +103,15 @@ export class PostgresDatabase {
     } finally {
       client.release();
     }
+  }
+}
+
+/** COMMIT failed; whether the transaction committed is unknown. */
+export class CommitOutcomeUnknownError extends Error {
+  override readonly name = "CommitOutcomeUnknownError";
+
+  constructor(override readonly cause: unknown) {
+    super("Transaction commit outcome is unknown");
   }
 }
 

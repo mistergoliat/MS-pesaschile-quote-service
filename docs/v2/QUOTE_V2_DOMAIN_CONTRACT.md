@@ -375,7 +375,7 @@ Gmail, filesystem or stack details.
 | `invalid_request` | 400 | Malformed JSON, missing/invalid `Idempotency-Key`, bad path/query parameter, unsupported media type | `fields[]` optional |
 | `unauthenticated` | 401 | Missing/invalid credential | — |
 | `forbidden` | 403 | Missing scope (including `validityOverride` without override scope) | `requiredScope` |
-| `quote_not_found` | 404 | Unknown or not visible to the principal | — |
+| `quote_not_found` | 404 | Unknown or not visible to the principal; for draft edit, issue and cancel also any quote the principal did not create (A4) | — |
 | `operation_not_found` | 404 | Unknown or not visible | — |
 | `delivery_not_found` | 404 | Unknown or not visible | — |
 | `invalid_state_transition` | 409 | Operation not allowed from current state | `status` |

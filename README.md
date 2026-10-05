@@ -8,7 +8,7 @@ Owner service for PesasChile commercial quotes, being rebuilt on the frozen
 | R1.2 V2 contract | frozen (amendments A1–A3 applied in R1.4) |
 | R1.3 runtime reliability and health | done: [docs/runtime-lifecycle.md](docs/runtime-lifecycle.md) |
 | R1.4 V2 schema and migration foundation | done: [docs/v2-persistence.md](docs/v2-persistence.md) |
-| R1.5 V2 API, idempotency, durable issuance | not started |
+| R1.5 V2 API, idempotency, durable issuance | in progress: principal registry (A.1), transactional acceptance (A.2) and draft workflow (A.3) done |
 
 **Current runtime:** health endpoints and the readiness-gated business
 context. The V1 API (`/v1/*`), its repositories and workers were retired in
@@ -43,6 +43,7 @@ curl -i localhost:3000/health/ready
 | `npm run db:check` / `db:check:runtime` | connectivity, schema head and migration integrity, as readiness sees them |
 | `npm run db:manifest` | regenerate the migration manifest after adding a migration |
 | `npm run db:grants` / `db:grants:runtime` | re-apply the `quote_runtime` grants |
+| `npm run principals:token` | new caller token plus the SHA-256 for the principal registry |
 | `npm run documents:verify` / `documents:verify:runtime` | verify stored artifacts against their manifests (`--record-byte-length` for legacy sizes) |
 | `npm run smoke:docker` | build the image and smoke the runtime (migrate, check, health, restart, shutdown) |
 | `npm run pdf:preview`, `pdf:benchmark`, `pdf:concurrency-smoke` | PDF renderer previews and checks |
@@ -55,18 +56,24 @@ curl -i localhost:3000/health/ready
 |---|---|---|
 | `GET /health/live` | none | process answers; never probes dependencies |
 | `GET /health/ready` | none | `200` only when database, schema head (including integrity), storage, renderer and lifecycle are ok |
-| `GET /health/dependencies` | `Bearer SERVICE_AUTH_TOKEN` | sanitized dependency and worker detail (contract `DependencyHealth`) |
+| `GET /health/dependencies` | principal with `service:health:dependencies` | sanitized dependency and worker detail (contract `DependencyHealth`) |
 | `GET /health` | none | deprecated liveness alias |
+| `POST /v2/quotes` | `quotes:create` (+ `quotes:validity:override` for `validityOverride`) | transactional create-and-issue **acceptance**: one quote, number, validity, pending issuance operation, binding and audit in one transaction → `202` `issuing`. Replays return the same quote; a changed body under the same key → `409`. No PDF yet (R1.5B) |
+| `POST /v2/quotes/drafts` | `quotes:draft:write` | editable draft, version 1, owner totals; no number, validity, operation or document → `201` |
+| `PATCH /v2/quotes/{quoteId}/draft` | `quotes:draft:write` | replaces the present top-level members (`shipping: null` removes), recomputes totals, version + 1, fenced by `expectedVersion` (`409 version_conflict`) → `200` |
+| `POST /v2/quotes/{quoteId}/issue` | `quotes:issue` (+ `quotes:validity:override`) | same acceptance as `POST /v2/quotes` applied to the draft at `expectedVersion`: same `quoteId`, number, validity, pending operation → `202` `issuing`. No PDF yet (R1.5B) |
 
 Semantics, failure policy and configuration:
-[docs/runtime-lifecycle.md](docs/runtime-lifecycle.md).
+[docs/runtime-lifecycle.md](docs/runtime-lifecycle.md). Principals, scopes and
+credentials: [docs/principals.md](docs/principals.md); the V1 global
+`SERVICE_AUTH_TOKEN` is retired.
 
 ## Persistence
 
 V2 schema (`quote_service`), the one-way V1 → V2 data migration, migration
 checksums, the migration/runtime role separation and the recovery model:
 [docs/v2-persistence.md](docs/v2-persistence.md). Schema head:
-`000008_quote_v2_runtime_grants`.
+`000009_quote_snapshot_child_insert_guard`.
 
 ## Document rendering and branding
 

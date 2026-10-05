@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runMigrations } from "../../src/infrastructure/persistence/postgres/migrator";
 import { waitFor } from "../helpers/runtime-test-env";
 import { createTestDatabase } from "../helpers/test-database";
+import { sha256Hex, TEST_TOKENS, testRegistryDocument, testRegistryJson } from "../helpers/test-principals";
 import { ToggleableTcpProxy } from "../helpers/toggleable-tcp-proxy";
 
 const TEST_TIMEOUT_MS = 90_000;
@@ -89,13 +90,37 @@ describe("server process lifecycle", () => {
   it("exits 1 on invalid static configuration without echoing values", async () => {
     const server = startServer({
       DATABASE_URL: "not-a-url-secret-sauce",
-      SERVICE_AUTH_TOKEN: "",
       QUOTE_DOCUMENT_STORAGE_ROOT: "",
     });
 
     expect(await server.exited).toBe(1);
     expect(events(server.output())).toContain("runtime.config_invalid");
     expect(server.output()).not.toContain("secret-sauce");
+  }, TEST_TIMEOUT_MS);
+
+  const duplicateCredential = testRegistryDocument();
+  duplicateCredential.principals[2]!.tokenSha256 = [sha256Hex(TEST_TOKENS.sales)];
+  const duplicatePrincipal = testRegistryDocument();
+  duplicatePrincipal.principals[2]!.principalId = "sales-integration";
+
+  it.each([
+    ["E: duplicate credential", JSON.stringify(duplicateCredential), "duplicate credential"],
+    ["F: duplicate principalId", JSON.stringify(duplicatePrincipal), "duplicate principalId"],
+    ["no registry configured", null, "QUOTE_PRINCIPAL_REGISTRY_FILE"]
+  ])("exits 1 at startup on a malformed principal registry: %s", async (_label, registryJson, expectedMessage) => {
+    const server = startServer({
+      DATABASE_URL: "postgres://quote:quote@127.0.0.1:1/quote",
+      QUOTE_DOCUMENT_STORAGE_ROOT: path.join(os.tmpdir(), "quote-registry-startup"),
+      ...(registryJson ? { QUOTE_PRINCIPAL_REGISTRY_JSON: registryJson } : {})
+    });
+
+    expect(await server.exited).toBe(1);
+    expect(events(server.output())).toContain("runtime.config_invalid");
+    expect(server.output()).toContain(expectedMessage);
+    for (const token of Object.values(TEST_TOKENS)) {
+      expect(server.output()).not.toContain(token);
+      expect(server.output()).not.toContain(sha256Hex(token));
+    }
   }, TEST_TIMEOUT_MS);
 
   it("stays alive through a database outage at startup and becomes ready without restart", async () => {
@@ -118,7 +143,7 @@ describe("server process lifecycle", () => {
       LOG_LEVEL: "info",
       DATABASE_URL: proxy.route(database.connectionString),
       DB_POOL_CONNECTION_TIMEOUT_MS: "1000",
-      SERVICE_AUTH_TOKEN: "token",
+      QUOTE_PRINCIPAL_REGISTRY_JSON: testRegistryJson(),
       HEALTH_PROBE_TIMEOUT_MS: "1000",
       HEALTH_PROBE_INTERVAL_MS: "1000",
       HEALTH_PROBE_RETRY_MIN_MS: "100",
