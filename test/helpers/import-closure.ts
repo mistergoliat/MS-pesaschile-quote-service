@@ -17,7 +17,8 @@ export function importClosure(...entries: string[]): string[] {
     const source = fs.readFileSync(file, "utf8");
 
     for (const match of source.matchAll(/from\s+"(\.{1,2}\/[^"]+)"/g)) {
-      pending.push(path.resolve(path.dirname(file), `${match[1]}.ts`));
+      const target = path.resolve(path.dirname(file), match[1]!);
+      pending.push(fs.existsSync(`${target}.ts`) ? `${target}.ts` : path.join(target, "index.ts"));
     }
   }
 

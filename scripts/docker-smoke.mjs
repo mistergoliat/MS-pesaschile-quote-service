@@ -16,6 +16,18 @@ const BUILD_TIMEOUT_MS = Number.isFinite(configuredBuildTimeoutMs) ? configuredB
 // 201/200 with a large sync budget, the content-addressed PDF verified inside
 // the container against its manifest, then a restart with budget 0 where the
 // background worker issues a 202 quote, with no duplicate manifest.
+// R1.5B4: GET /v2/quotes/{id}/document byte-exact (also across the restart and
+// for the async quote), then adversarial windows in the PRODUCTION image, which
+// contains no failpoint code: PostgreSQL locks hold issuance exactly where a
+// crash is wanted and the container is SIGKILLed (docker kill):
+//   - after the content-addressed PDF is published, inside T5 before COMMIT
+//     (SHARE lock on quote_documents) → restart, lease expiry, reclaim,
+//     EEXIST reuse, issued once;
+//   - after T5 COMMIT, before the HTTP response (ACCESS EXCLUSIVE lock on
+//     quote_lines, which T5 never touches but the response rebuild reads) →
+//     restart, same-key retry returns the same issued quote and document;
+// then a tampered and a missing artifact (503 document_storage_failed, never
+// regenerated) and the integrity verifier inside the image.
 const PHASE_TIMEOUT_MS = {
   build: BUILD_TIMEOUT_MS,
   cleanup: 180_000,
@@ -34,6 +46,9 @@ const PHASE_TIMEOUT_MS = {
   v1Retired: 15_000,
   restart: 90_000,
   asyncIssuance: 60_000,
+  crashBeforeCommit: 120_000,
+  crashAfterCommit: 120_000,
+  integrity: 60_000,
   gracefulShutdown: 30_000
 };
 
@@ -54,7 +69,10 @@ const phaseDefinitions = [
   { key: "v1Retired", label: "PHASE 14 v1 retired" },
   { key: "restart", label: "PHASE 15 restart" },
   { key: "asyncIssuance", label: "PHASE 16 async issuance after restart" },
-  { key: "gracefulShutdown", label: "PHASE 17 graceful shutdown" }
+  { key: "crashBeforeCommit", label: "PHASE 17 kill after publication, before T5 commit" },
+  { key: "crashAfterCommit", label: "PHASE 18 kill after T5 commit, before the response" },
+  { key: "integrity", label: "PHASE 19 tampered and missing artifacts" },
+  { key: "gracefulShutdown", label: "PHASE 20 graceful shutdown" }
 ];
 
 const imageTag = process.env.SMOKE_IMAGE_TAG ?? "pesaschile-quote-service:t06-smoke";
@@ -69,7 +87,11 @@ const state = {
     volume: `quote-documents-smoke-${suffix}`,
     postgres: `quote-smoke-db-${suffix}`,
     appPrimary: `quote-smoke-app-a-${suffix}`,
-    appRestarted: `quote-smoke-app-b-${suffix}`
+    appRestarted: `quote-smoke-app-b-${suffix}`,
+    appCrashBefore: `quote-smoke-app-c-${suffix}`,
+    appRecoverBefore: `quote-smoke-app-d-${suffix}`,
+    appCrashAfter: `quote-smoke-app-e-${suffix}`,
+    appFinal: `quote-smoke-app-f-${suffix}`
   },
   paths: {
     storageRoot: "/var/lib/pesaschile/quote-documents"
@@ -152,7 +174,7 @@ function buildAppEnv() {
         {
           principalId: "smoke-sales",
           principalType: "service",
-          scopes: ["quotes:create", "quotes:read"],
+          scopes: ["quotes:create", "quotes:read", "quotes:document:read"],
           tokenSha256: [crypto.createHash("sha256").update(state.credentials.salesToken).digest("hex")]
         },
         {
@@ -164,14 +186,16 @@ function buildAppEnv() {
         {
           principalId: "smoke-supervisor",
           principalType: "operator",
-          scopes: ["quotes:read", "quotes:read:any", "quotes:cancel", "quotes:audit:read"],
+          scopes: ["quotes:read", "quotes:read:any", "quotes:document:read", "quotes:cancel", "quotes:audit:read"],
           tokenSha256: [crypto.createHash("sha256").update(state.credentials.supervisorToken).digest("hex")]
         }
       ]
     }),
     QUOTE_DOCUMENT_STORAGE_ROOT: state.paths.storageRoot,
     QUOTE_ISSUANCE_SYNC_BUDGET_MS: state.app.syncBudgetMs,
-    QUOTE_ISSUANCE_POLL_INTERVAL_MS: "500"
+    QUOTE_ISSUANCE_POLL_INTERVAL_MS: "500",
+    // Minimum lease: a killed holder's operation is reclaimable 10 s later.
+    QUOTE_ISSUANCE_LEASE_MS: "10000"
   };
 }
 
@@ -198,6 +222,110 @@ async function verifyArtifact(quoteId) {
   ).stdout.trim();
   assert(hashed === `${pdfSha256} ${byteLength}`, `Stored PDF does not match its manifest: ${hashed} vs ${pdfSha256} ${byteLength}`);
   return { storageKey, pdfSha256, byteLength: Number(byteLength) };
+}
+
+/** GET /v2/quotes/{id}/document: raw bytes and headers. */
+async function fetchDocument(quoteId, token) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("HTTP timeout")), DEFAULT_HTTP_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${state.app.baseUrl}/v2/quotes/${quoteId}/document`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal
+    });
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return { status: response.status, headers: response.headers, bytes };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The document endpoint serves exactly the manifest's verified bytes, with the frozen headers. */
+async function verifyDocumentEndpoint(quoteId, token = state.credentials.salesToken) {
+  const manifest = await verifyArtifact(quoteId);
+  const document = await fetchDocument(quoteId, token);
+  const sha = crypto.createHash("sha256").update(document.bytes).digest("hex");
+  assert(document.status === 200, `GET document ${quoteId}: ${document.status} ${document.bytes.toString("utf8").slice(0, 200)}`);
+  assert(sha === manifest.pdfSha256 && document.bytes.length === manifest.byteLength, `Served bytes differ from the manifest for ${quoteId}`);
+  assert(document.headers.get("content-type") === "application/pdf", "Document Content-Type");
+  assert(document.headers.get("x-document-sha256") === manifest.pdfSha256, "X-Document-Sha256 header");
+  assert(document.headers.get("etag") === `"${manifest.pdfSha256}"`, "ETag header");
+  assert(/^attachment; filename="PC-[0-9]{6,}\.pdf"$/.test(document.headers.get("content-disposition") ?? ""), "Content-Disposition header");
+  const headerText = JSON.stringify([...document.headers.entries()]);
+  assert(!headerText.includes("artifacts/") && !headerText.includes(state.paths.storageRoot), "Document headers leaked a storage path");
+  return { ...manifest, bytes: document.bytes };
+}
+
+/** Runs node inside a throwaway container of the image with the document volume mounted (works while the app is dead). */
+async function inVolume(script, args = []) {
+  const result = await docker(
+    ["run", "--rm", "-v", `${state.names.volume}:${state.paths.storageRoot}`, "--entrypoint", "node", imageTag, "-e", script, ...args],
+    { timeoutMs: 60_000 }
+  );
+  return result.stdout.trim();
+}
+
+/**
+ * A psql session in the postgres container that holds a lock until released:
+ * begin; <statement>; then waits. release() rolls back and ends the session.
+ */
+async function holdLock(statement) {
+  const child = spawn("docker", ["exec", "-i", state.names.postgres, "psql", "-U", "postgres", "-d", "quote_smoke", "-At", "-v", "ON_ERROR_STOP=1"], {
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+  let output = "";
+  child.stdout.on("data", (chunk) => {
+    output += chunk.toString("utf8");
+  });
+  child.stderr.on("data", (chunk) => {
+    output += chunk.toString("utf8");
+  });
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.stdin.write(`begin;\n${statement};\nselect 'lock-held';\n`);
+  const deadline = Date.now() + 20_000;
+
+  while (!output.includes("lock-held")) {
+    assert(Date.now() < deadline, `Lock not acquired: ${output}`);
+    assert(child.exitCode === null, `psql exited: ${output}`);
+    await sleep(100);
+  }
+
+  return {
+    async release() {
+      child.stdin.end("rollback;\n\\q\n");
+      await Promise.race([exited, sleep(10_000)]);
+      if (child.exitCode === null) {
+        child.kill();
+      }
+    }
+  };
+}
+
+async function waitForQuery(sql, expected, timeoutMs, message) {
+  const deadline = Date.now() + timeoutMs;
+  let last = "";
+
+  while (Date.now() < deadline) {
+    last = await queryDatabase(sql);
+
+    if (last === expected) {
+      return;
+    }
+
+    await sleep(250);
+  }
+
+  throw new Error(`${message}: expected ${expected}, last ${last}`);
+}
+
+/** SIGKILL the active app container (docker kill): no shutdown hook, no finally block runs. */
+async function killActiveApp() {
+  const container = state.app.activeContainer;
+  await docker(["kill", container], { timeoutMs: 30_000 });
+  state.logs[container] = await readLogs(container);
+  const status = await inspectContainer(container);
+  assert(status.startsWith("exited/137"), `Expected a SIGKILLed container (137), got ${status}`);
 }
 
 function formatDuration(ms) {
@@ -608,7 +736,7 @@ async function listDockerNames(args, prefix) {
 }
 
 function extractSmokeSuffix(containerName) {
-  const match = /^quote-smoke-(?:db|app-a|app-b)-(.+)$/.exec(containerName);
+  const match = /^quote-smoke-(?:db|app-[a-f])-(.+)$/.exec(containerName);
   return match?.[1] ?? null;
 }
 
@@ -650,7 +778,7 @@ async function printDiagnostics(phaseLabel, error) {
   console.log(`[docker-smoke] ${phaseLabel} error=${error instanceof Error ? error.message : String(error)}`);
   console.log(`[docker-smoke] docker ps\n${await dockerPs()}`);
 
-  for (const containerName of [state.names.appPrimary, state.names.appRestarted, state.names.postgres]) {
+  for (const containerName of [...state.containersStarted]) {
     if (!state.containersStarted.has(containerName)) {
       continue;
     }
@@ -874,6 +1002,8 @@ async function runSmoke() {
     const artifact = await verifyArtifact(created.body.quote.quoteId);
     assert(artifact.pdfSha256 === created.body.quote.document.pdfSha256 && artifact.byteLength === created.body.quote.document.byteLength, "Response document disagrees with the manifest");
     state.summary.v2Quote.pdfSha256 = artifact.pdfSha256;
+    // R1.5B4: the document endpoint serves exactly these bytes.
+    await verifyDocumentEndpoint(created.body.quote.quoteId);
 
     const replay = await fetchJson("/v2/quotes", { method: "POST", headers: { ...headers, "X-Correlation-Id": "smoke-2" }, body, timeoutMs: 10_000 });
     assert(replay.status === 201 && replay.headers.get("idempotent-replay") === "true", `Replay failed: ${replay.status}`);
@@ -1036,6 +1166,10 @@ async function runSmoke() {
     const artifact = await verifyArtifact(state.summary.v2Quote.quoteId);
     assert(artifact.pdfSha256 === state.summary.v2Quote.pdfSha256, "Issued document changed across restart");
     await verifyArtifact(state.summary.v2Draft.quoteId);
+    // Same document served after the restart (read:any principal for the foreign quote).
+    const served = await verifyDocumentEndpoint(state.summary.v2Quote.quoteId);
+    assert(served.pdfSha256 === state.summary.v2Quote.pdfSha256, "Served document changed across restart");
+    await verifyDocumentEndpoint(state.summary.v2Draft.quoteId, state.credentials.supervisorToken);
   });
 
   await runPhase("asyncIssuance", PHASE_TIMEOUT_MS.asyncIssuance, async () => {
@@ -1054,7 +1188,7 @@ async function runSmoke() {
     }
 
     assert(status === "issued", `Background worker did not issue the quote (status ${status})`);
-    await verifyArtifact(quoteId);
+    await verifyDocumentEndpoint(quoteId);
     const counts = (
       await queryDatabase(
         "select count(*) || ':' || (select count(*) from quote_service.issuance_operations where status = 'succeeded') || ':' || (select count(*) from quote_service.quote_documents) from quote_service.quotes;"
@@ -1064,11 +1198,163 @@ async function runSmoke() {
     state.summary.v2Async = { quoteId, quoteNumber: created.body.quote.quoteNumber };
   });
 
+
+  await runPhase("crashBeforeCommit", PHASE_TIMEOUT_MS.crashBeforeCommit, async () => {
+    // The restarted app (budget 0) is replaced by one with a large inline budget.
+    await stopActiveApp();
+    state.logs[state.names.appRestarted] = await readLogs(state.names.appRestarted);
+    state.app.syncBudgetMs = "10000";
+    await startApp(state.names.appCrashBefore, PHASE_TIMEOUT_MS.appStart);
+    await waitForReadiness(60_000);
+
+    // T5 inserts the manifest: a SHARE lock on quote_documents holds it inside its transaction.
+    const lock = await holdLock("lock table quote_service.quote_documents in share mode");
+    const body = JSON.parse(readFileSync("docs/v2/examples/create-and-issue.request.json", "utf8"));
+    const headers = { Authorization: `Bearer ${state.credentials.salesToken}`, "Idempotency-Key": `smoke-crash-before-${suffix}` };
+    const pending = fetchJson("/v2/quotes", { method: "POST", headers, body, timeoutMs: 60_000 }).catch((error) => ({ error: String(error) }));
+    await waitForQuery(
+      "select count(*) from pg_stat_activity where wait_event_type = 'Lock' and query like 'insert into quote_service.quote_documents%';",
+      "1",
+      30_000,
+      "T5 did not reach the manifest insert"
+    );
+    const quoteId = await queryDatabase("select quote_id from quote_service.quotes where quote_id not in (select quote_id from quote_service.quote_documents) and status = 'issuing' order by created_at desc limit 1;");
+    const operationId = await queryDatabase(`select current_operation_id from quote_service.quotes where quote_id = '${quoteId}';`);
+    // The formal PDF is already published at its content address; the manifest is not committed.
+    const published = await inVolume(
+      "const fs=require('fs'),p=require('path');const r=process.argv[1]+'/artifacts/sha256';const out=[];const w=d=>{for(const e of fs.existsSync(d)?fs.readdirSync(d,{withFileTypes:true}):[]){const f=p.join(d,e.name);e.isDirectory()?w(f):out.push(p.relative(process.argv[1],f)+' '+fs.statSync(f).mtimeMs)}};w(r);console.log(out.sort().join('\\n'))",
+      [state.paths.storageRoot]
+    );
+    const expectedFiles = Number(await queryDatabase("select count(distinct pdf_sha256) from quote_service.quote_documents;")) + 1;
+    assert(published.split("\n").filter(Boolean).length === expectedFiles, `Expected the new PDF published before T5 (files: ${published})`);
+
+    await killActiveApp();
+    await lock.release();
+    const response = await pending;
+    assert(response.error !== undefined || response.status === 202, `The killed request must not report issued: ${JSON.stringify(response.status)}`);
+    assert((await queryDatabase(`select count(*) from quote_service.quote_documents where quote_id = '${quoteId}';`)) === "0", "A manifest committed although T5 was killed");
+    assert((await queryDatabase(`select status || ':' || generation from quote_service.issuance_operations where operation_id = '${operationId}';`)) === "running:1", "Operation is not the killed holder's running generation");
+    assert((await queryDatabase(`select status from quote_service.quotes where quote_id = '${quoteId}';`)) === "issuing", "Quote left issuing");
+
+    // Recovery: a new container reclaims after lease expiry and reuses the published file.
+    state.app.syncBudgetMs = "0";
+    await startApp(state.names.appRecoverBefore, PHASE_TIMEOUT_MS.appStart);
+    await waitForReadiness(60_000);
+    await waitForQuery(`select status from quote_service.quotes where quote_id = '${quoteId}';`, "issued", 60_000, "Reclaim did not issue the quote");
+    assert((await queryDatabase(`select status || ':' || generation from quote_service.issuance_operations where operation_id = '${operationId}';`)) === "succeeded:2", "Expected success at generation 2");
+    const manifest = await verifyDocumentEndpoint(quoteId);
+    const after = await inVolume(
+      "const fs=require('fs');console.log(fs.statSync(process.argv[1]).mtimeMs)",
+      [`${state.paths.storageRoot}/${manifest.storageKey}`]
+    );
+    assert(published.includes(`${manifest.storageKey} ${after}`), "The reclaim did not reuse the untouched published file");
+    const logs = await readLogs(state.names.appRecoverBefore);
+    assert(/"event":"issuance\.artifact_published"[^\n]*"reused":true/.test(logs), "Reclaim did not report reusing the artifact");
+    assert((await queryDatabase(`select count(*) from quote_service.quote_audit_events where quote_id = '${quoteId}' and event_type = 'quote.issued';`)) === "1", "Issued more than once");
+    state.summary.crashBeforeCommit = { quoteId, operationId, pdfSha256: manifest.pdfSha256 };
+  });
+
+  await runPhase("crashAfterCommit", PHASE_TIMEOUT_MS.crashAfterCommit, async () => {
+    await stopActiveApp();
+    state.logs[state.names.appRecoverBefore] = await readLogs(state.names.appRecoverBefore);
+    state.app.syncBudgetMs = "10000";
+    await startApp(state.names.appCrashAfter, PHASE_TIMEOUT_MS.appStart);
+    await waitForReadiness(60_000);
+
+    const documentsLock = await holdLock("lock table quote_service.quote_documents in share mode");
+    const body = JSON.parse(readFileSync("docs/v2/examples/create-and-issue.request.json", "utf8"));
+    body.externalCorrelation = { ...body.externalCorrelation, externalReference: `smoke-after-${suffix}` };
+    const key = `smoke-crash-after-${suffix}`;
+    const headers = { Authorization: `Bearer ${state.credentials.salesToken}`, "Idempotency-Key": key };
+    const pending = fetchJson("/v2/quotes", { method: "POST", headers, body, timeoutMs: 60_000 }).catch((error) => ({ error: String(error) }));
+    await waitForQuery(
+      "select count(*) from pg_stat_activity where wait_event_type = 'Lock' and query like 'insert into quote_service.quote_documents%';",
+      "1",
+      30_000,
+      "T5 did not reach the manifest insert"
+    );
+    // The response is rebuilt from durable state and reads quote_lines; T5 never touches it.
+    const linesLock = await holdLock("lock table quote_service.quote_lines in access exclusive mode");
+    await documentsLock.release();
+    const quoteId = await queryDatabase(`select quote_id from quote_service.quotes where external_reference = 'smoke-after-${suffix}';`);
+    await waitForQuery(`select status from quote_service.quotes where quote_id = '${quoteId}';`, "issued", 30_000, "T5 did not commit");
+    await sleep(500);
+    await killActiveApp();
+    await linesLock.release();
+    const lost = await pending;
+    assert(lost.error !== undefined, `The response must have been lost with the process, got ${JSON.stringify(lost.status)}`);
+    const committed = await queryDatabase(
+      `select q.quote_number || ':' || q.current_operation_id || ':' || d.pdf_sha256 || ':' || (select count(*) from quote_service.issuance_operations) || ':' || (select count(*) from quote_service.quote_documents) from quote_service.quotes q join quote_service.quote_documents d using (quote_id) where q.quote_id = '${quoteId}';`
+    );
+
+    state.app.syncBudgetMs = "10000";
+    await startApp(state.names.appFinal, PHASE_TIMEOUT_MS.appStart);
+    await waitForReadiness(60_000);
+    const retry = await fetchJson("/v2/quotes", { method: "POST", headers, body, timeoutMs: 20_000 });
+    assert(retry.status === 201 && retry.headers.get("idempotent-replay") === "true", `Retry after the lost response: ${retry.status} ${retry.text}`);
+    const [quoteNumber, operationId, pdfSha256] = committed.split(":");
+    assert(
+      retry.body.quote.quoteId === quoteId &&
+        retry.body.quote.quoteNumber === quoteNumber &&
+        retry.body.quote.status === "issued" &&
+        retry.body.operation.operationId === operationId &&
+        retry.body.operation.status === "succeeded" &&
+        retry.body.quote.document.pdfSha256 === pdfSha256,
+      "Retry did not return the committed issued quote"
+    );
+    const served = await verifyDocumentEndpoint(quoteId);
+    assert(served.pdfSha256 === pdfSha256, "Served document differs from the committed manifest");
+    const counts = await queryDatabase(
+      "select (select count(*) from quote_service.issuance_operations) || ':' || (select count(*) from quote_service.quote_documents);"
+    );
+    assert(counts === committed.split(":").slice(3).join(":"), `The retry created new work: ${counts} vs ${committed}`);
+    state.summary.crashAfterCommit = { quoteId, quoteNumber, operationId };
+  });
+
+  await runPhase("integrity", PHASE_TIMEOUT_MS.integrity, async () => {
+    const tampered = await verifyArtifact(state.summary.v2Quote.quoteId);
+    const missing = await verifyArtifact(state.summary.v2Draft.quoteId);
+    const manifestsBefore = await queryDatabase("select string_agg(document_id || pdf_sha256 || byte_length, ',' order by document_id) from quote_service.quote_documents;");
+    const quotesBefore = await queryDatabase("select string_agg(quote_id || status || version, ',' order by quote_id) from quote_service.quotes;");
+    await docker(
+      ["exec", state.app.activeContainer, "node", "-e", "const fs=require('fs');const b=fs.readFileSync(process.argv[1]);b[b.length-10]^=1;fs.writeFileSync(process.argv[1],b)", `${state.paths.storageRoot}/${tampered.storageKey}`],
+      { timeoutMs: 20_000 }
+    );
+    await docker(["exec", state.app.activeContainer, "node", "-e", "require('fs').rmSync(process.argv[1])", `${state.paths.storageRoot}/${missing.storageKey}`], { timeoutMs: 20_000 });
+
+    for (const [quoteId, token] of [[state.summary.v2Quote.quoteId, state.credentials.salesToken], [state.summary.v2Draft.quoteId, state.credentials.supervisorToken]]) {
+      const response = await fetchDocument(quoteId, token);
+      const text = response.bytes.toString("utf8");
+      assert(response.status === 503, `Expected 503 for a corrupt/missing artifact, got ${response.status}`);
+      assert(JSON.parse(text).error.code === "document_storage_failed", `Unexpected error: ${text}`);
+      assert(response.headers.get("retry-after") !== null, "503 without Retry-After");
+      assert(!text.includes("%PDF") && !text.includes("artifacts/") && !text.includes(state.paths.storageRoot), "503 body leaked bytes or paths");
+    }
+
+    // Nothing was regenerated or changed: quotes, manifests and the missing file stay as they are.
+    assert((await queryDatabase("select string_agg(document_id || pdf_sha256 || byte_length, ',' order by document_id) from quote_service.quote_documents;")) === manifestsBefore, "Manifests changed");
+    assert((await queryDatabase("select string_agg(quote_id || status || version, ',' order by quote_id) from quote_service.quotes;")) === quotesBefore, "Quotes changed");
+    const stillMissing = await docker(["exec", state.app.activeContainer, "node", "-e", "process.stdout.write(String(require('fs').existsSync(process.argv[1])))", `${state.paths.storageRoot}/${missing.storageKey}`], { timeoutMs: 20_000 });
+    assert(stillMissing.stdout.trim() === "false", "The missing artifact was regenerated");
+    const logs = await readLogs(state.app.activeContainer);
+    assert((logs.match(/"event":"document\.integrity_failed"/g) ?? []).length === 2, "Expected two operator integrity signals");
+
+    // Operator integrity command inside the image: exit 2 with categorized ids, no paths.
+    const verify = await docker(["exec", state.app.activeContainer, "npm", "run", "--silent", "documents:verify:runtime"], { timeoutMs: 60_000, allowFailure: true });
+    const report = JSON.parse(verify.stdout.slice(verify.stdout.indexOf("{")));
+    assert(verify.code === 2, `documents:verify exit ${verify.code}`);
+    const statuses = Object.fromEntries(report.problems.map((problem) => [problem.quoteId, problem.status]));
+    assert(statuses[state.summary.v2Quote.quoteId] === "HASH_MISMATCH" && statuses[state.summary.v2Draft.quoteId] === "MISSING", `Verifier report: ${verify.stdout}`);
+    assert(report.ok === report.checked - 2, `Other artifacts must verify: ${verify.stdout}`);
+    assert(!verify.stdout.includes("artifacts/") && !verify.stdout.includes(state.paths.storageRoot), "Verifier output leaked paths");
+    state.summary.integrity = { byStatus: report.byStatus };
+  });
+
   await runPhase("gracefulShutdown", PHASE_TIMEOUT_MS.gracefulShutdown, async () => {
     await stopActiveApp();
-    state.logs.restartedApp = await readLogs(state.names.appRestarted);
+    state.logs.restartedApp = await readLogs(state.app.activeContainer);
     state.summary.gracefulShutdownExitCode = Number(
-      (await docker(["inspect", "--format", "{{.State.ExitCode}}", state.names.appRestarted], { timeoutMs: 10_000 })).stdout.trim()
+      (await docker(["inspect", "--format", "{{.State.ExitCode}}", state.app.activeContainer], { timeoutMs: 10_000 })).stdout.trim()
     );
 
     assert(state.summary.gracefulShutdownExitCode === 0, "Application exit code was not zero");

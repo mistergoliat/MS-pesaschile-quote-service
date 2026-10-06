@@ -1,9 +1,13 @@
+import fsPromises from "node:fs/promises";
+import path from "node:path";
+
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { DependencyMonitor } from "./application/health/dependency-monitor";
 import { PrincipalRegistry } from "./infrastructure/auth/principal-registry";
 import type { PdfRendererPort } from "./application/quote-v2/document/pdf-renderer-port";
 import { InlineIssuance } from "./application/quote-v2/inline-issuance";
+import type { IssuanceFailpoints } from "./application/quote-v2/issuance-failpoints";
 import { createIssuanceAttemptBody } from "./application/quote-v2/issuance-attempt";
 import { createWorkerInstanceId } from "./application/quote-v2/issuance-worker";
 import { issuanceSettings, principalRegistrySource, type AppEnv } from "./infrastructure/config/env";
@@ -58,7 +62,21 @@ export interface BuildApplicationOverrides {
    * quotes in `issuing`. Production always runs issuance.
    */
   readonly disableIssuanceExecution?: boolean;
+  /**
+   * Test seam (R1.5B4 crash harness): issuance checkpoints where a test
+   * composition stops or holds the process. Production never passes it.
+   */
+  readonly issuanceFailpoints?: IssuanceFailpoints;
 }
+
+/*
+ * TEST SEAMS. `BuildApplicationOverrides` is the only way to change issuance
+ * behaviour for tests: `disableIssuanceExecution` and `issuanceFailpoints`
+ * are constructor arguments, not configuration. `src/server.ts` (the only
+ * production composition) calls `buildApplication(env)` without overrides,
+ * no environment variable maps to either (env.ts), and no HTTP route reaches
+ * them. test/unit/test-seams.test.ts enforces this.
+ */
 
 /**
  * Builds the application without touching any external dependency. Throws
@@ -71,6 +89,8 @@ export interface BuildApplicationOverrides {
  * deadline sweep (gated on persistence readiness only) and the bounded
  * inline attempt after acceptance. Formal documents are published to the
  * content-addressed store and committed with the fenced T5 transaction.
+ * R1.5B4: `GET /v2/quotes/{id}/document` serves the committed, verified
+ * bytes from the same store (read only; never re-rendered).
  */
 export function buildApplication(
   env: AppEnv,
@@ -93,8 +113,22 @@ export function buildApplication(
   });
 
   const database = new PostgresDatabase(env);
+  const failpoints = overrides.issuanceFailpoints;
   // V2 write-once, content-addressed store; also the storage readiness probe.
-  const artifactStorage = new FilesystemContentAddressedArtifactStore(env.QUOTE_DOCUMENT_STORAGE_ROOT);
+  // F5 (test only): a checkpoint before link() of a publication temp.
+  const artifactStorage = new FilesystemContentAddressedArtifactStore(
+    env.QUOTE_DOCUMENT_STORAGE_ROOT,
+    failpoints
+      ? {
+          fs: {
+            link: async (existing, target) => {
+              await failpoints.reach("before_artifact_link", { detail: path.basename(String(existing)) });
+              await fsPromises.link(existing, target);
+            }
+          }
+        }
+      : {}
+  );
   // Formal-document identity and versions are code-owned (issuer profile,
   // template v4, renderer profile); no environment value reaches the PDF.
   const pdfRenderer = overrides.pdfRenderer ?? new NativePdfRenderer();
@@ -122,10 +156,11 @@ export function buildApplication(
   const issuance = overrides.disableIssuanceExecution
     ? null
     : (() => {
-        const repository = new PostgresIssuanceOperationRepository(database, { leaseMs: settings.leaseMs, deadlineMs: settings.deadlineMs });
+        const repository = new PostgresIssuanceOperationRepository(database, { leaseMs: settings.leaseMs, deadlineMs: settings.deadlineMs, failpoints });
         return createIssuanceJobs({
           repository,
-          attemptBody: createIssuanceAttemptBody({ repository, renderer: pdfRenderer, store: artifactStorage, logger: app.log }),
+          attemptBody: createIssuanceAttemptBody({ repository, renderer: pdfRenderer, store: artifactStorage, logger: app.log, failpoints }),
+          failpoints,
           leaseOwner: createWorkerInstanceId(env.SERVICE_NAME),
           settings,
           readiness: dependencyMonitor,
@@ -192,7 +227,13 @@ export function buildApplication(
     emailEnabled: false,
     startedAt: new Date(),
     businessRoutes: [
-      v2QuoteRoutes(database, { clock: overrides.quoteClock, issuanceDeadlineMs: env.QUOTE_ISSUANCE_DEADLINE_MS, inlineIssuance }),
+      v2QuoteRoutes(database, {
+        clock: overrides.quoteClock,
+        issuanceDeadlineMs: env.QUOTE_ISSUANCE_DEADLINE_MS,
+        inlineIssuance,
+        documents: artifactStorage,
+        failpoints
+      }),
       ...(overrides.businessRoutes ?? [])
     ]
   });

@@ -17,6 +17,7 @@ import {
   type OperatorRetryResult,
   type RenewResult
 } from "../../../application/quote-v2/issuance-operation";
+import type { IssuanceFailpoints } from "../../../application/quote-v2/issuance-failpoints";
 import {
   ISSUED_SNAPSHOT_HASH_ALGORITHM,
   issuedSnapshotHash,
@@ -56,6 +57,8 @@ export interface IssuanceOperationRepositoryConfig {
   readonly leaseMs: number;
   /** Deadline of operations created by an operator retry (T10). */
   readonly deadlineMs: number;
+  /** Test compositions only (issuance-failpoints.ts); production passes nothing. */
+  readonly failpoints?: IssuanceFailpoints | undefined;
 }
 
 interface OperationStateRow {
@@ -455,6 +458,7 @@ export class PostgresIssuanceOperationRepository implements IssuanceOperationRep
         attempts: state.operation.attempt_count
       }
     });
+    await this.config.failpoints?.reach("before_t5_commit", { operationId: fence.operationId, generation: fence.generation });
 
     return { kind: "COMMITTED", generatedAt: now };
   }

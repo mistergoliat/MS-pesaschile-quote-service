@@ -1,3 +1,4 @@
+import type { IssuanceFailpoints } from "../../application/quote-v2/issuance-failpoints";
 import type { IssuanceOperationRepository } from "../../application/quote-v2/issuance-operation";
 import {
   IssuanceDeadlineSweeper,
@@ -47,13 +48,16 @@ export function createIssuanceJobs(input: {
   readonly logger: WorkerLogger;
   readonly maxClaimsPerTick?: number;
   readonly sweepBatchSize?: number;
+  /** Test compositions only (issuance-failpoints.ts). */
+  readonly failpoints?: IssuanceFailpoints | undefined;
 }): IssuanceJobs {
   const worker = new IssuanceWorker(
     input.repository,
     input.attemptBody,
     input.lifecycle,
     { leaseOwner: input.leaseOwner, leaseMs: input.settings.leaseMs, maxClaimsPerTick: input.maxClaimsPerTick ?? 5 },
-    input.logger
+    input.logger,
+    input.failpoints
   );
   const sweeper = new IssuanceDeadlineSweeper(
     input.repository,

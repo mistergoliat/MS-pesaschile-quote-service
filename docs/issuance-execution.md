@@ -31,7 +31,7 @@ There are no external lookups.
 ## 2. Content-addressed publication
 
 `FilesystemContentAddressedArtifactStore` (`infrastructure/documents/content-addressed-artifact-store.ts`)
-is the only V2 storage surface. It exposes `publish`, `readVerified` (for B4),
+is the only V2 storage surface. It exposes `publish`, `readVerified` (B4 document read and verifier),
 `probe` and `sweepTemp`. The key is
 `artifacts/sha256/<aa>/<bb>/<sha256>.pdf`. It is exactly the database check
 `quote_documents_content_addressed` and carries no quote, number, operation,
@@ -201,8 +201,9 @@ operation).
   the PDF hash verified inside the container, stable across restart, then a
   budget-0 202 issued by the worker, and SIGTERM shutdown.
 
-## 9. Deferred (B4)
+## 9. B4 (done)
 
-`GET /v2/quotes/{id}/document` (reuses `readVerified`), the integrity
-job/command over V2 manifests, and the full adversarial process-kill crash
-matrix.
+`GET /v2/quotes/{id}/document` (it uses `readVerified`), the integrity
+verifier over V2 and legacy manifests, and the real process-kill crash matrix
+are in [document-access.md](document-access.md) and
+[issuance-crash-matrix.md](issuance-crash-matrix.md).

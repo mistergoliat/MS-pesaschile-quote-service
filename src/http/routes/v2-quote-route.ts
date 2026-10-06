@@ -7,7 +7,9 @@ import {
   type IdempotentOperation
 } from "../../application/idempotency/idempotency-scope";
 import { toFieldErrors } from "../../application/quote-v2/create-quote-request";
+import type { CommittedArtifactReader } from "../../application/quote-v2/document/artifact-store-port";
 import type { InlineIssuance } from "../../application/quote-v2/inline-issuance";
+import type { IssuanceFailpoints } from "../../application/quote-v2/issuance-failpoints";
 import { databaseClock, type QuoteClock } from "../../infrastructure/persistence/postgres/quote-clock";
 import {
   acceptCreateAndIssue,
@@ -19,6 +21,7 @@ import { createDraft, issueDraft, updateDraft } from "../../infrastructure/persi
 import {
   getVisibleOperation,
   getVisibleQuote,
+  getVisibleQuoteDocument,
   listVisibleAudit,
   listVisibleQuotes,
   lookupIdempotencyBinding,
@@ -26,7 +29,7 @@ import {
 } from "../../infrastructure/persistence/postgres/quote-v2-reads";
 import type { PostgresDatabase } from "../../infrastructure/persistence/postgres/postgres";
 import { authorize } from "../authentication";
-import { HttpError } from "../errors";
+import { DEPENDENCY_RETRY_AFTER_SECONDS, HttpError } from "../errors";
 import type { BusinessRouteRegistrar } from "./index";
 
 const CORRELATION_ID_PATTERN = /^[!-~](?:[ -~]{0,198}[!-~])?$/;
@@ -165,6 +168,16 @@ function resultOf<T>(outcome: CommandOutcome<T>, operation: IdempotentOperation,
   return outcome.result;
 }
 
+/**
+ * `Content-Disposition` file name: `<quoteNumber>.pdf` (openapi
+ * `getQuoteDocument`). Built from the quote number only, never from a
+ * storage key or path; anything outside a conservative character set falls
+ * back to a fixed name.
+ */
+export function documentFileName(quoteNumber: string | null): string {
+  return `${quoteNumber !== null && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(quoteNumber) ? quoteNumber : "quote"}.pdf`;
+}
+
 /** Issuance responses: status is a function of the current state (Domain §4.3). */
 function sendIssuance(reply: FastifyReply, result: QuoteOperationResult, doneStatus: 200 | 201): FastifyReply {
   if (result.quote.status === "issuing") {
@@ -195,6 +208,10 @@ function sendIssuance(reply: FastifyReply, result: QuoteOperationResult, doneSta
  * budget), then the answer is rebuilt from durable state: 201/200 only once
  * the manifest committed (quote `issued`), else 202 while the operation
  * continues. Replays answer the current state without driving issuance.
+ *
+ * Document (R1.5B4): `GET …/document` serves only the committed manifest's
+ * bytes, read once and verified (`documents.readVerified`); it never renders,
+ * repairs or writes anything. `failpoints` exist only in test compositions.
  */
 export function v2QuoteRoutes(
   database: PostgresDatabase,
@@ -202,6 +219,8 @@ export function v2QuoteRoutes(
     readonly issuanceDeadlineMs: number;
     readonly clock?: QuoteClock | undefined;
     readonly inlineIssuance?: InlineIssuance | undefined;
+    readonly documents: CommittedArtifactReader;
+    readonly failpoints?: IssuanceFailpoints | undefined;
   }
 ): BusinessRouteRegistrar {
   const clock = options.clock ?? databaseClock;
@@ -214,8 +233,11 @@ export function v2QuoteRoutes(
     }
 
     const { quoteId, operationId } = { quoteId: outcome.result.quote.quoteId, operationId: outcome.result.operation.operationId };
+    await options.failpoints?.reach("after_acceptance_commit", { operationId });
     await options.inlineIssuance.drive(operationId, (request.headers["x-correlation-id"] as string | undefined) ?? null);
-    return { kind: "accepted", result: await readIssuanceResult(database, quoteId, operationId, clock) };
+    const result = await readIssuanceResult(database, quoteId, operationId, clock);
+    await options.failpoints?.reach("before_issuance_response", { operationId });
+    return { kind: "accepted", result };
   };
   const commandInput = (request: FastifyRequest) => ({
     principal: request.principal!,
@@ -279,6 +301,62 @@ export function v2QuoteRoutes(
 
     app.get("/v2/quotes", { config: { requiredScope: "quotes:read" }, preValidation: validateRead(listQuerySchema) }, async (request) =>
       listVisibleQuotes(database, request.principal!, parseQuery(listQuerySchema, request), clock)
+    );
+
+    // Exact committed bytes, verified before sending (Domain §9.3, state machine §4):
+    // 409 until a manifest exists; kept after expiry and after cancel-after-issue.
+    app.get(
+      "/v2/quotes/:quoteId/document",
+      { config: { requiredScope: "quotes:document:read" }, preValidation: validateRead(null) },
+      async (request, reply) => {
+        const document = await getVisibleQuoteDocument(database, request.principal!, quoteIdOf(request), clock);
+
+        if (document.manifest === null) {
+          throw new HttpError({
+            statusCode: 409,
+            code: "document_not_available",
+            message: "The quote has no issued document.",
+            details: { status: document.status }
+          });
+        }
+
+        const read = await options.documents.readVerified(document.manifest);
+
+        if (read.status !== "OK") {
+          // Operator incident: the immutable record stays as it is; nothing is
+          // regenerated or repaired. Ids and the integrity status only.
+          request.log.error(
+            {
+              event: "document.integrity_failed",
+              quoteId: document.quoteId,
+              documentId: document.manifest.documentId,
+              origin: document.manifest.origin,
+              integrityStatus: read.status,
+              fsCode: read.fsCode
+            },
+            "Committed document failed verification; not served"
+          );
+          throw new HttpError({
+            statusCode: 503,
+            code: "document_storage_failed",
+            message: "The stored document is unavailable.",
+            retryAfterSeconds: DEPENDENCY_RETRY_AFTER_SECONDS
+          });
+        }
+
+        const pdfSha256 = document.manifest.pdfSha256;
+        return reply
+          .code(200)
+          .header("Content-Type", "application/pdf")
+          .header("Content-Length", String(read.bytes.byteLength))
+          .header("Content-Disposition", `attachment; filename="${documentFileName(document.quoteNumber)}"`)
+          .header("X-Document-Sha256", pdfSha256)
+          .header("ETag", `"${pdfSha256}"`)
+          // Personal data (security §6): never stored by shared caches.
+          .header("Cache-Control", "private, no-store")
+          .header("X-Content-Type-Options", "nosniff")
+          .send(read.bytes);
+      }
     );
 
     app.get(

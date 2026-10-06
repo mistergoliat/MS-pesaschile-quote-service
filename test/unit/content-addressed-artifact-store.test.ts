@@ -6,7 +6,11 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ArtifactStoreError, contentAddressedPdfKey } from "../../src/application/quote-v2/document/artifact-store-port";
+import {
+  ArtifactStoreError,
+  contentAddressedPdfKey,
+  MAX_COMMITTED_DOCUMENT_BYTES
+} from "../../src/application/quote-v2/document/artifact-store-port";
 import {
   classifyFilesystemError,
   FilesystemContentAddressedArtifactStore,
@@ -174,15 +178,152 @@ describe("FilesystemContentAddressedArtifactStore.publish", () => {
   });
 });
 
-describe("readVerified", () => {
-  it("returns verified bytes and refuses a mismatching file or key", async () => {
+describe("readVerified (R1.5B4: committed manifest → verified bytes)", () => {
+  const manifestOf = (published: { storageKey: string; pdfSha256: string; byteLength: number }) =>
+    ({ origin: "issuance", storageKey: published.storageKey, pdfSha256: published.pdfSha256, byteLength: published.byteLength }) as const;
+
+  /** Every file under the root with its hash: proves a read changed nothing. */
+  const tree = (): Record<string, string> => {
+    const out: Record<string, string> = {};
+    const walk = (directory: string) => {
+      for (const entry of fs.existsSync(directory) ? fs.readdirSync(directory, { withFileTypes: true }) : []) {
+        const full = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+        } else {
+          out[path.relative(root, full)] = sha256(fs.readFileSync(full));
+        }
+      }
+    };
+    walk(root);
+    return out;
+  };
+
+  it("returns exactly the committed bytes when key, length and SHA-256 match", async () => {
     const store = new FilesystemContentAddressedArtifactStore(root);
     const bytes = pdfBytes("read");
     const published = await store.publish(bytes);
+    const read = await store.readVerified(manifestOf(published));
 
-    expect((await store.readVerified(published.storageKey, published.pdfSha256, published.byteLength)).equals(bytes)).toBe(true);
-    await expect(store.readVerified(published.storageKey, published.pdfSha256, published.byteLength + 1)).rejects.toMatchObject({ kind: "integrity_conflict" });
-    await expect(store.readVerified(dbKey("a".repeat(64)), published.pdfSha256, published.byteLength)).rejects.toMatchObject({ kind: "integrity_conflict" });
+    expect(read.status).toBe("OK");
+    expect(read.status === "OK" && read.bytes.equals(bytes)).toBe(true);
+  });
+
+  it("classifies missing, truncated, extended, same-length-tampered and key-inconsistent artifacts; never repairs or deletes", async () => {
+    const store = new FilesystemContentAddressedArtifactStore(root);
+    const published = await store.publish(pdfBytes("committed"));
+    const manifest = manifestOf(published);
+    const file = at(published.storageKey);
+    const original = fs.readFileSync(file);
+    const status = async (m: Parameters<typeof store.readVerified>[0] = manifest) => (await store.readVerified(m)).status;
+
+    expect(await status({ ...manifest, byteLength: manifest.byteLength + 1 })).toBe("LENGTH_MISMATCH");
+    expect(await status({ ...manifest, storageKey: dbKey("a".repeat(64)) })).toBe("KEY_INVALID");
+    expect(await status({ ...manifest, storageKey: "../outside.pdf", origin: "legacy_v1" })).toBe("KEY_INVALID");
+    expect(await status({ ...manifest, pdfSha256: "not-a-hash" })).toBe("KEY_INVALID");
+
+    fs.writeFileSync(file, original.subarray(0, original.byteLength - 3));
+    expect(await status()).toBe("LENGTH_MISMATCH");
+    fs.writeFileSync(file, Buffer.concat([original, Buffer.from("x")]));
+    expect(await status()).toBe("LENGTH_MISMATCH");
+    const tampered = Buffer.from(original);
+    tampered[tampered.byteLength - 2] = tampered[tampered.byteLength - 2]! ^ 0xff;
+    fs.writeFileSync(file, tampered);
+    expect(await status()).toBe("HASH_MISMATCH");
+    const before = tree();
+    expect(await status()).toBe("HASH_MISMATCH");
+    expect(tree()).toEqual(before);
+
+    fs.rmSync(file);
+    expect(await status()).toBe("MISSING");
+    expect(fs.existsSync(file)).toBe(false);
+    fs.mkdirSync(file);
+    expect(await status()).toBe("READ_FAILED");
+  });
+
+  it("legacy V1 manifests keep their migrated key and may have no recorded length; the hash is still enforced", async () => {
+    const store = new FilesystemContentAddressedArtifactStore(root);
+    const bytes = pdfBytes("legacy");
+    const key = "quotes/2026/legacy-v1-quote.pdf";
+    fs.mkdirSync(path.dirname(at(key)), { recursive: true });
+    fs.writeFileSync(at(key), bytes);
+    const legacy = { origin: "legacy_v1", storageKey: key, pdfSha256: sha256(bytes), byteLength: null } as const;
+
+    const read = await store.readVerified(legacy);
+    expect(read.status === "OK" && read.bytes.equals(bytes)).toBe(true);
+    expect((await store.readVerified({ ...legacy, origin: "issuance" })).status).toBe("KEY_INVALID");
+    expect((await store.readVerified({ ...legacy, pdfSha256: "c".repeat(64) })).status).toBe("HASH_MISMATCH");
+  });
+
+  it("refuses an artifact above the operational bound before allocating it", async () => {
+    const store = new FilesystemContentAddressedArtifactStore(root);
+    const key = "quotes/huge.pdf";
+    fs.mkdirSync(path.dirname(at(key)), { recursive: true });
+    const handle = fs.openSync(at(key), "w");
+    fs.ftruncateSync(handle, MAX_COMMITTED_DOCUMENT_BYTES + 1); // sparse
+    fs.closeSync(handle);
+
+    expect((await store.readVerified({ origin: "legacy_v1", storageKey: key, pdfSha256: "d".repeat(64), byteLength: null })).status).toBe("OVERSIZED");
+    expect(
+      (await store.readVerified({ origin: "issuance", storageKey: dbKey("e".repeat(64)), pdfSha256: "e".repeat(64), byteLength: MAX_COMMITTED_DOCUMENT_BYTES + 1 })).status
+    ).toBe("OVERSIZED");
+    // The bound is far above a legitimate formal PDF (100 lines ≈ 63 KB, formal-document-v2.md §8).
+    expect(MAX_COMMITTED_DOCUMENT_BYTES).toBeGreaterThan(100 * 63_400);
+  });
+
+  it.skipIf(process.platform === "win32")("never follows a symlink planted at an artifact address", async () => {
+    const store = new FilesystemContentAddressedArtifactStore(root);
+    const bytes = pdfBytes("symlink-target");
+    const outside = path.join(root, "outside.pdf");
+    fs.writeFileSync(outside, bytes);
+    const key = dbKey(sha256(bytes));
+    fs.mkdirSync(path.dirname(at(key)), { recursive: true });
+    fs.symlinkSync(outside, at(key));
+
+    expect((await store.readVerified({ origin: "issuance", storageKey: key, pdfSha256: sha256(bytes), byteLength: bytes.byteLength })).status).toBe("READ_FAILED");
+  });
+
+  it("serves the bytes it verified: one descriptor, no reopen or path re-read after the check", async () => {
+    const opened: string[] = [];
+    const store = new FilesystemContentAddressedArtifactStore(root, {
+      fs: {
+        open: (async (file: string, flags: number) => {
+          opened.push(`${typeof flags}:${path.basename(file)}`);
+          return fsPromises.open(file, flags);
+        }) as unknown as PublishFs["open"],
+        readFile: (() => Promise.reject(new Error("readVerified must not re-read by path"))) as PublishFs["readFile"]
+      }
+    });
+    const published = await new FilesystemContentAddressedArtifactStore(root).publish(pdfBytes("one-descriptor"));
+
+    expect((await store.readVerified(manifestOf(published))).status).toBe("OK");
+    expect(opened).toEqual([`number:${path.basename(published.storageKey)}`]);
+  });
+});
+
+describe("no deletion outside artifacts/tmp (R1.5B4 §34)", () => {
+  it("publish, reuse, verified read, probe and temp sweep only ever unlink inside artifacts/tmp", async () => {
+    const unlinked: string[] = [];
+    const recording: Partial<PublishFs> = {
+      unlink: async (file) => {
+        unlinked.push(path.relative(root, String(file)).split(path.sep).join("/"));
+        await fsPromises.unlink(file);
+      }
+    };
+    const store = new FilesystemContentAddressedArtifactStore(root, { fs: recording, tempMaxAgeMs: 0 });
+    const published = await store.publish(pdfBytes("never-deleted"));
+    await store.publish(pdfBytes("never-deleted"));
+    await store.readVerified({ origin: "issuance", storageKey: published.storageKey, pdfSha256: published.pdfSha256, byteLength: published.byteLength });
+    expect(await store.probe()).toEqual({ ok: true });
+    // Make every file "old", including the final artifact, then sweep with max age 0.
+    const old = Date.now() / 1000 - 7_200;
+    fs.utimesSync(at(published.storageKey), old, old);
+    fs.writeFileSync(path.join(at("artifacts/tmp"), `${"f".repeat(64)}.${crypto.randomUUID()}.tmp`), "residue");
+    await store.sweepTemp();
+
+    expect(unlinked.length).toBeGreaterThan(0);
+    expect(unlinked.filter((file) => !file.startsWith("artifacts/tmp/"))).toEqual([]);
+    expect(fs.readFileSync(at(published.storageKey)).equals(pdfBytes("never-deleted"))).toBe(true);
   });
 });
 

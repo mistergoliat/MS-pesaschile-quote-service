@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import { classifyAttemptError } from "./attempt-failure";
+import type { IssuanceFailpoints } from "./issuance-failpoints";
 import type { AttemptFailure, ClaimedAttempt, IssuanceOperationRepository } from "./issuance-operation";
 import { SnapshotIntegrityError, type IssuedSnapshot } from "./issued-snapshot";
 
@@ -77,7 +78,8 @@ export class LeaseRenewal {
     private readonly repository: Pick<IssuanceOperationRepository, "renewLease">,
     private readonly attempt: ClaimedAttempt,
     private readonly leaseMs: number,
-    private readonly logger: WorkerLogger
+    private readonly logger: WorkerLogger,
+    private readonly failpoints?: IssuanceFailpoints
   ) {}
 
   get signal(): AbortSignal {
@@ -135,6 +137,12 @@ export class LeaseRenewal {
     }
 
     try {
+      await this.failpoints?.reach("lease_renewal", { operationId: this.attempt.operationId, generation: this.attempt.generation });
+
+      if (this.stopped || this.leaseState !== "held") {
+        return;
+      }
+
       const result = await this.repository.renewLease(this.attempt);
 
       if (result.kind === "RENEWED") {
@@ -189,7 +197,9 @@ export class IssuanceWorker {
     private readonly body: AttemptBody,
     private readonly lifecycle: LifecycleView,
     private readonly config: IssuanceWorkerConfig,
-    private readonly logger: WorkerLogger
+    private readonly logger: WorkerLogger,
+    /** Test compositions only (issuance-failpoints.ts); production passes nothing. */
+    private readonly failpoints?: IssuanceFailpoints
   ) {}
 
   /** One trigger: claim and run up to `maxClaimsPerTick` attempts, sequentially. Returns the number of attempts run. */
@@ -264,7 +274,7 @@ export class IssuanceWorker {
       },
       attempt.reclaimed ? "Issuance operation reclaimed" : "Issuance operation claimed"
     );
-    const lease = new LeaseRenewal(this.repository, attempt, this.config.leaseMs, this.logger);
+    const lease = new LeaseRenewal(this.repository, attempt, this.config.leaseMs, this.logger, this.failpoints);
     this.current = lease;
     lease.start();
     let outcome: AttemptOutcome;
@@ -331,8 +341,10 @@ export class IssuanceWorker {
   /** Integrity check, then the body. Never throws: every failure becomes a typed attempt failure. */
   private async attemptOutcome(attempt: ClaimedAttempt, signal: AbortSignal, correlationId: string | null): Promise<AttemptOutcome> {
     let snapshot: IssuedSnapshot;
+    const checkpoint = { operationId: attempt.operationId, generation: attempt.generation };
 
     try {
+      await this.failpoints?.reach("after_claim", checkpoint);
       snapshot = await this.repository.loadVerifiedSnapshot(attempt.operationId);
     } catch (error) {
       if (error instanceof SnapshotIntegrityError) {
@@ -347,6 +359,7 @@ export class IssuanceWorker {
     }
 
     try {
+      await this.failpoints?.reach("after_snapshot_verified", checkpoint);
       return await this.body({ attempt, snapshot, signal, correlationId });
     } catch (error) {
       return { kind: "failed", ...classifyAttemptError(error) };

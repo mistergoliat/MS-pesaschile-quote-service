@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 
@@ -6,9 +7,14 @@ import { PROBE_OK, probeFailed, type ArtifactStorageProbePort, type FailureCateg
 import {
   ArtifactStoreError,
   contentAddressedPdfKey,
+  MAX_COMMITTED_DOCUMENT_BYTES,
+  type ArtifactIntegrityStatus,
   type ArtifactStoreFailure,
+  type CommittedArtifactManifest,
+  type CommittedArtifactReader,
   type ContentAddressedArtifactStore,
-  type PublishedArtifact
+  type PublishedArtifact,
+  type VerifiedArtifactRead
 } from "../../application/quote-v2/document/artifact-store-port";
 
 /*
@@ -31,7 +37,8 @@ import {
  * immutable, possibly unreferenced files at their content address (kept:
  * another attempt may adopt them). A file at a final address is never
  * partial: it only appears there through link() of a fully written temp.
- * Nothing under artifacts/sha256 is ever deleted by this class.
+ * Nothing under artifacts/sha256 is ever deleted by this class: the only
+ * unlink calls target artifacts/tmp (publication temp, probe files, sweep).
  *
  * Portability: Linux is the production target. Windows (NTFS) supports
  * hard links, so the same no-overwrite link() runs there; directory fsync
@@ -46,6 +53,8 @@ const PROBE_NAME = /^probe-[0-9a-f-]{36}(\.link)?\.tmp$/;
 /** Temp files older than this are crash residue. A publication holds its temp for milliseconds. */
 export const DEFAULT_TEMP_MAX_AGE_MS = 60 * 60_000;
 const SWEEP_INTERVAL_MS = 60_000;
+/** Read-only; never follow a symlink planted at an artifact address (POSIX; Windows has no O_NOFOLLOW). */
+const READ_FLAGS = fs.constants.O_RDONLY | ((fs.constants as Partial<typeof fs.constants>).O_NOFOLLOW ?? 0);
 
 /** The filesystem calls publication uses (injectable to simulate faults in tests). */
 export interface PublishFs {
@@ -95,7 +104,7 @@ function probeCategory(error: unknown): FailureCategory {
 
 const sha256 = (bytes: Buffer): string => crypto.createHash("sha256").update(bytes).digest("hex");
 
-export class FilesystemContentAddressedArtifactStore implements ContentAddressedArtifactStore, ArtifactStorageProbePort {
+export class FilesystemContentAddressedArtifactStore implements ContentAddressedArtifactStore, CommittedArtifactReader, ArtifactStorageProbePort {
   readonly #root: string;
   readonly #fs: PublishFs;
   readonly #tempMaxAgeMs: number;
@@ -170,25 +179,82 @@ export class FilesystemContentAddressedArtifactStore implements ContentAddressed
     return { storageKey, pdfSha256, byteLength: bytes.byteLength, reused };
   }
 
-  /** Reads a published artifact and verifies it against its manifest values (B4 document read reuses this). */
-  async readVerified(storageKey: string, expectedSha256: string, expectedByteLength: number): Promise<Buffer> {
-    if (storageKey !== contentAddressedPdfKey(expectedSha256)) {
-      throw new ArtifactStoreError("integrity_conflict");
-    }
-
-    let bytes: Buffer;
+  /**
+   * Verified read of a committed artifact (R1.5B4; document endpoint and
+   * integrity verifier). One open file descriptor: fstat, size checks
+   * against the manifest and MAX_COMMITTED_DOCUMENT_BYTES BEFORE allocating,
+   * read exactly that many bytes, confirm EOF, hash. The returned buffer is
+   * the verified one, so a caller serves exactly what was checked (no
+   * verify-then-reopen window). Read-only: nothing is repaired, rewritten
+   * or deleted. A V2 (`issuance`) key must equal its content address; a
+   * legacy V1 key keeps its migrated path and may lack a recorded length.
+   */
+  async readVerified(manifest: CommittedArtifactManifest): Promise<VerifiedArtifactRead> {
+    const failed = (status: Exclude<ArtifactIntegrityStatus, "OK">, fsCode: string | null = null): VerifiedArtifactRead => ({ status, fsCode });
+    let file: string;
 
     try {
-      bytes = await this.#fs.readFile(this.resolve(storageKey));
+      if (manifest.origin === "issuance" && manifest.storageKey !== contentAddressedPdfKey(manifest.pdfSha256)) {
+        return failed("KEY_INVALID");
+      }
+
+      file = this.resolve(manifest.storageKey);
+    } catch {
+      return failed("KEY_INVALID");
+    }
+
+    if (manifest.byteLength !== null && manifest.byteLength > MAX_COMMITTED_DOCUMENT_BYTES) {
+      return failed("OVERSIZED");
+    }
+
+    let handle: fsPromises.FileHandle;
+
+    try {
+      handle = await this.#fs.open(file, READ_FLAGS);
     } catch (error) {
-      throw classifyFilesystemError(error);
+      const code = errnoCode(error);
+      return failed(code === "ENOENT" || code === "ENOTDIR" ? "MISSING" : "READ_FAILED", code);
     }
 
-    if (bytes.byteLength !== expectedByteLength || sha256(bytes) !== expectedSha256) {
-      throw new ArtifactStoreError("integrity_conflict");
-    }
+    try {
+      const stat = await handle.stat();
 
-    return bytes;
+      if (!stat.isFile()) {
+        return failed("READ_FAILED");
+      }
+
+      if (manifest.byteLength !== null && stat.size !== manifest.byteLength) {
+        return failed("LENGTH_MISMATCH");
+      }
+
+      if (stat.size > MAX_COMMITTED_DOCUMENT_BYTES) {
+        return failed("OVERSIZED");
+      }
+
+      const bytes = Buffer.alloc(stat.size);
+      let offset = 0;
+
+      while (offset < bytes.byteLength) {
+        const { bytesRead } = await handle.read(bytes, offset, bytes.byteLength - offset, offset);
+
+        if (bytesRead === 0) {
+          return failed("LENGTH_MISMATCH");
+        }
+
+        offset += bytesRead;
+      }
+
+      // The file must end where fstat said: a grown file is not the committed artifact.
+      if ((await handle.read(Buffer.alloc(1), 0, 1, offset)).bytesRead !== 0) {
+        return failed("LENGTH_MISMATCH");
+      }
+
+      return sha256(bytes) === manifest.pdfSha256 ? { status: "OK", bytes } : failed("HASH_MISMATCH");
+    } catch (error) {
+      return failed("READ_FAILED", errnoCode(error));
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
   }
 
   /**
@@ -249,7 +315,7 @@ export class FilesystemContentAddressedArtifactStore implements ContentAddressed
       const stat = await fsPromises.lstat(entryPath).catch(() => null);
 
       if (stat?.isFile() && stat.mtimeMs < cutoff) {
-        await fsPromises.unlink(entryPath).then(
+        await this.#fs.unlink(entryPath).then(
           () => {
             removed += 1;
           },

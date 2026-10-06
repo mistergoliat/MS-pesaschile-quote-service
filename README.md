@@ -8,7 +8,7 @@ Owner service for PesasChile commercial quotes, being rebuilt on the frozen
 | R1.2 V2 contract | frozen (amendments A1–A3 applied in R1.4) |
 | R1.3 runtime reliability and health | done: [docs/runtime-lifecycle.md](docs/runtime-lifecycle.md) |
 | R1.4 V2 schema and migration foundation | done: [docs/v2-persistence.md](docs/v2-persistence.md) |
-| R1.5 V2 API, idempotency, durable issuance | in progress: A.1–A.4 done; B1 operation core, B2 formal document, B3 publication + fenced commit + inline issuance done ([docs/issuance-execution.md](docs/issuance-execution.md)); B4 (document read, integrity) pending |
+| R1.5 V2 API, idempotency, durable issuance | in progress: A.1–A.4 done; B1 operation core, B2 formal document, B3 publication + fenced commit + inline issuance done ([docs/issuance-execution.md](docs/issuance-execution.md)); B4 document endpoint, integrity verifier and process-kill crash matrix done ([docs/document-access.md](docs/document-access.md), [docs/issuance-crash-matrix.md](docs/issuance-crash-matrix.md)) |
 
 **Current runtime:** health endpoints and the readiness-gated business
 context. The V1 API (`/v1/*`), its repositories and workers were retired in
@@ -45,7 +45,7 @@ curl -i localhost:3000/health/ready
 | `npm run db:manifest` | regenerate the migration manifest after adding a migration |
 | `npm run db:grants` / `db:grants:runtime` | re-apply the `quote_runtime` grants |
 | `npm run principals:token` | new caller token plus the SHA-256 for the principal registry |
-| `npm run documents:verify` / `documents:verify:runtime` | verify stored artifacts against their manifests (`--record-byte-length` for legacy sizes) |
+| `npm run documents:verify` / `documents:verify:runtime` | integrity check, detection only: every committed manifest against its bytes (OK / MISSING / HASH_MISMATCH / LENGTH_MISMATCH / READ_FAILED / KEY_INVALID / OVERSIZED; exit 2 on any problem; `--record-byte-length` for legacy sizes) |
 | `npm run smoke:docker` | build the image and smoke the runtime (migrate, check, health, restart, shutdown) |
 | `npm run pdf:preview`, `pdf:benchmark`, `pdf:concurrency-smoke` | formal PDF previews (template v4), cost and concurrency checks |
 | `npm run pdf:determinism` / `pdf:determinism:runtime` | SHA-256 of the golden formal-PDF fixtures (must equal the pinned values on every OS) |
