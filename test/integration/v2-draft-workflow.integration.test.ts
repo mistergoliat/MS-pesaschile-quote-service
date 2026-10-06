@@ -79,6 +79,8 @@ async function start(options: { migrate?: boolean; databaseUrl?: string; beforeL
     }),
     {
       principalRegistry: registry(),
+      // Acceptance-only suite: quotes must stay `issuing` (issuance execution is covered in issuance-commit tests).
+      disableIssuanceExecution: true,
       // Test-only read probe (the public read routes arrive in A.4) applying the production visibility rule.
       businessRoutes: [
         (app) =>

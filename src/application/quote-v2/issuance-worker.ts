@@ -1,24 +1,20 @@
 import crypto from "node:crypto";
 
-import {
-  ISSUANCE_ATTEMPT_ERROR_CODES,
-  type ClaimedAttempt,
-  type IssuanceAttemptErrorCode,
-  type IssuanceOperationRepository
-} from "./issuance-operation";
+import { classifyAttemptError } from "./attempt-failure";
+import type { AttemptFailure, ClaimedAttempt, IssuanceOperationRepository } from "./issuance-operation";
 import { SnapshotIntegrityError, type IssuedSnapshot } from "./issued-snapshot";
 
+export { IssuanceAttemptError } from "./attempt-failure";
+
 /*
- * Issuance worker skeleton (R1.5B1). Each tick claims at most a bounded
- * number of due operations, one attempt at a time, and runs the injected
- * attempt body under a fenced, periodically renewed lease. Durable truth
- * lives only in PostgreSQL: losing a tick, a restart or two processes ticking
- * at once changes nothing.
- *
- * B1 deliberately has no success path: the attempt body can only fail or
- * abandon. The real body (load snapshot → render → publish → fenced manifest
- * commit, T5) arrives in B3; until then this worker is not composed into the
- * application (see infrastructure/runtime/issuance-jobs.ts).
+ * Issuance worker (R1.5B1 core, R1.5B3 real body). Each tick claims at most
+ * a bounded number of due operations and runs the attempt body under a
+ * fenced, periodically renewed lease. The inline path (after an acceptance
+ * commit) runs one specific operation through the same worker. At most ONE
+ * attempt runs per process at any time (a single slot shared by the periodic
+ * worker and every inline request); PostgreSQL coordinates across processes.
+ * Durable truth lives only in the database: losing a tick, a restart or two
+ * processes ticking at once changes nothing.
  */
 
 export interface WorkerLogger {
@@ -40,27 +36,24 @@ export function createWorkerInstanceId(serviceName = "quote-service"): string {
   return `${serviceName.slice(0, 64)}:${process.pid}:${crypto.randomUUID()}`;
 }
 
-/** A typed attempt failure; anything else thrown by a body counts as `document_generation_failed`. */
-export class IssuanceAttemptError extends Error {
-  override readonly name = "IssuanceAttemptError";
-
-  constructor(readonly code: IssuanceAttemptErrorCode) {
-    super(`Issuance attempt failed: ${code}`);
-  }
-}
-
 export interface AttemptContext {
   readonly attempt: ClaimedAttempt;
   readonly snapshot: IssuedSnapshot;
   /** Aborted when the lease is lost or the worker is stopping: the body must stop acting. */
   readonly signal: AbortSignal;
+  /** Request/trace correlation of an inline attempt (audit only); null for the periodic worker. */
+  readonly correlationId: string | null;
 }
 
 /**
- * What an attempt body may report in B1. `abandoned`: stop without a durable
- * write; the lease expires and the operation is reclaimed.
+ * What an attempt reports. `succeeded`: the fenced T5 commit applied.
+ * `abandoned`: stop without a durable write; the lease expires and the
+ * operation is reclaimed. `failed`: classified failure (amendment A5).
  */
-export type AttemptOutcome = { readonly kind: "failed"; readonly errorCode: IssuanceAttemptErrorCode } | { readonly kind: "abandoned" };
+export type AttemptOutcome =
+  | { readonly kind: "succeeded" }
+  | ({ readonly kind: "failed" } & AttemptFailure)
+  | { readonly kind: "abandoned" };
 
 export type AttemptBody = (context: AttemptContext) => Promise<AttemptOutcome>;
 
@@ -177,9 +170,19 @@ export interface IssuanceWorkerConfig {
   readonly maxClaimsPerTick: number;
 }
 
+export type RunOperationResult =
+  /** This process ran an attempt on the operation (whatever its outcome). */
+  | { readonly kind: "ran"; readonly outcome: AttemptOutcome }
+  /** The process slot is taken by another attempt, or the worker is stopping. */
+  | { readonly kind: "busy" }
+  /** Not claimable now: another holder has it, it is not due, or it is no longer current. */
+  | { readonly kind: "not_claimed" };
+
 export class IssuanceWorker {
   private stopping = false;
   private current: LeaseRenewal | null = null;
+  /** The single per-process attempt slot (periodic worker and inline requests). */
+  private slotTaken = false;
 
   constructor(
     private readonly repository: IssuanceOperationRepository,
@@ -195,21 +198,53 @@ export class IssuanceWorker {
 
     while (attempts < this.config.maxClaimsPerTick) {
       // Checked before every claim: a shutting-down process never takes new work.
-      if (this.stopping || this.lifecycle.isShuttingDown) {
+      if (this.stopping || this.lifecycle.isShuttingDown || this.slotTaken) {
         break;
       }
 
-      const claim = await this.repository.claimNext(this.config.leaseOwner);
+      this.slotTaken = true;
 
-      if (claim.kind === "NONE_AVAILABLE") {
-        break;
+      try {
+        const claim = await this.repository.claimNext(this.config.leaseOwner);
+
+        if (claim.kind === "NONE_AVAILABLE") {
+          break;
+        }
+
+        attempts += 1;
+        await this.runAttempt(claim.attempt, null);
+      } finally {
+        this.slotTaken = false;
       }
-
-      attempts += 1;
-      await this.runAttempt(claim.attempt);
     }
 
     return attempts;
+  }
+
+  /**
+   * Inline path: claim and run one specific operation in this process's
+   * single slot, through the same claim/fence rules as the periodic worker.
+   * Never waits for the slot; a busy slot or an operation claimed elsewhere
+   * is reported, not queued.
+   */
+  async runOperation(operationId: string, correlationId: string | null): Promise<RunOperationResult> {
+    if (this.stopping || this.lifecycle.isShuttingDown || this.slotTaken) {
+      return { kind: "busy" };
+    }
+
+    this.slotTaken = true;
+
+    try {
+      const claim = await this.repository.claimOperation(operationId, this.config.leaseOwner);
+
+      if (claim.kind === "NONE_AVAILABLE") {
+        return { kind: "not_claimed" };
+      }
+
+      return { kind: "ran", outcome: await this.runAttempt(claim.attempt, correlationId) };
+    } finally {
+      this.slotTaken = false;
+    }
   }
 
   /** No new claims; abort the in-flight attempt (its lease expires, it is never marked succeeded). */
@@ -218,7 +253,7 @@ export class IssuanceWorker {
     this.current?.abort();
   }
 
-  private async runAttempt(attempt: ClaimedAttempt): Promise<void> {
+  private async runAttempt(attempt: ClaimedAttempt, correlationId: string | null): Promise<AttemptOutcome> {
     this.logger.info(
       {
         event: attempt.reclaimed ? "issuance.reclaimed" : "issuance.claimed",
@@ -239,10 +274,18 @@ export class IssuanceWorker {
         lease.abort();
       }
 
-      outcome = await this.attemptOutcome(attempt, lease.signal);
+      outcome = await this.attemptOutcome(attempt, lease.signal, correlationId);
     } finally {
       await lease.stop();
       this.current = null;
+    }
+
+    if (outcome.kind === "succeeded") {
+      this.logger.info(
+        { event: "issuance.succeeded", operationId: attempt.operationId, quoteId: attempt.quoteId, generation: attempt.generation, attempt: attempt.attemptCount },
+        "Quote issued"
+      );
+      return outcome;
     }
 
     if (outcome.kind === "abandoned" || lease.state === "lost" || this.stopping) {
@@ -250,12 +293,17 @@ export class IssuanceWorker {
       // the next holder (or the deadline sweep) takes over. A lease that only
       // stopped renewing at the deadline is still ours: the failure below
       // records the terminal state at once.
-      return;
+      return outcome.kind === "abandoned" ? outcome : { kind: "abandoned" };
     }
 
-    const result = await this.repository.failAttempt(attempt, outcome.errorCode);
+    const result = await this.repository.failAttempt(attempt, { errorCode: outcome.errorCode, retryable: outcome.retryable, reason: outcome.reason });
 
-    if (result.kind === "RESCHEDULED") {
+    if (result.kind === "FAILED_NON_RETRYABLE") {
+      this.logger.error(
+        { event: "issuance.failed_non_retryable", operationId: attempt.operationId, generation: attempt.generation, errorCode: outcome.errorCode, reason: outcome.reason },
+        "Issuance operation failed (non-retryable); operator action required"
+      );
+    } else if (result.kind === "RESCHEDULED") {
       this.logger.warn(
         {
           event: "issuance.attempt_failed",
@@ -263,6 +311,7 @@ export class IssuanceWorker {
           generation: attempt.generation,
           attempt: result.attemptCount,
           errorCode: outcome.errorCode,
+          reason: outcome.reason,
           nextAttemptAt: result.nextAttemptAt.toISOString()
         },
         "Issuance attempt failed; rescheduled"
@@ -275,10 +324,12 @@ export class IssuanceWorker {
     } else if (result.kind === "STALE_FENCE") {
       this.logger.warn({ event: "issuance.lease_lost", operationId: attempt.operationId, generation: attempt.generation, reason: "stale_fence" }, "Issuance lease lost");
     }
+
+    return outcome;
   }
 
   /** Integrity check, then the body. Never throws: every failure becomes a typed attempt failure. */
-  private async attemptOutcome(attempt: ClaimedAttempt, signal: AbortSignal): Promise<AttemptOutcome> {
+  private async attemptOutcome(attempt: ClaimedAttempt, signal: AbortSignal, correlationId: string | null): Promise<AttemptOutcome> {
     let snapshot: IssuedSnapshot;
 
     try {
@@ -289,17 +340,16 @@ export class IssuanceWorker {
           { event: "issuance.snapshot_integrity_failed", operationId: attempt.operationId, quoteId: attempt.quoteId },
           "Issued snapshot does not match its accepted hash; not rendering"
         );
-        return { kind: "failed", errorCode: "document_generation_failed" };
+        return { kind: "failed", ...classifyAttemptError(error) };
       }
 
-      return { kind: "failed", errorCode: "dependency_unavailable" };
+      return { kind: "failed", errorCode: "dependency_unavailable", retryable: true, reason: "snapshot_load_failed" };
     }
 
     try {
-      return await this.body({ attempt, snapshot, signal });
+      return await this.body({ attempt, snapshot, signal, correlationId });
     } catch (error) {
-      const code = error instanceof IssuanceAttemptError && ISSUANCE_ATTEMPT_ERROR_CODES.includes(error.code) ? error.code : "document_generation_failed";
-      return { kind: "failed", errorCode: code };
+      return { kind: "failed", ...classifyAttemptError(error) };
     }
   }
 }

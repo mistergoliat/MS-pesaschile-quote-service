@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApplication } from "../../src/app";
 import { DependencyMonitor } from "../../src/application/health/dependency-monitor";
 import { probeFailed } from "../../src/application/health/dependency-state";
-import type { ClaimedAttempt, OperationFence } from "../../src/application/quote-v2/issuance-operation";
+import type { AttemptFailure, ClaimedAttempt, IssuanceAttemptErrorCode, OperationFence } from "../../src/application/quote-v2/issuance-operation";
 import { IssuanceWorker, type AttemptBody } from "../../src/application/quote-v2/issuance-worker";
 import { issuedSnapshotHash, SnapshotIntegrityError } from "../../src/application/quote-v2/issued-snapshot";
 import { issuanceSettings } from "../../src/infrastructure/config/env";
@@ -68,7 +68,8 @@ async function start(options: { pollIntervalMs?: number } = {}) {
       QUOTE_ISSUANCE_POLL_INTERVAL_MS: String(options.pollIntervalMs ?? 500)
     }
   });
-  const context = buildApplication(env);
+  // B1 drives the operation core directly; the application's own issuance execution stays off here.
+  const context = buildApplication(env, { disableIssuanceExecution: true });
   cleanups.push(async () => {
     await context.shutdown("test-cleanup");
   });
@@ -226,6 +227,9 @@ async function sweepToFailed(harness: Harness, operationId: string): Promise<voi
   const failed = await harness.repository.failDeadlineExceeded(10);
   expect(failed.map((failure) => failure.operationId)).toContain(operationId);
 }
+
+/** A retryable attempt failure (amendment A5); non-retryable failures are covered in issuance-commit tests. */
+const retryable = (errorCode: IssuanceAttemptErrorCode): AttemptFailure => ({ errorCode, retryable: true, reason: errorCode });
 
 const fenceOf = (attempt: ClaimedAttempt): OperationFence => ({
   operationId: attempt.operationId,
@@ -403,7 +407,7 @@ describe("fencing and lease renewal", () => {
 
       // M/N: the zombie generation can neither renew nor fail.
       expect(await harness.repository.renewLease(fenceOf(a))).toEqual({ kind: "STALE_FENCE" });
-      expect(await harness.repository.failAttempt(fenceOf(a), "document_storage_failed")).toEqual({ kind: "STALE_FENCE" });
+      expect(await harness.repository.failAttempt(fenceOf(a), retryable("document_storage_failed"))).toEqual({ kind: "STALE_FENCE" });
       expect(await harness.op(operationId)).toEqual(reclaimedRow);
       expect(await harness.events(quoteId)).toEqual(audit);
 
@@ -440,7 +444,7 @@ describe("attempt failure and backoff", () => {
       for (const [index, delay] of expected.entries()) {
         const attempt = await harness.claim("worker-a");
         expect(attempt.attemptCount).toBe(index + 1);
-        const result = await harness.repository.failAttempt(fenceOf(attempt), "document_storage_failed");
+        const result = await harness.repository.failAttempt(fenceOf(attempt), retryable("document_storage_failed"));
 
         expect(result).toMatchObject({ kind: "RESCHEDULED", attemptCount: index + 1 });
         expect(await harness.op(operationId)).toMatchObject({
@@ -477,7 +481,7 @@ describe("attempt failure and backoff", () => {
       const { operationId } = await harness.createAndIssue();
       const attempt = await harness.claim("worker-a");
       await harness.setDeadline(operationId, 2_000);
-      const result = await harness.repository.failAttempt(fenceOf(attempt), "dependency_unavailable");
+      const result = await harness.repository.failAttempt(fenceOf(attempt), retryable("dependency_unavailable"));
       const row = await harness.op(operationId);
 
       expect(result.kind).toBe("RESCHEDULED");
@@ -495,7 +499,7 @@ describe("attempt failure and backoff", () => {
       const attempt = await harness.claim("worker-a");
       await harness.setDeadline(operationId, -1);
 
-      expect(await harness.repository.failAttempt(fenceOf(attempt), "document_generation_failed")).toEqual({ kind: "DEADLINE_REACHED" });
+      expect(await harness.repository.failAttempt(fenceOf(attempt), retryable("document_generation_failed"))).toEqual({ kind: "DEADLINE_REACHED" });
       const row = await harness.op(operationId);
       expect(row).toMatchObject({
         status: "failed",
@@ -508,7 +512,7 @@ describe("attempt failure and backoff", () => {
       expect(row.completed_at).not.toBeNull();
 
       // Terminal and fenced: nothing repeats it.
-      expect(await harness.repository.failAttempt(fenceOf(attempt), "document_generation_failed")).toEqual({ kind: "STALE_FENCE" });
+      expect(await harness.repository.failAttempt(fenceOf(attempt), retryable("document_generation_failed"))).toEqual({ kind: "STALE_FENCE" });
       expect(await harness.repository.failDeadlineExceeded(10)).toEqual([]);
       expect(await harness.repository.claimNext("worker-b")).toEqual({ kind: "NONE_AVAILABLE" });
 
@@ -595,7 +599,7 @@ describe("deadline sweep (T6)", () => {
       expect((await harness.op(expiredRunning.operationId)).generation).toBe("2");
       expect((await harness.op(duePending.operationId)).generation).toBe("1");
       expect(await harness.repository.renewLease(fenceOf(zombie))).toEqual({ kind: "STALE_FENCE" });
-      expect(await harness.repository.failAttempt(fenceOf(zombie), "document_storage_failed")).toEqual({ kind: "STALE_FENCE" });
+      expect(await harness.repository.failAttempt(fenceOf(zombie), retryable("document_storage_failed"))).toEqual({ kind: "STALE_FENCE" });
 
       // AE/AG: untouched.
       expect(await harness.op(futurePending.operationId)).toMatchObject({ status: "pending", generation: "0" });
@@ -727,7 +731,8 @@ describe("issued snapshot loading and integrity", () => {
       }
 
       expect(body).not.toHaveBeenCalled();
-      expect(await harness.op(operationId)).toMatchObject({ status: "pending", last_error_code: "document_generation_failed" });
+      // Amendment A5 (R1.5B3): a snapshot integrity mismatch is non-retryable: the operation fails at once (T12).
+      expect(await harness.op(operationId)).toMatchObject({ status: "failed", last_error_code: "document_generation_failed", next_attempt_at: null });
       expect(await harness.sql(`select item_description from quote_service.quote_lines where quote_id = $1 and position = 1`, [quoteId])).toEqual([
         { item_description: "Tampered description" }
       ]);
@@ -968,7 +973,7 @@ describe("shutdown and activation safety", () => {
   );
 
   it(
-    "B1 is not composed into the application: accepted operations are never claimed or failed by the running service",
+    "with issuance execution disabled (test seam) the service never claims or fails accepted operations",
     async () => {
       const harness = await start({ pollIntervalMs: 500 });
       const { operationId } = await harness.createAndIssue();
@@ -1033,9 +1038,9 @@ describe("commit outcome unknown (§19)", () => {
       expect((await committed.renewLease(fenceOf(attempt))).kind).toBe("RENEWED");
 
       // Fail attempt.
-      expect(await rolledBack.failAttempt(fenceOf(attempt), "document_storage_failed")).toEqual({ kind: "NOT_APPLIED" });
+      expect(await rolledBack.failAttempt(fenceOf(attempt), retryable("document_storage_failed"))).toEqual({ kind: "NOT_APPLIED" });
       expect(await harness.op(operationId)).toMatchObject({ status: "running", generation: "1" });
-      expect(await committed.failAttempt(fenceOf(attempt), "document_storage_failed")).toMatchObject({ kind: "RESCHEDULED", attemptCount: 1 });
+      expect(await committed.failAttempt(fenceOf(attempt), retryable("document_storage_failed"))).toMatchObject({ kind: "RESCHEDULED", attemptCount: 1 });
       expect(await harness.op(operationId)).toMatchObject({ status: "pending", last_error_code: "document_storage_failed" });
       expect(await harness.events(quoteId, "quote.issue.attempt_failed")).toHaveLength(1);
 

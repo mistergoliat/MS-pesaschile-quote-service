@@ -1,6 +1,8 @@
 # Quote Service — Issuance Operation Core (R1.5B1)
 
-Status: **implemented, NOT deployable on its own.** This slice adds the
+Status: **implemented; composed and activated by R1.5B3**
+([issuance-execution.md](issuance-execution.md)). Originally (B1) this was
+NOT deployable on its own. This slice adds the
 database-only durable execution core of V2 issuance. It has no render, no
 artifact write and no manifest commit, so there is no success path. The worker
 is deliberately **not composed into the running application** (§9). Normative
@@ -144,7 +146,7 @@ there is no render and no repair: the attempt fails with
 `issuance.snapshot_integrity_failed` is logged. The PDF byte hash
 (`pdfSha256`) is a separate concept owned by B3.
 
-## 9. Activation status and shutdown
+## 9. Activation status and shutdown (as of B1; superseded by B3 §6)
 
 `buildApplication` does **not** call `createIssuanceJobs`, so a B1 build never
 claims, fails or sweeps real operations. `/health/dependencies` reports
@@ -184,6 +186,6 @@ success or failure. The repository re-reads durable state instead:
 | Item | Slice |
 |---|---|
 | ~~V2 document model, renderer/template v4, Unicode font (U-A/U-B)~~ ([formal-document-v2.md](formal-document-v2.md)) | B2: done |
-| Content-addressed publish, real attempt body, fenced manifest commit (T5), inline `syncIssueBudgetMs` path, composition into `buildApplication` | B3 |
+| ~~Content-addressed publish, real attempt body, fenced manifest commit (T5), inline `syncIssueBudgetMs` path, composition into `buildApplication`~~ ([issuance-execution.md](issuance-execution.md)); `failAttempt` now takes the A5 classification (non-retryable → T12) | B3: done |
 | `GET …/document`, integrity job, crash-window failure injection | B4 |
 | Operator tooling for T10 | R1.6 |

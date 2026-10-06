@@ -7,6 +7,7 @@ import {
   type IdempotentOperation
 } from "../../application/idempotency/idempotency-scope";
 import { toFieldErrors } from "../../application/quote-v2/create-quote-request";
+import type { InlineIssuance } from "../../application/quote-v2/inline-issuance";
 import { databaseClock, type QuoteClock } from "../../infrastructure/persistence/postgres/quote-clock";
 import {
   acceptCreateAndIssue,
@@ -20,7 +21,8 @@ import {
   getVisibleQuote,
   listVisibleAudit,
   listVisibleQuotes,
-  lookupIdempotencyBinding
+  lookupIdempotencyBinding,
+  readIssuanceResult
 } from "../../infrastructure/persistence/postgres/quote-v2-reads";
 import type { PostgresDatabase } from "../../infrastructure/persistence/postgres/postgres";
 import { authorize } from "../authentication";
@@ -187,12 +189,34 @@ function sendIssuance(reply: FastifyReply, result: QuoteOperationResult, doneSta
  * (missing or not visible). Readiness (503) is enforced earlier by the
  * business context gate. `clock` is the single expiry-projection time source;
  * `issuanceDeadlineMs` is copied onto every operation accepted here.
+ *
+ * Issuance (create-and-issue, issue): after the acceptance commit a newly
+ * accepted quote gets the bounded inline attempt (`inlineIssuance`, sync
+ * budget), then the answer is rebuilt from durable state: 201/200 only once
+ * the manifest committed (quote `issued`), else 202 while the operation
+ * continues. Replays answer the current state without driving issuance.
  */
 export function v2QuoteRoutes(
   database: PostgresDatabase,
-  options: { readonly issuanceDeadlineMs: number; readonly clock?: QuoteClock | undefined }
+  options: {
+    readonly issuanceDeadlineMs: number;
+    readonly clock?: QuoteClock | undefined;
+    readonly inlineIssuance?: InlineIssuance | undefined;
+  }
 ): BusinessRouteRegistrar {
   const clock = options.clock ?? databaseClock;
+  const issueInline = async (
+    outcome: CommandOutcome<QuoteOperationResult>,
+    request: FastifyRequest
+  ): Promise<CommandOutcome<QuoteOperationResult>> => {
+    if (outcome.kind !== "accepted" || !options.inlineIssuance || outcome.result.quote.status !== "issuing") {
+      return outcome;
+    }
+
+    const { quoteId, operationId } = { quoteId: outcome.result.quote.quoteId, operationId: outcome.result.operation.operationId };
+    await options.inlineIssuance.drive(operationId, (request.headers["x-correlation-id"] as string | undefined) ?? null);
+    return { kind: "accepted", result: await readIssuanceResult(database, quoteId, operationId, clock) };
+  };
   const commandInput = (request: FastifyRequest) => ({
     principal: request.principal!,
     body: request.body,
@@ -205,7 +229,7 @@ export function v2QuoteRoutes(
   return (app) => {
     app.post("/v2/quotes", { config: { requiredScope: "quotes:create" }, preValidation: validateHeaders }, async (request, reply) => {
       authorizeOverride(request);
-      const outcome = await acceptCreateAndIssue(database, commandInput(request));
+      const outcome = await issueInline(await acceptCreateAndIssue(database, commandInput(request)), request);
       return sendIssuance(reply, resultOf(outcome, "quote.create_and_issue", reply), 201);
     });
 
@@ -232,7 +256,7 @@ export function v2QuoteRoutes(
       { config: { requiredScope: "quotes:issue" }, preValidation: validateHeaders },
       async (request, reply) => {
         authorizeOverride(request);
-        const outcome = await issueDraft(database, quoteIdOf(request), commandInput(request));
+        const outcome = await issueInline(await issueDraft(database, quoteIdOf(request), commandInput(request)), request);
         return sendIssuance(reply, resultOf(outcome, "quote.issue", reply), 200);
       }
     );

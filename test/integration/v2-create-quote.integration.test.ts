@@ -64,7 +64,11 @@ async function start(
       storageRoot,
       overrides: { LOG_LEVEL: options.logs ? "trace" : "silent" }
     }),
-    options.logs ? { logStream: { write: (line: string) => void options.logs!.push(line) } } : {}
+    {
+      // Acceptance-only suite: quotes must stay `issuing` (issuance execution is covered in issuance-commit tests).
+      disableIssuanceExecution: true,
+      ...(options.logs ? { logStream: { write: (line: string) => void options.logs!.push(line) } } : {})
+    }
   );
   cleanups.push(async () => {
     await context.shutdown("test-cleanup");

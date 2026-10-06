@@ -12,7 +12,10 @@ const BUILD_TIMEOUT_MS = Number.isFinite(configuredBuildTimeoutMs) ? configuredB
 // explicit migration to the V2 head, schema check, liveness/readiness/
 // dependency health, V2 create/draft/issue, V2 reads, reconciliation and
 // cancel (R1.5A.4), V1 routes gone, restart with persisted state, graceful
-// shutdown.
+// shutdown. R1.5B3: formal issuance end to end in the Linux image: inline
+// 201/200 with a large sync budget, the content-addressed PDF verified inside
+// the container against its manifest, then a restart with budget 0 where the
+// background worker issues a 202 quote, with no duplicate manifest.
 const PHASE_TIMEOUT_MS = {
   build: BUILD_TIMEOUT_MS,
   cleanup: 180_000,
@@ -30,6 +33,7 @@ const PHASE_TIMEOUT_MS = {
   v2ReadCancel: 30_000,
   v1Retired: 15_000,
   restart: 90_000,
+  asyncIssuance: 60_000,
   gracefulShutdown: 30_000
 };
 
@@ -49,7 +53,8 @@ const phaseDefinitions = [
   { key: "v2ReadCancel", label: "PHASE 13 v2 read, reconcile and cancel" },
   { key: "v1Retired", label: "PHASE 14 v1 retired" },
   { key: "restart", label: "PHASE 15 restart" },
-  { key: "gracefulShutdown", label: "PHASE 16 graceful shutdown" }
+  { key: "asyncIssuance", label: "PHASE 16 async issuance after restart" },
+  { key: "gracefulShutdown", label: "PHASE 17 graceful shutdown" }
 ];
 
 const imageTag = process.env.SMOKE_IMAGE_TAG ?? "pesaschile-quote-service:t06-smoke";
@@ -82,7 +87,9 @@ const state = {
   app: {
     hostPort: null,
     baseUrl: null,
-    activeContainer: null
+    activeContainer: null,
+    // Large inline budget for the primary app; the restarted app uses 0 (async only).
+    syncBudgetMs: "10000"
   },
   containersStarted: new Set(),
   logs: {
@@ -162,8 +169,35 @@ function buildAppEnv() {
         }
       ]
     }),
-    QUOTE_DOCUMENT_STORAGE_ROOT: state.paths.storageRoot
+    QUOTE_DOCUMENT_STORAGE_ROOT: state.paths.storageRoot,
+    QUOTE_ISSUANCE_SYNC_BUDGET_MS: state.app.syncBudgetMs,
+    QUOTE_ISSUANCE_POLL_INTERVAL_MS: "500"
   };
+}
+
+/** The quote's manifest, and the SHA-256/length of the bytes at its storage key, read inside the app container. */
+async function verifyArtifact(quoteId) {
+  const row = await queryDatabase(
+    `select storage_key || ' ' || pdf_sha256 || ' ' || byte_length || ' ' || (select count(*) from quote_service.quote_documents where quote_id = '${quoteId}') from quote_service.quote_documents where quote_id = '${quoteId}';`
+  );
+  const [storageKey, pdfSha256, byteLength, manifests] = row.split(" ");
+  assert(manifests === "1", `Expected exactly one manifest for ${quoteId}, found ${manifests}`);
+  assert(storageKey === `artifacts/sha256/${pdfSha256.slice(0, 2)}/${pdfSha256.slice(2, 4)}/${pdfSha256}.pdf`, `Storage key is not content addressed: ${storageKey}`);
+  const hashed = (
+    await docker(
+      [
+        "exec",
+        state.app.activeContainer,
+        "node",
+        "-e",
+        "const b=require('fs').readFileSync(process.argv[1]);process.stdout.write(require('crypto').createHash('sha256').update(b).digest('hex')+' '+b.length)",
+        `${state.paths.storageRoot}/${storageKey}`
+      ],
+      { timeoutMs: 20_000 }
+    )
+  ).stdout.trim();
+  assert(hashed === `${pdfSha256} ${byteLength}`, `Stored PDF does not match its manifest: ${hashed} vs ${pdfSha256} ${byteLength}`);
+  return { storageKey, pdfSha256, byteLength: Number(byteLength) };
 }
 
 function formatDuration(ms) {
@@ -831,13 +865,18 @@ async function runSmoke() {
     const body = JSON.parse(readFileSync("docs/v2/examples/create-and-issue.request.json", "utf8"));
     const headers = { Authorization: `Bearer ${state.credentials.salesToken}`, "Idempotency-Key": `smoke-${suffix}` };
     const created = await fetchJson("/v2/quotes", { method: "POST", headers: { ...headers, "X-Correlation-Id": "smoke-1" }, body, timeoutMs: 10_000 });
-    assert(created.status === 202, `Expected 202, got ${created.status}: ${created.text}`);
-    assert(created.body.quote.status === "issuing" && created.body.operation.status === "pending", "Accepted quote is not issuing/pending");
+    // R1.5B3: healthy dependencies and a 10 s inline budget → formally issued before the response.
+    assert(created.status === 201, `Expected 201, got ${created.status}: ${created.text}`);
+    assert(created.body.quote.status === "issued" && created.body.operation.status === "succeeded", "Created quote is not issued/succeeded");
+    assert(created.body.quote.document.available === true && /^[0-9a-f]{64}$/.test(created.body.quote.document.pdfSha256), "Issued quote has no document");
     assert(/^PC-[0-9]{6,}$/.test(created.body.quote.quoteNumber), "Quote number missing");
     state.summary.v2Quote = { quoteId: created.body.quote.quoteId, quoteNumber: created.body.quote.quoteNumber, operationId: created.body.operation.operationId };
+    const artifact = await verifyArtifact(created.body.quote.quoteId);
+    assert(artifact.pdfSha256 === created.body.quote.document.pdfSha256 && artifact.byteLength === created.body.quote.document.byteLength, "Response document disagrees with the manifest");
+    state.summary.v2Quote.pdfSha256 = artifact.pdfSha256;
 
     const replay = await fetchJson("/v2/quotes", { method: "POST", headers: { ...headers, "X-Correlation-Id": "smoke-2" }, body, timeoutMs: 10_000 });
-    assert(replay.status === 202 && replay.headers.get("idempotent-replay") === "true", `Replay failed: ${replay.status}`);
+    assert(replay.status === 201 && replay.headers.get("idempotent-replay") === "true", `Replay failed: ${replay.status}`);
     assert(
       replay.body.quote.quoteId === created.body.quote.quoteId &&
         replay.body.quote.quoteNumber === created.body.quote.quoteNumber &&
@@ -876,14 +915,15 @@ async function runSmoke() {
 
     const issueHeaders = { ...auth, "Idempotency-Key": `smoke-issue-${suffix}` };
     const issued = await fetchJson(`/v2/quotes/${quoteId}/issue`, { method: "POST", headers: issueHeaders, body: example("issue.request.json"), timeoutMs: 10_000 });
-    assert(issued.status === 202, `Expected 202, got ${issued.status}: ${issued.text}`);
+    assert(issued.status === 200, `Expected 200, got ${issued.status}: ${issued.text}`);
     assert(issued.body.quote.quoteId === quoteId, "Issue changed the quoteId");
     assert(/^PC-[0-9]{6,}$/.test(issued.body.quote.quoteNumber), "Quote number missing after issue");
-    assert(issued.body.quote.status === "issuing" && issued.body.operation.status === "pending", "Issued draft is not issuing/pending");
+    assert(issued.body.quote.status === "issued" && issued.body.operation.status === "succeeded", "Issued draft is not issued/succeeded");
     state.summary.v2Draft = { quoteId, quoteNumber: issued.body.quote.quoteNumber, operationId: issued.body.operation.operationId };
+    await verifyArtifact(quoteId);
 
     const replay = await fetchJson(`/v2/quotes/${quoteId}/issue`, { method: "POST", headers: issueHeaders, body: example("issue.request.json"), timeoutMs: 10_000 });
-    assert(replay.status === 202 && replay.headers.get("idempotent-replay") === "true", `Issue replay failed: ${replay.status}`);
+    assert(replay.status === 200 && replay.headers.get("idempotent-replay") === "true", `Issue replay failed: ${replay.status}`);
     assert(
       replay.body.quote.quoteNumber === issued.body.quote.quoteNumber && replay.body.operation.operationId === issued.body.operation.operationId,
       "Issue replay returned different ids"
@@ -900,16 +940,16 @@ async function runSmoke() {
     const supervisor = as(state.credentials.supervisorToken);
     const { quoteId, quoteNumber, operationId } = state.summary.v2Quote;
 
-    // GET quote / operation: honest issuing state, same identifiers as create-and-issue.
+    // GET quote / operation: issued with its document, same identifiers as create-and-issue.
     const quote = await fetchJson(`/v2/quotes/${quoteId}`, { headers: sales });
     assert(quote.status === 200, `GET quote: ${quote.status} ${quote.text}`);
     assert(
-      quote.body.status === "issuing" && quote.body.quoteNumber === quoteNumber && quote.body.issuance.operationId === operationId,
+      quote.body.status === "issued" && quote.body.quoteNumber === quoteNumber && quote.body.issuance.operationId === operationId,
       "GET quote disagrees with create-and-issue"
     );
-    assert(quote.body.document.available === false && quote.body.document.pdfSha256 === null, "Issuing quote claims a document");
+    assert(quote.body.document.available === true && quote.body.document.pdfSha256 === state.summary.v2Quote.pdfSha256, "Issued quote document disagrees");
     const operation = await fetchJson(`/v2/operations/${operationId}`, { headers: sales });
-    assert(operation.status === 200 && operation.body.status === "pending" && operation.body.quoteId === quoteId, `GET operation: ${operation.text}`);
+    assert(operation.status === 200 && operation.body.status === "succeeded" && operation.body.quoteId === quoteId, `GET operation: ${operation.text}`);
 
     // Visibility: without read:any a foreign quote is a 404 like a missing one; read:any sees it.
     const hidden = await fetchJson(`/v2/quotes/${quoteId}`, { headers: backoffice });
@@ -936,7 +976,7 @@ async function runSmoke() {
         lookup.body.state === "bound" &&
         lookup.body.binding.quoteId === quoteId &&
         lookup.body.binding.operationId === operationId &&
-        lookup.body.binding.quoteStatus === "issuing",
+        lookup.body.binding.quoteStatus === "issued",
       `Lookup failed: ${lookup.text}`
     );
     assert(!lookup.text.includes(`smoke-${suffix}`), "Lookup echoed the raw key");
@@ -989,8 +1029,39 @@ async function runSmoke() {
   await runPhase("restart", PHASE_TIMEOUT_MS.restart, async () => {
     await stopActiveApp();
     state.logs.primaryApp = await readLogs(state.names.appPrimary);
+    state.app.syncBudgetMs = "0";
     await startApp(state.names.appRestarted, PHASE_TIMEOUT_MS.restart);
     await waitForReadiness(60_000);
+    // Issued quotes are stable across the restart: same manifest, same verified bytes.
+    const artifact = await verifyArtifact(state.summary.v2Quote.quoteId);
+    assert(artifact.pdfSha256 === state.summary.v2Quote.pdfSha256, "Issued document changed across restart");
+    await verifyArtifact(state.summary.v2Draft.quoteId);
+  });
+
+  await runPhase("asyncIssuance", PHASE_TIMEOUT_MS.asyncIssuance, async () => {
+    const body = JSON.parse(readFileSync("docs/v2/examples/create-and-issue.request.json", "utf8"));
+    const headers = { Authorization: `Bearer ${state.credentials.salesToken}`, "Idempotency-Key": `smoke-async-${suffix}` };
+    const created = await fetchJson("/v2/quotes", { method: "POST", headers, body, timeoutMs: 10_000 });
+    assert(created.status === 202, `Expected 202 with budget 0, got ${created.status}: ${created.text}`);
+    assert(created.body.quote.status === "issuing", "Budget-0 quote is not issuing");
+    const quoteId = created.body.quote.quoteId;
+    const deadline = Date.now() + 45_000;
+    let status = "issuing";
+
+    while (Date.now() < deadline && status !== "issued") {
+      await sleep(500);
+      status = (await fetchJson(`/v2/quotes/${quoteId}`, { headers: { Authorization: headers.Authorization } })).body.status;
+    }
+
+    assert(status === "issued", `Background worker did not issue the quote (status ${status})`);
+    await verifyArtifact(quoteId);
+    const counts = (
+      await queryDatabase(
+        "select count(*) || ':' || (select count(*) from quote_service.issuance_operations where status = 'succeeded') || ':' || (select count(*) from quote_service.quote_documents) from quote_service.quotes;"
+      )
+    ).trim();
+    assert(counts === "4:3:3", `Expected 4 quotes, 3 succeeded operations and 3 manifests, found ${counts}`);
+    state.summary.v2Async = { quoteId, quoteNumber: created.body.quote.quoteNumber };
   });
 
   await runPhase("gracefulShutdown", PHASE_TIMEOUT_MS.gracefulShutdown, async () => {

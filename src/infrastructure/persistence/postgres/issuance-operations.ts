@@ -5,11 +5,13 @@ import type { PoolClient } from "pg";
 import {
   ISSUANCE_DEADLINE_EXCEEDED,
   issuanceBackoffMs,
+  type AttemptFailure,
   type ClaimResult,
+  type CommitIssuedResult,
   type DeadlineFailure,
   type FailAttemptResult,
-  type IssuanceAttemptErrorCode,
   type IssuanceOperationRepository,
+  type IssuedDocumentInput,
   type OperationFence,
   type OperatorRetryInput,
   type OperatorRetryResult,
@@ -40,6 +42,9 @@ import { appendAudit } from "./quote-v2-acceptance";
  * Time: every decision uses the database clock read after the locks are
  * held, at millisecond precision like every instant the service persists.
  */
+
+const isUniqueViolation = (error: unknown): boolean =>
+  typeof error === "object" && error !== null && "code" in error && (error).code === "23505";
 
 /** Database clock at the instant a statement runs (not the transaction start). */
 const DB_NOW = `date_trunc('milliseconds', clock_timestamp())`;
@@ -94,7 +99,16 @@ export class PostgresIssuanceOperationRepository implements IssuanceOperationRep
    * concurrent claimer after our snapshot is re-checked against the predicate
    * once locked, so two claimers can never both transition it.
    */
-  async claimNext(leaseOwner: string): Promise<ClaimResult> {
+  claimNext(leaseOwner: string): Promise<ClaimResult> {
+    return this.claim(leaseOwner, null);
+  }
+
+  /** Inline path: the same eligibility and transition, for one operation only. */
+  claimOperation(operationId: string, leaseOwner: string): Promise<ClaimResult> {
+    return this.claim(leaseOwner, operationId);
+  }
+
+  private async claim(leaseOwner: string, operationId: string | null): Promise<ClaimResult> {
     let claimed: ClaimRow | undefined;
 
     try {
@@ -106,6 +120,7 @@ export class PostgresIssuanceOperationRepository implements IssuanceOperationRep
              from quote_service.issuance_operations o
              join quote_service.quotes q on q.quote_id = o.quote_id and q.current_operation_id = o.operation_id
              where q.status = 'issuing'
+               and ($3::uuid is null or o.operation_id = $3::uuid)
                and (select now from clock) < o.deadline_at
                and ((o.status = 'pending' and o.next_attempt_at <= (select now from clock))
                  or (o.status = 'running' and o.lease_expires_at < (select now from clock)))
@@ -121,7 +136,7 @@ export class PostgresIssuanceOperationRepository implements IssuanceOperationRep
            where o.operation_id = c.operation_id
            returning o.operation_id, o.quote_id, o.generation::text as generation, o.attempt_count, o.lease_owner,
                      o.lease_expires_at, o.deadline_at, o.snapshot_hash, c.previous_status`,
-          [leaseOwner, this.config.leaseMs]
+          [leaseOwner, this.config.leaseMs, operationId]
         );
         return rows[0];
       });
@@ -137,9 +152,10 @@ export class PostgresIssuanceOperationRepository implements IssuanceOperationRep
       const { rows } = await this.database.query<ClaimRow>(
         `select operation_id, quote_id, generation::text as generation, attempt_count, lease_owner, lease_expires_at,
                 deadline_at, snapshot_hash, 'pending' as previous_status
-         from quote_service.issuance_operations where status = 'running' and lease_owner = $1
+         from quote_service.issuance_operations
+         where status = 'running' and lease_owner = $1 and ($2::uuid is null or operation_id = $2::uuid)
          order by last_attempt_at desc limit 1`,
-        [leaseOwner]
+        [leaseOwner, operationId]
       );
       claimed = rows[0];
     }
@@ -201,14 +217,20 @@ export class PostgresIssuanceOperationRepository implements IssuanceOperationRep
   }
 
   /**
-   * Fenced end of a failed attempt. Before the deadline: `running → pending`,
-   * lease cleared, `next_attempt_at = min(now + backoff(attempt_count),
-   * deadline_at)`, audit `quote.issue.attempt_failed`. At or after it: the
-   * operation becomes terminally `failed` (`issuance_deadline_exceeded`),
-   * audit `quote.issue.failed`. The quote is never touched: it stays
-   * `issuing` (amendment A1), keeps its number and gets no new operation.
+   * Fenced end of a failed attempt (Idempotency §4.3, amendment A5):
+   * - non-retryable (T12): terminally `failed` with the attempt's code and
+   *   `completed_at`, audit `quote.issue.failed`;
+   * - retryable, before the deadline: `running → pending`, lease cleared,
+   *   `next_attempt_at = min(now + backoff(attempt_count), deadline_at)`,
+   *   audit `quote.issue.attempt_failed`;
+   * - retryable, at or after the deadline: terminally `failed`
+   *   (`issuance_deadline_exceeded`), audit `quote.issue.failed`.
+   * The quote is never touched: it stays `issuing` (A1), keeps its number and
+   * gets no new operation.
    */
-  async failAttempt(fence: OperationFence, errorCode: IssuanceAttemptErrorCode): Promise<FailAttemptResult> {
+  async failAttempt(fence: OperationFence, failure: AttemptFailure): Promise<FailAttemptResult> {
+    const errorCode = failure.errorCode;
+
     try {
       return await this.database.withTransaction(async (client) => {
         const state = await this.lockOperation(client, fence.operationId);
@@ -218,6 +240,28 @@ export class PostgresIssuanceOperationRepository implements IssuanceOperationRep
         }
 
         const { quoteId, operation } = state;
+
+        if (!failure.retryable) {
+          await client.query(
+            `update quote_service.issuance_operations
+             set status = 'failed', last_error_code = $4, completed_at = $5, lease_owner = null, lease_expires_at = null,
+                 next_attempt_at = null, updated_at = $5
+             where operation_id = $1 and generation = $2 and status = 'running' and lease_owner = $3`,
+            [fence.operationId, fence.generation, fence.leaseOwner, errorCode, operation.now]
+          );
+          await appendAudit(client, {
+            quoteId,
+            type: "quote.issue.failed",
+            principalId: SYSTEM_PRINCIPAL,
+            operationId: fence.operationId,
+            correlationId: null,
+            keyHash: null,
+            fromStatus: "issuing",
+            toStatus: "issuing",
+            data: { errorCode, retryable: false, reason: failure.reason, attempts: operation.attempt_count, generation: fence.generation }
+          });
+          return { kind: "FAILED_NON_RETRYABLE" } as const;
+        }
 
         if (operation.now >= operation.deadline_at) {
           await this.markDeadlineFailed(client, fence.operationId, operation.now, false);
@@ -261,6 +305,7 @@ export class PostgresIssuanceOperationRepository implements IssuanceOperationRep
           toStatus: null,
           data: {
             errorCode,
+            reason: failure.reason,
             attempt: operation.attempt_count,
             generation: fence.generation,
             retryInMs: nextAttemptAt.getTime() - operation.now.getTime(),
@@ -287,10 +332,156 @@ export class PostgresIssuanceOperationRepository implements IssuanceOperationRep
         return { kind: "STALE_FENCE" };
       }
 
-      return state.status === "pending"
-        ? { kind: "RESCHEDULED", nextAttemptAt: state.next_attempt_at!, attemptCount: state.attempt_count }
-        : { kind: "DEADLINE_REACHED" };
+      if (state.status === "pending") {
+        return { kind: "RESCHEDULED", nextAttemptAt: state.next_attempt_at!, attemptCount: state.attempt_count };
+      }
+
+      return failure.retryable ? { kind: "DEADLINE_REACHED" } : { kind: "FAILED_NON_RETRYABLE" };
     }
+  }
+
+  /**
+   * T5 (Idempotency §4.3 commit): one transaction, after the PDF bytes are
+   * published and re-verified at their content address. Under the quote
+   * lock then the operation lock: the fence must still hold (running, same
+   * generation and holder), the operation must be the quote's current one and
+   * the quote `issuing`. Then: insert the manifest, operation `succeeded`
+   * (completed_at, lease cleared), quote `issued` (version + 1), audit
+   * `quote.issued`. `generated_at` = `committed_at` = `completed_at` = the
+   * database time of this commit (the document becomes formal here).
+   *
+   * Zero effect otherwise (STALE_FENCE). A COMMIT whose outcome is unknown is
+   * reconciled from durable state: committed (our operation succeeded with a
+   * manifest) → COMMITTED; still ours and untouched → the commit is retried
+   * once; anything else → STALE_FENCE / NOT_APPLIED, never a guess.
+   */
+  async commitIssued(fence: OperationFence, document: IssuedDocumentInput): Promise<CommitIssuedResult> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await this.database.withTransaction((client) => this.commitIssuedTx(client, fence, document));
+      } catch (error) {
+        const unknownOutcome = error instanceof CommitOutcomeUnknownError;
+
+        if (!unknownOutcome && !isUniqueViolation(error)) {
+          throw error;
+        }
+
+        const durable = await this.readCommitState(fence.operationId);
+
+        if (durable.status === "succeeded" && durable.manifestOperationId === fence.operationId && durable.generation === fence.generation) {
+          return { kind: "COMMITTED", generatedAt: durable.generatedAt! };
+        }
+
+        if (!(unknownOutcome && durable.status === "running" && durable.generation === fence.generation && durable.leaseOwner === fence.leaseOwner && !durable.manifestOperationId)) {
+          return unknownOutcome ? { kind: "NOT_APPLIED" } : { kind: "STALE_FENCE" };
+        }
+        // Provably not committed and still ours: retry the commit once.
+      }
+    }
+
+    return { kind: "NOT_APPLIED" };
+  }
+
+  private async commitIssuedTx(client: PoolClient, fence: OperationFence, document: IssuedDocumentInput): Promise<CommitIssuedResult> {
+    const state = await this.lockOperation(client, fence.operationId);
+
+    if (!state || !fenceHolds(state.operation, fence)) {
+      return { kind: "STALE_FENCE" };
+    }
+
+    const { rows: quotes } = await client.query<{ status: string; current_operation_id: string; version: number; quote_number: string; snapshot_hash: string }>(
+      `select q.status, q.current_operation_id, q.version, q.quote_number, o.snapshot_hash
+       from quote_service.quotes q join quote_service.issuance_operations o on o.operation_id = $2
+       where q.quote_id = $1`,
+      [state.quoteId, fence.operationId]
+    );
+    const quote = quotes[0]!;
+
+    if (quote.status !== "issuing" || quote.current_operation_id !== fence.operationId) {
+      return { kind: "STALE_FENCE" };
+    }
+
+    if (quote.snapshot_hash !== document.semanticSnapshotHash) {
+      throw new Error("rendered snapshot hash differs from the operation's accepted snapshot hash");
+    }
+
+    const now = state.operation.now;
+    await client.query(
+      `insert into quote_service.quote_documents (
+         document_id, quote_id, operation_id, origin, content_type, semantic_snapshot_hash, semantic_hash_algorithm,
+         pdf_sha256, byte_length, renderer_version, template_version, generated_at, storage_key, committed_at
+       ) values ($1, $2, $3, 'issuance', 'application/pdf', $4, $5, $6, $7, $8, $9, $10, $11, $10)`,
+      [
+        crypto.randomUUID(),
+        state.quoteId,
+        fence.operationId,
+        document.semanticSnapshotHash,
+        ISSUED_SNAPSHOT_HASH_ALGORITHM,
+        document.pdfSha256,
+        document.byteLength,
+        document.rendererVersion,
+        document.templateVersion,
+        now,
+        document.storageKey
+      ]
+    );
+    await client.query(
+      `update quote_service.issuance_operations
+       set status = 'succeeded', completed_at = $4, lease_owner = null, lease_expires_at = null, next_attempt_at = null, updated_at = $4
+       where operation_id = $1 and generation = $2 and status = 'running' and lease_owner = $3`,
+      [fence.operationId, fence.generation, fence.leaseOwner, now]
+    );
+    await client.query(
+      `update quote_service.quotes set status = 'issued', version = version + 1, updated_at = $2
+       where quote_id = $1 and status = 'issuing'`,
+      [state.quoteId, now]
+    );
+    await appendAudit(client, {
+      quoteId: state.quoteId,
+      type: "quote.issued",
+      principalId: SYSTEM_PRINCIPAL,
+      operationId: fence.operationId,
+      correlationId: document.correlationId ?? null,
+      keyHash: null,
+      fromStatus: "issuing",
+      toStatus: "issued",
+      data: {
+        quoteNumber: quote.quote_number,
+        version: quote.version + 1,
+        pdfSha256: document.pdfSha256,
+        byteLength: document.byteLength,
+        rendererVersion: document.rendererVersion,
+        templateVersion: document.templateVersion,
+        attempts: state.operation.attempt_count
+      }
+    });
+
+    return { kind: "COMMITTED", generatedAt: now };
+  }
+
+  private async readCommitState(operationId: string): Promise<{
+    status: string | null;
+    generation: number | null;
+    leaseOwner: string | null;
+    manifestOperationId: string | null;
+    generatedAt: Date | null;
+  }> {
+    const { rows } = await this.database.query<{ status: string; generation: string; lease_owner: string | null; document_operation_id: string | null; generated_at: Date | null }>(
+      `select o.status, o.generation::text as generation, o.lease_owner, d.operation_id as document_operation_id, d.generated_at
+       from quote_service.issuance_operations o
+       left join quote_service.quote_documents d on d.quote_id = o.quote_id
+       where o.operation_id = $1`,
+      [operationId]
+    );
+    const row = rows[0];
+
+    return {
+      status: row?.status ?? null,
+      generation: row ? Number(row.generation) : null,
+      leaseOwner: row?.lease_owner ?? null,
+      manifestOperationId: row?.document_operation_id ?? null,
+      generatedAt: row?.generated_at ?? null
+    };
   }
 
   /**

@@ -1,6 +1,7 @@
 # Quote Service — V2 Formal Document (R1.5B2)
 
-Status: **implemented; not yet used by issuance.** B2 is pure rendering. It
+Status: **implemented; drives formal issuance since R1.5B3**
+([issuance-execution.md](issuance-execution.md)). B2 is pure rendering. It
 publishes nothing, writes no manifest and claims no operation. B3 wires it
 into the attempt body. Normative semantics: [Domain §9](v2/QUOTE_V2_DOMAIN_CONTRACT.md#9-document).
 Decisions it rests on: [R1.5B0 audit](R1.5B0_ISSUANCE_PRIMITIVE_SALVAGE_AUDIT.md) §E–§G and §S.
@@ -184,7 +185,7 @@ untouched and unused by V2.
 
 | Item | Slice |
 |---|---|
-| Real attempt body (load → render → content-addressed publish → fenced manifest commit), mapping `DocumentRenderError` to `document_generation_failed`, inline budget, composing the issuance jobs | B3 |
+| ~~Real attempt body, `DocumentRenderError` mapping (A5: `unsupported_glyph` non-retryable), inline budget, job composition~~ | B3: done |
 | `GET …/document`, integrity job, crash-window tests | B4 |
 | U2 tax wording, U3 issuer RUT/address/contact (template/profile bump) | before production (R1.7) |
 | V2 email (drops the legacy V1 snapshot surface) | R1.6 |

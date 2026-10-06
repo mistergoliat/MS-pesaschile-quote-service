@@ -59,9 +59,24 @@ export type RenewResult =
   /** Still ours, but the absolute deadline is reached: the lease cannot be extended. */
   | { readonly kind: "DEADLINE_REACHED" };
 
+/**
+ * Amendment A5: every attempt failure is classified retryable (back to
+ * `pending` with backoff until the deadline) or non-retryable (deterministic
+ * for the snapshot and renderer/template version, or an integrity incident:
+ * the operation fails at once, T12). The contractual code is unchanged;
+ * `reason` is an internal, sanitized label for logs and audit data.
+ */
+export interface AttemptFailure {
+  readonly errorCode: IssuanceAttemptErrorCode;
+  readonly retryable: boolean;
+  readonly reason: string;
+}
+
 export type FailAttemptResult =
   /** `running → pending`; retried at `nextAttemptAt` (≤ deadline). */
   | { readonly kind: "RESCHEDULED"; readonly nextAttemptAt: Date; readonly attemptCount: number }
+  /** Non-retryable (A5, T12): the operation is now terminally `failed` with the attempt's code; the quote stays issuing. */
+  | { readonly kind: "FAILED_NON_RETRYABLE" }
   /** The deadline had passed: the operation is now terminally `failed` (`issuance_deadline_exceeded`). */
   | { readonly kind: "DEADLINE_REACHED" }
   | { readonly kind: "STALE_FENCE" }
@@ -100,11 +115,36 @@ export interface OperatorRetryInput {
   readonly correlationId?: string | null;
 }
 
+/** What the fenced T5 commit records (everything verified before the call). */
+export interface IssuedDocumentInput {
+  /** Semantic snapshot hash the PDF was rendered from; must equal the operation's. */
+  readonly semanticSnapshotHash: string;
+  readonly pdfSha256: string;
+  readonly byteLength: number;
+  readonly storageKey: string;
+  readonly rendererVersion: string;
+  readonly templateVersion: string;
+  /** Request/trace correlation of an inline attempt (audit only). */
+  readonly correlationId?: string | null;
+}
+
+export type CommitIssuedResult =
+  /** T5 committed: manifest, operation `succeeded`, quote `issued`, audit `quote.issued`. */
+  | { readonly kind: "COMMITTED"; readonly generatedAt: Date }
+  /** The fence no longer holds (reclaimed, swept, failed) or the quote is no longer this operation's `issuing` quote: nothing changed. */
+  | { readonly kind: "STALE_FENCE" }
+  /** Commit outcome was unknown and the re-read could not prove either outcome; abandon (the lease expiry recovers it). */
+  | { readonly kind: "NOT_APPLIED" };
+
 export interface IssuanceOperationRepository {
   /** Claims (or reclaims an expired lease of) the next due current operation of an `issuing` quote. */
   claimNext(leaseOwner: string): Promise<ClaimResult>;
+  /** Same claim rules, restricted to one operation (inline path after acceptance). */
+  claimOperation(operationId: string, leaseOwner: string): Promise<ClaimResult>;
   renewLease(fence: OperationFence): Promise<RenewResult>;
-  failAttempt(fence: OperationFence, errorCode: IssuanceAttemptErrorCode): Promise<FailAttemptResult>;
+  failAttempt(fence: OperationFence, failure: AttemptFailure): Promise<FailAttemptResult>;
+  /** T5: fenced manifest commit after the bytes are published and verified. */
+  commitIssued(fence: OperationFence, document: IssuedDocumentInput): Promise<CommitIssuedResult>;
   /** Deadline sweep (T6): terminally fails up to `limit` operations past their deadline without a live lease. */
   failDeadlineExceeded(limit: number): Promise<DeadlineFailure[]>;
   /** T10 operator retry state primitive (no public endpoint). */

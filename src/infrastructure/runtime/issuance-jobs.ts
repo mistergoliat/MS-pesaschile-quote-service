@@ -12,10 +12,9 @@ import { PeriodicJobRunner } from "./periodic-job-runner";
 /*
  * Trigger wiring for the issuance worker and the deadline sweep.
  *
- * R1.5B1 ACTIVATION STATUS: NOT COMPOSED INTO THE APPLICATION. B1 has no real
- * attempt body (render/publish/commit arrive in B2/B3), so a running worker
- * could only fail real accepted operations until their deadline. buildApplication
- * therefore does not call this; only tests do. B3 wires it with the real body.
+ * ACTIVATION (R1.5B3): composed by buildApplication with the real attempt
+ * body (issuance-attempt.ts). One attempt at a time per process: the worker's
+ * single slot is shared with the inline path.
  *
  * The runners own no durability: each tick asks PostgreSQL for due work and
  * the claim decides. Fixed delay (no overlap, no drift), no retry/backoff in

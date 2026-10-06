@@ -194,9 +194,11 @@ already in progress.
 R1.4 retired the V1 jobs (V1 expiry, V1 email outbox, V1 orphan cleanup)
 together with the V1 persistence model. `BackgroundJobManager` currently runs
 no jobs; the V2 issuance worker and expiry materialization (R1.5) and email
-delivery (R1.6) register there. The issuance worker and its deadline sweep
-exist since R1.5B1 but are not composed until B3
-([issuance-operation-core.md](issuance-operation-core.md)). Every job runs only while the monitor reports
+delivery (R1.6) register there. Since R1.5B3 the issuance worker
+and its deadline sweep run in every process
+([issuance-execution.md](issuance-execution.md)); the storage probe is the
+content-addressed store's (temp write/fsync/link/read/remove in
+`artifacts/tmp`). Every job runs only while the monitor reports
 ready, except the issuance deadline sweep, which needs only the database and
 schema (`isPersistenceReady()`). While unready, each job logs one `job.paused` and one `job.resumed` on
 recovery, not one line per skipped tick. Iteration failures log `job.failed`

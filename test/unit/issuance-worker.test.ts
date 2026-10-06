@@ -3,8 +3,10 @@ import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  AttemptFailure,
   ClaimedAttempt,
   ClaimResult,
+  CommitIssuedResult,
   FailAttemptResult,
   IssuanceAttemptErrorCode,
   IssuanceOperationRepository,
@@ -53,9 +55,23 @@ class FakeRepository implements IssuanceOperationRepository {
     return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
   }
 
-  failAttempt(fence: OperationFence, code: IssuanceAttemptErrorCode): Promise<FailAttemptResult> {
-    this.failures.push({ fence, code });
-    return Promise.resolve({ kind: "RESCHEDULED", nextAttemptAt: new Date(), attemptCount: 1 });
+  failAttempt(fence: OperationFence, failure: AttemptFailure): Promise<FailAttemptResult> {
+    this.failures.push({ fence, code: failure.errorCode });
+    this.failureDetails.push(failure);
+    return Promise.resolve(failure.retryable ? { kind: "RESCHEDULED", nextAttemptAt: new Date(), attemptCount: 1 } : { kind: "FAILED_NON_RETRYABLE" });
+  }
+
+  failureDetails: AttemptFailure[] = [];
+  operationClaims: string[] = [];
+
+  claimOperation(operationId: string): Promise<ClaimResult> {
+    this.operationClaims.push(operationId);
+    const index = this.queue.findIndex((queued) => queued.operationId === operationId);
+    return Promise.resolve(index === -1 ? { kind: "NONE_AVAILABLE" } : { kind: "CLAIMED", attempt: this.queue.splice(index, 1)[0]! });
+  }
+
+  commitIssued(): Promise<CommitIssuedResult> {
+    return Promise.resolve({ kind: "COMMITTED", generatedAt: new Date() });
   }
 
   failDeadlineExceeded = vi.fn(() => Promise.resolve([]));
@@ -84,7 +100,7 @@ function harness(body: AttemptBody, options: { maxClaimsPerTick?: number; leaseM
 const failWith =
   (errorCode: IssuanceAttemptErrorCode): AttemptBody =>
   () =>
-    Promise.resolve({ kind: "failed", errorCode });
+    Promise.resolve({ kind: "failed", errorCode, retryable: true, reason: errorCode });
 
 afterEach(() => {
   vi.useRealTimers();
@@ -99,7 +115,7 @@ describe("IssuanceWorker", () => {
       maxRunning = Math.max(maxRunning, running);
       await new Promise((resolve) => setTimeout(resolve, 5));
       running -= 1;
-      return { kind: "failed", errorCode: "document_storage_failed" };
+      return { kind: "failed", errorCode: "document_storage_failed", retryable: true, reason: "storage_unavailable" };
     });
     repository.queue = [attempt(1), attempt(2), attempt(3), attempt(4)];
 
@@ -178,7 +194,7 @@ describe("IssuanceWorker", () => {
       ({ signal }) =>
         new Promise((resolve) => {
           seenSignal = signal;
-          signal.addEventListener("abort", () => resolve({ kind: "failed", errorCode: "document_generation_failed" }));
+          signal.addEventListener("abort", () => resolve({ kind: "failed", errorCode: "document_generation_failed", retryable: true, reason: "test" }));
         })
     );
     repository.queue = [attempt(1), attempt(2)];
@@ -195,7 +211,7 @@ describe("IssuanceWorker", () => {
   it("a lost lease aborts the attempt and suppresses its failure write", async () => {
     vi.useFakeTimers();
     const { repository, worker, events } = harness(
-      ({ signal }) => new Promise((resolve) => signal.addEventListener("abort", () => resolve({ kind: "failed", errorCode: "document_generation_failed" }))),
+      ({ signal }) => new Promise((resolve) => signal.addEventListener("abort", () => resolve({ kind: "failed", errorCode: "document_generation_failed", retryable: true, reason: "test" }))),
       { leaseMs: 30_000 }
     );
     repository.queue = [attempt(1)];
@@ -302,5 +318,50 @@ describe("worker instance identity", () => {
       expect(id).not.toBe(os.hostname());
       expect(id).not.toContain(os.hostname());
     }
+  });
+});
+
+describe("IssuanceWorker (R1.5B3)", () => {
+  it("a succeeded attempt writes no failure", async () => {
+    const { repository, worker, events } = harness(() => Promise.resolve({ kind: "succeeded" }));
+    repository.queue = [attempt(1)];
+
+    expect(await worker.tick()).toBe(1);
+    expect(repository.failures).toEqual([]);
+    expect(events()).toContain("issuance.succeeded");
+  });
+
+  it("A5: a non-retryable failure is recorded as such (operation failed at once, not rescheduled)", async () => {
+    const { repository, worker, events } = harness(() => Promise.reject(new IssuanceAttemptError("document_generation_failed", false, "unsupported_glyph")));
+    repository.queue = [attempt(1)];
+    await worker.tick();
+
+    expect(repository.failureDetails).toEqual([{ errorCode: "document_generation_failed", retryable: false, reason: "unsupported_glyph" }]);
+    expect(events()).toContain("issuance.failed_non_retryable");
+  });
+
+  it("one attempt per process: the inline path and the periodic worker share a single slot", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { repository, worker } = harness(async () => {
+      await gate;
+      return { kind: "succeeded" };
+    });
+    repository.queue = [attempt(1), attempt(2), attempt(3)];
+
+    const inline = worker.runOperation("op-2", "req-1");
+    await vi.waitFor(() => expect(repository.operationClaims).toEqual(["op-2"]));
+
+    // While the inline attempt runs, neither a tick nor another inline request can start one.
+    expect(await worker.tick()).toBe(0);
+    expect(await worker.runOperation("op-3", null)).toEqual({ kind: "busy" });
+    expect(repository.claims).toBe(0);
+
+    release();
+    expect(await inline).toEqual({ kind: "ran", outcome: { kind: "succeeded" } });
+    expect(await worker.runOperation("op-9", null)).toEqual({ kind: "not_claimed" });
+    expect(await worker.tick()).toBe(2);
   });
 });

@@ -361,6 +361,31 @@ export async function readOperation(client: PoolClient, operationId: string): Pr
 }
 
 /**
+ * Current durable representation of an accepted quote and its operation, in
+ * one consistent snapshot: the inline issuance response is built from this,
+ * never from in-memory assumptions (Idempotency §4.4).
+ */
+export function readIssuanceResult(
+  database: PostgresDatabase,
+  quoteId: string,
+  operationId: string,
+  clock: QuoteClock = databaseClock
+): Promise<{ quote: QuoteView; operation: OperationView }> {
+  return withReadSnapshot(database, async (client) => ({
+    quote: await readQuote(client, quoteId, clock),
+    operation: await readOperation(client, operationId)
+  }));
+}
+
+/** True while the operation is `pending` or `running`. */
+export async function isOperationActive(database: PostgresDatabase, operationId: string): Promise<boolean> {
+  const { rows } = await database.query<{ status: string }>(`select status from quote_service.issuance_operations where operation_id = $1`, [
+    operationId
+  ]);
+  return rows[0]?.status === "pending" || rows[0]?.status === "running";
+}
+
+/**
  * `and <alias>.created_by_principal_id = $n` unless the principal holds
  * `quotes:read:any` (security §3). Appends the parameter it uses.
  */
