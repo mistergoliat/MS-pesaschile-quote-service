@@ -22,7 +22,7 @@ R1.3 has not started.
 | A | Domain contract | [QUOTE_V2_DOMAIN_CONTRACT.md](QUOTE_V2_DOMAIN_CONTRACT.md) |
 | B | State machine | [QUOTE_V2_STATE_MACHINE.md](QUOTE_V2_STATE_MACHINE.md) |
 | C | OpenAPI 3.1 | [openapi.yaml](openapi.yaml) |
-| D | Examples (34 files) | [examples/](examples/) |
+| D | Examples (35 files; `operation-failed-non-retryable.json` added by A5) | [examples/](examples/) |
 | E | Idempotency / reconciliation (incl. diagram) | [QUOTE_V2_IDEMPOTENCY_AND_RECOVERY.md](QUOTE_V2_IDEMPOTENCY_AND_RECOVERY.md) |
 | F | Validity policy | [QUOTE_V2_VALIDITY_POLICY.md](QUOTE_V2_VALIDITY_POLICY.md) |
 | G | Principals and scopes | [QUOTE_V2_SECURITY_SCOPES.md](QUOTE_V2_SECURITY_SCOPES.md) |
@@ -57,7 +57,7 @@ Each is normative and recorded where it lives.
 | C4 | ~~`externalCorrelation.correlationId` excluded from the fingerprint~~ — superseded by **A3** | Idempotency §2 |
 | C5 | Fingerprint = SHA-256 of RFC 8785 JCS of `{operation, pathParameters, body′}`; canonical decimal strings enforced by schema | Idempotency §2, OpenAPI |
 | C6 | Acceptance timeout 10 s (makes lookup `not_found` decidable) | Idempotency §3.3 |
-| C7 | Issuance retries every failure with fixed backoff until a deadline (default 24 h); at the deadline the operation becomes `failed` — ~~and the quote `cancelled` (`issuance_failed`)~~, superseded by **A1** | State machine §6, Idempotency §4 |
+| C7 | Issuance retries every failure with fixed backoff until a deadline (default 24 h); at the deadline the operation becomes `failed` — ~~and the quote `cancelled` (`issuance_failed`)~~, superseded by **A1**; "every failure" refined by **A5** (retryable failures only; a non-retryable failure ends the operation at once) | State machine §6, Idempotency §4 |
 | C8 | `201` vs `202` (`200` vs `202`) is decided by whether the manifest committed within the server's inline budget; never `201` before manifest commit. ~~Default 5 s as contract~~ — the budget value is not an API invariant, **A2** | Domain §4.1, Idempotency §4.4 |
 | C9 | `issuedAt` = acceptance commit instant (validity base, printed issue date); document time is `document.generatedAt` | Validity §1 |
 | C10 | Expiry is a read projection with `expiredAt = validUntilExclusive`; the job only materializes | State machine T9 |
@@ -96,6 +96,18 @@ for the amended set.
 |---|---|---|---|
 | A4 | Read authority never implies mutation authority. `quotes:read:any` expands **read** visibility only. Draft edit, issue and cancel are allowed only to the creator principal (`createdByPrincipalId`), in addition to the endpoint scope; `principalType` never grants authority; V2 defines no cross-principal mutation scope. A non-creator receives `404 quote_not_found` for these mutations, exactly like a missing quote (existence hiding preserved). | C14 (visibility as mutation authority) | Security §2–§3, Domain §12, State machine T2/T3/T7/T8/T11, OpenAPI `updateDraft`/`issueDraft`/`cancelQuote` descriptions and `NotFound` |
 
+## 3c. Contract amendments (R1.5B3)
+
+Applied before R1.5B3 implementation by explicit owner decision: retrying a
+failure that is deterministic for the frozen snapshot and the renderer
+version until the deadline repeats the same result for hours and delays the
+operator. **CONTRACT_FROZEN = YES** still holds for the amended set. No state,
+error code or endpoint is added.
+
+| # | Amendment | Supersedes | Where |
+|---|---|---|---|
+| A5 | Issuance attempt failures are classified by the owner as **retryable** or **non-retryable**. The classification is internal: the operation's `lastErrorCode` stays one of `document_generation_failed`, `document_storage_failed`, `dependency_unavailable`. A retryable failure returns the operation to `pending` with the frozen backoff until `deadlineAt`. A non-retryable failure (deterministic for the frozen snapshot and renderer/template version, e.g. a character the pinned font set cannot draw; or an integrity incident, e.g. different bytes already at the content address) ends the operation immediately as `failed` with that attempt's code and `completedAt` (T12). `issuance_deadline_exceeded` is used only when `deadlineAt` is reached. A failure the owner cannot classify is retryable. The quote stays `issuing` (A1); resolution remains operator retry (T10) or principal cancel (T11). | C7 ("retries every failure"); State machine §6 ("every attempt failure is retried") | State machine T12/§2/§6, Idempotency §4.2/§4.3/§4.6/§7, OpenAPI `Operation`, example `operation-failed-non-retryable.json` |
+
 ## 4. Static validation performed
 
 Tooling: [tools/validate-contract.mjs](tools/validate-contract.mjs) (ajv 8 /
@@ -110,6 +122,8 @@ cd docs/v2/tools && npm install && npm run validate
 
 The tooling has its own `package.json`; it adds nothing to the service's
 dependencies. Result on 2026-10-04: **437 checks, 437 passed, 0 failed.**
+After amendment A5 (2026-10-06): **464 checks, 464 passed, 0 failed** (adds
+the A5 consistency checks and the non-retryable operation example).
 
 | Requirement | Check(s) | Result |
 |---|---|---|

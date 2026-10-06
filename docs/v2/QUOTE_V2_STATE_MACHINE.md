@@ -33,8 +33,9 @@ never moves the quote out of `issuing` by itself (amendment A1, freeze record).
                         ▼                                              ▼
                      issuing ── POST …/cancel (operation failed) ────► cancelled
                         │  ▲                                           ▲
-                        │  └ deadline: operation failed; operator      │
-                        │    retry creates a new operation (T6, T10)   │
+                        │  └ deadline or non-retryable failure:        │
+                        │    operation failed; operator retry          │
+                        │    creates a new operation (T6, T12, T10)    │
                         │ manifest commit (worker/handler, fenced)     │
                         ▼                                              │
                       issued ───────────── POST …/cancel ──────────────┘
@@ -59,6 +60,7 @@ never moves the quote out of `issuing` by itself (amendment A1, freeze record).
 | T9 | `issued` | `expired` | validity elapsed | system | read projection + expiry job | `now ≥ validUntilExclusive` | +1 when materialized | `expiration.expiredAt = validUntilExclusive` | `quote.expired` (at materialization) | none; document unchanged | no |
 | T10 | `issuing` | `issuing` | issuance retry | operator | operator procedure (no public endpoint) | current operation `failed` | +1 | new operation `pending` with a new `deadlineAt`; `issuance.operationId` = new operation; same snapshot, number and validity | `quote.issue.accepted` (`data.retryOf` = failed operation) | DB only | no |
 | T11 | `issuing` | `cancelled` | cancel after failed issuance | creator principal (`quotes:cancel`) | `POST /v2/quotes/{id}/cancel` | `expectedVersion` = version; current operation `failed` | +1 | `cancellation` | `quote.cancelled` | none; the number never appears on a document | no |
+| T12 | `issuing` | `issuing` | non-retryable attempt failure (amendment A5) | system | issuance attempt (worker or inline handler) | holder of current fencing generation; failure classified non-retryable | unchanged | operation `failed` with the attempt's `lastErrorCode` (`document_generation_failed` or `document_storage_failed`), `completedAt`; quote unchanged | `quote.issue.failed` | operator alert | via T10 or T11 |
 
 Notes:
 
@@ -111,13 +113,24 @@ an explicit principal cancel after the current issuance operation `failed`
 | `pending` | Accepted, waiting for (re)attempt at `attempts.nextAttemptAt` | `issuing` |
 | `running` | A holder has the lease and is rendering/committing | `issuing` |
 | `succeeded` | Manifest committed (T5) | `issued` (or later) |
-| `failed` | Deadline exceeded (T6); terminal for this operation | still `issuing` until an operator retry (T10, new operation) or a principal cancel (T11) |
+| `failed` | Deadline exceeded (T6) or non-retryable attempt failure (T12, A5); terminal for this operation | still `issuing` until an operator retry (T10, new operation) or a principal cancel (T11) |
 
 `deadlineAt = acceptedAt + issuanceDeadline` (configuration, default 24 h,
 range 1 h–72 h; frozen on the operation at acceptance). Every attempt failure
-(`document_generation_failed`, `document_storage_failed`,
-`dependency_unavailable`) is retried with backoff until the deadline, so a
-renderer or storage fix deployed within the deadline completes the same quote.
+is classified by the owner as **retryable** or **non-retryable** (amendment
+A5); the classification is internal and the operation's `lastErrorCode`
+stays one of `document_generation_failed`, `document_storage_failed`,
+`dependency_unavailable`. A retryable failure returns the operation to
+`pending` and is retried with backoff until the deadline, so a renderer or
+storage fix deployed within the deadline completes the same quote. A
+non-retryable failure — one that is deterministic for the frozen snapshot and
+the renderer/template version (e.g. text the pinned font set cannot draw), or
+an integrity incident (different bytes already stored at the document's
+content address) — ends the operation immediately as `failed` with that
+attempt's code (T12). `issuance_deadline_exceeded` means only that
+`deadlineAt` was reached. A failure the owner cannot classify is retryable.
+In every case the quote stays `issuing` until an operator retry (T10, e.g.
+after the renderer is fixed) or a principal cancel (T11).
 Lease and fencing rules: [QUOTE_V2_IDEMPOTENCY_AND_RECOVERY.md §4](QUOTE_V2_IDEMPOTENCY_AND_RECOVERY.md#4-issuance-operation-lease-fencing-and-recovery).
 
 A quote has one or more issuance operations over its life: at most one is

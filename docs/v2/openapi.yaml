@@ -441,6 +441,8 @@ paths:
               examples:
                 running:
                   externalValue: examples/operation-issuing.json
+                failedNonRetryable:
+                  externalValue: examples/operation-failed-non-retryable.json
         '400':
           $ref: '#/components/responses/InvalidRequest'
         '401':
@@ -1737,8 +1739,11 @@ components:
       type: object
       additionalProperties: false
       description: |
-        Durable issuance operation. `failed` is terminal and only reached at
-        `deadlineAt` (`issuance_deadline_exceeded`). Operation and quote
+        Durable issuance operation. `failed` is terminal. It is reached at
+        `deadlineAt` (`issuance_deadline_exceeded`) or, earlier, on a
+        non-retryable attempt failure (amendment A5), in which case
+        `lastErrorCode` is that attempt's code and `nextAttemptAt` is null.
+        Retryable failures return the operation to `pending`. Operation and quote
         lifecycles are separate: when an operation fails the quote stays
         `issuing` (number kept, no document). An operator retry creates a new
         operation for the same quote, or a principal may cancel the quote.

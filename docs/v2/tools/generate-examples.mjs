@@ -71,6 +71,8 @@ w('create-and-issue.response-201.json', { quote: issuedQuote, operation: opDone 
 w('create-and-issue.response-202.json', { quote: baseQuote, operation: opPending });
 w('quote-issued.json', issuedQuote);
 w('operation-issuing.json', { ...opPending, status: 'running', attempts: { count: 2, lastAttemptAt: '2026-10-04T18:00:05.010Z', lastErrorCode: 'document_storage_failed', nextAttemptAt: null } });
+// A5: a non-retryable attempt failure ends the operation before its deadline; the quote stays issuing.
+w('operation-failed-non-retryable.json', { ...opPending, status: 'failed', completedAt: '2026-10-04T18:00:00.240Z', attempts: { count: 1, lastAttemptAt: '2026-10-04T18:00:00.020Z', lastErrorCode: 'document_generation_failed', nextAttemptAt: null } });
 w('quote-list.response.json', { items: [issuedQuote], nextCursor: null });
 
 // ---- manual flow ----
