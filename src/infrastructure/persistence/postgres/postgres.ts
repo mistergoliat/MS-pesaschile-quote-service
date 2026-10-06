@@ -44,8 +44,35 @@ export class PostgresDatabase {
     return this.pool.query<T>(text, values);
   }
 
-  public async withTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+  /**
+   * Checks a client out with an error listener attached for as long as it is
+   * held. pg-pool removes its own listener on checkout, and a pg Client whose
+   * connection dies mid-transaction (database restart, network drop, a
+   * connection cut during COMMIT) emits 'error': without a listener Node
+   * treats it as an unhandled error event and the process dies (R1.5B4
+   * finding). The pending query still rejects normally; a broken client is
+   * released with its error so the pool discards it.
+   */
+  private async checkout(): Promise<{ readonly client: PoolClient; readonly release: () => void }> {
     const client = await this.pool.connect();
+    let broken: Error | undefined;
+    const onError = (error: Error) => {
+      broken = error;
+      this.connectionErrorListener(error);
+    };
+    client.on("error", onError);
+
+    return {
+      client,
+      release: () => {
+        client.removeListener("error", onError);
+        client.release(broken);
+      }
+    };
+  }
+
+  public async withTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+    const { client, release } = await this.checkout();
 
     try {
       await client.query("begin");
@@ -64,7 +91,7 @@ export class PostgresDatabase {
       await client.query("rollback").catch(() => undefined);
       throw error;
     } finally {
-      client.release();
+      release();
     }
   }
 
@@ -76,7 +103,7 @@ export class PostgresDatabase {
     lockKey: number,
     work: () => Promise<T>
   ): Promise<{ readonly acquired: boolean; readonly result?: T }> {
-    const client = await this.pool.connect();
+    const { client, release } = await this.checkout();
 
     try {
       const lockResult = await client.query<{ acquired: boolean }>(
@@ -101,7 +128,7 @@ export class PostgresDatabase {
           .catch(() => undefined);
       }
     } finally {
-      client.release();
+      release();
     }
   }
 }
