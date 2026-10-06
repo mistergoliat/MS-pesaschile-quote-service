@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { QuoteSnapshot } from "../../src/domain";
-import {
-  buildCanonicalIssuedQuoteSnapshot,
-  buildIssuedQuoteDocumentViewModel,
-  createIssuedQuoteContentHash
-} from "../../src/application/quote/documents/issued-quote-document";
+import { buildCanonicalIssuedQuoteSnapshot } from "../../src/application/quote/documents/issued-quote-document";
 
 function buildQuoteSnapshot(overrides: Partial<QuoteSnapshot> = {}): QuoteSnapshot {
   return {
@@ -76,8 +72,11 @@ function buildQuoteSnapshot(overrides: Partial<QuoteSnapshot> = {}): QuoteSnapsh
   };
 }
 
-describe("issued quote documents", () => {
-  it("builds a deterministic canonical snapshot and content hash", () => {
+// LEGACY (R1.6 email input). The V1 PDF view model and V1 content hash were
+// removed in R1.5B2; the V2 formal PDF is covered by issued-quote-document-model
+// and native-pdf-renderer tests.
+describe("legacy canonical issued quote snapshot (email input)", () => {
+  it("builds a canonical snapshot independent of actor, source, version and timestamps", () => {
     const baseQuote = buildQuoteSnapshot();
     const metadataChangedQuote = buildQuoteSnapshot({
       actor: {
@@ -107,75 +106,9 @@ describe("issued quote documents", () => {
     );
 
     expect(snapshotA).toEqual(snapshotB);
-    expect(createIssuedQuoteContentHash(snapshotA)).toBe(createIssuedQuoteContentHash(snapshotB));
   });
 
-  it("changes the content hash when commercial data changes", () => {
-    const originalLine = buildQuoteSnapshot().items[0]!;
-    const original = buildCanonicalIssuedQuoteSnapshot(
-      buildQuoteSnapshot(),
-      "2026-08-10T18:30:00.000Z"
-    );
-    const changed = buildCanonicalIssuedQuoteSnapshot(
-      buildQuoteSnapshot({
-        items: [
-          {
-            lineId: originalLine.lineId,
-            type: originalLine.type,
-            externalSource: originalLine.externalSource,
-            externalItemId: originalLine.externalItemId,
-            externalVariantId: originalLine.externalVariantId,
-            sku: originalLine.sku,
-            description: originalLine.description,
-            quantity: "3.000000",
-            unitPrice: originalLine.unitPrice,
-            taxIncluded: originalLine.taxIncluded,
-            taxRate: originalLine.taxRate,
-            lineSubtotal: "12587",
-            lineTax: "2391",
-            lineTotal: "14978"
-          }
-        ],
-        pricing: {
-          subtotal: "12587",
-          taxAmount: "2391",
-          total: "14978"
-        }
-      }),
-      "2026-08-10T18:30:00.000Z"
-    );
-
-    expect(createIssuedQuoteContentHash(changed)).not.toBe(createIssuedQuoteContentHash(original));
-  });
-
-  it("builds a document view model with CLP formatting and normalized quantities", () => {
-    const viewModel = buildIssuedQuoteDocumentViewModel({
-      snapshot: buildCanonicalIssuedQuoteSnapshot(
-        buildQuoteSnapshot(),
-        "2026-08-10T18:30:00.000Z"
-      ),
-      renderVersion: "quote-pdf-v3",
-      companyName: "Pesas Chile SPA"
-    });
-
-    expect(viewModel.issuedAtDisplay).toBe("10/08/2026");
-    expect(viewModel.validUntilDisplay).toBe("20/08/2026");
-    expect(viewModel.items[0]).toMatchObject({
-      quantityDisplay: "2",
-      unitPriceDisplay: "$4.990",
-      lineSubtotalDisplay: "$8.387",
-      lineTaxDisplay: "$1.593",
-      lineTotalDisplay: "$9.980"
-    });
-    expect(viewModel.pricing).toEqual({
-      pricingNote: "Precios incluyen IVA",
-      subtotalDisplay: "$8.387",
-      taxAmountDisplay: "$1.593",
-      totalDisplay: "$9.980"
-    });
-  });
-
-  it("preserves a shipping line in the issued snapshot and labels it for documents", () => {
+  it("preserves a V1 shipping line in the canonical snapshot", () => {
     const snapshot = buildCanonicalIssuedQuoteSnapshot(
       buildQuoteSnapshot({
         items: [
@@ -210,90 +143,11 @@ describe("issued quote documents", () => {
       unitPrice: "11900",
       lineTotal: "11900"
     });
-    expect(
-      buildIssuedQuoteDocumentViewModel({
-        snapshot,
-        renderVersion: "quote-pdf-v3",
-        companyName: "Pesas Chile SPA"
-      }).items[0]?.typeLabel
-    ).toBe("Despacho");
-  });
-
-  // SALES-AGENT-R1-T1.1, task section 5: PDF/email must never expose
-  // externalSource/externalItemId/externalVariantId - only description/sku
-  // (sku already a preexisting visual decision) reach the view model.
-  it("never exposes externalSource/externalItemId/externalVariantId in the document view model", () => {
-    const viewModel = buildIssuedQuoteDocumentViewModel({
-      snapshot: buildCanonicalIssuedQuoteSnapshot(buildQuoteSnapshot(), "2026-08-10T18:30:00.000Z"),
-      renderVersion: "quote-pdf-v3",
-      companyName: "Pesas Chile SPA"
-    });
-
-    expect(viewModel.items[0]).not.toHaveProperty("externalSource");
-    expect(viewModel.items[0]).not.toHaveProperty("externalItemId");
-    expect(viewModel.items[0]).not.toHaveProperty("externalVariantId");
-    expect(viewModel.items[0]).toHaveProperty("sku", "SKU-1");
-  });
-
-  // SALES-AGENT-R1-T1.1, task section 13.7: the content hash (the same
-  // mechanism idempotency request hashing already reuses via
-  // createCanonicalRequestHash) must distinguish two lines that differ ONLY
-  // by externalVariantId - never collapse two different catalog variants
-  // into the same commercial identity.
-  it("the content hash distinguishes two otherwise-identical lines that differ only by externalVariantId", () => {
-    const variant31 = buildCanonicalIssuedQuoteSnapshot(
-      buildQuoteSnapshot({
-        items: [
-          {
-            lineId: "97686fc1-543f-4d83-b902-c0b1023e2bd8",
-            type: "product",
-            externalSource: "catalog_service",
-            externalItemId: "545",
-            externalVariantId: "31",
-            sku: "SKU-1",
-            description: "Mancuerna",
-            quantity: "2.000000",
-            unitPrice: "4990",
-            taxIncluded: true,
-            taxRate: "0.19",
-            lineSubtotal: "8387",
-            lineTax: "1593",
-            lineTotal: "9980"
-          }
-        ]
-      }),
-      "2026-08-10T18:30:00.000Z"
-    );
-    const variant32 = buildCanonicalIssuedQuoteSnapshot(
-      buildQuoteSnapshot({
-        items: [
-          {
-            lineId: "97686fc1-543f-4d83-b902-c0b1023e2bd8",
-            type: "product",
-            externalSource: "catalog_service",
-            externalItemId: "545",
-            externalVariantId: "32",
-            sku: "SKU-1",
-            description: "Mancuerna",
-            quantity: "2.000000",
-            unitPrice: "4990",
-            taxIncluded: true,
-            taxRate: "0.19",
-            lineSubtotal: "8387",
-            lineTax: "1593",
-            lineTotal: "9980"
-          }
-        ]
-      }),
-      "2026-08-10T18:30:00.000Z"
-    );
-
-    expect(createIssuedQuoteContentHash(variant31)).not.toBe(createIssuedQuoteContentHash(variant32));
   });
 
   // SALES-AGENT-R1-T1.1, task section 3/13.9: a historical/legacy line with
   // no catalog identity at all (all three external fields null) must still
-  // build a valid canonical snapshot and content hash - additive fields are
+  // build a valid canonical snapshot - additive fields are
   // never a universal requirement.
   it("a historical line with null externalSource/externalItemId/externalVariantId builds a valid snapshot", () => {
     const snapshot = buildCanonicalIssuedQuoteSnapshot(
@@ -325,6 +179,5 @@ describe("issued quote documents", () => {
       externalItemId: null,
       externalVariantId: null
     });
-    expect(() => createIssuedQuoteContentHash(snapshot)).not.toThrow();
   });
 });

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -9,6 +8,7 @@ import {
   QuoteNotAcceptedError,
   type IssuedSnapshotRows
 } from "../../src/infrastructure/persistence/postgres/issued-snapshot-loader";
+import { importClosure } from "../helpers/import-closure";
 import { DIRECT_CREATE, DRAFT_ISSUE, GUEST_MINIMAL_SHIPPING, type IssuedSnapshotFixture } from "../fixtures/issued-snapshot-rows";
 
 /**
@@ -87,39 +87,9 @@ describe("issued snapshot hash (jcs-sha256-v2)", () => {
   });
 });
 
-/** Relative-import closure of a source file (TypeScript sources only). */
-function importClosure(entry: string): Set<string> {
-  const seen = new Set<string>();
-  const pending = [path.resolve(entry)];
-
-  while (pending.length > 0) {
-    const file = pending.pop()!;
-
-    if (seen.has(file)) {
-      continue;
-    }
-
-    seen.add(file);
-    const source = fs.readFileSync(file, "utf8");
-
-    for (const match of source.matchAll(/from\s+"(\.{1,2}\/[^"]+)"/g)) {
-      pending.push(path.resolve(path.dirname(file), `${match[1]}.ts`));
-    }
-  }
-
-  return seen;
-}
-
-const relative = (files: Set<string>) => [...files].map((file) => path.relative(process.cwd(), file).replaceAll("\\", "/")).sort();
-
 describe("issued snapshot ownership", () => {
   it("AQ: the snapshot module and its loader cannot reach the public read projection", () => {
-    const closure = relative(
-      new Set([
-        ...importClosure("src/application/quote-v2/issued-snapshot.ts"),
-        ...importClosure("src/infrastructure/persistence/postgres/issued-snapshot-loader.ts")
-      ])
-    );
+    const closure = importClosure("src/application/quote-v2/issued-snapshot.ts", "src/infrastructure/persistence/postgres/issued-snapshot-loader.ts");
 
     expect(closure).not.toContain("src/infrastructure/persistence/postgres/quote-v2-reads.ts");
     expect(closure).toEqual([
@@ -132,11 +102,11 @@ describe("issued snapshot ownership", () => {
   });
 
   it("AS: the snapshot and worker modules import no network or external-service client", () => {
-    const closure = new Set([
-      ...importClosure("src/infrastructure/persistence/postgres/issued-snapshot-loader.ts"),
-      ...importClosure("src/application/quote-v2/issuance-worker.ts"),
-      ...importClosure("src/infrastructure/persistence/postgres/issuance-operations.ts")
-    ]);
+    const closure = importClosure(
+      "src/infrastructure/persistence/postgres/issued-snapshot-loader.ts",
+      "src/application/quote-v2/issuance-worker.ts",
+      "src/infrastructure/persistence/postgres/issuance-operations.ts"
+    );
 
     for (const file of closure) {
       const source = fs.readFileSync(file, "utf8");

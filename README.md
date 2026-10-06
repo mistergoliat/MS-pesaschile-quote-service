@@ -18,7 +18,8 @@ API arrives in R1.5. Not production-ready: see the
 
 ## Stack
 
-Node.js 20 · TypeScript · Fastify · Zod · PostgreSQL (`pg`, `node-pg-migrate`)
+Node.js 24 (pinned: `.nvmrc`, `engines`, `node:24.14.0` image; the formal PDF
+renderer refuses any other Node major or zlib build) · TypeScript · Fastify · Zod · PostgreSQL (`pg`, `node-pg-migrate`)
 · `pdfmake` (native PDF renderer, no browser) · Vitest · ESLint.
 
 ## Local setup
@@ -46,7 +47,8 @@ curl -i localhost:3000/health/ready
 | `npm run principals:token` | new caller token plus the SHA-256 for the principal registry |
 | `npm run documents:verify` / `documents:verify:runtime` | verify stored artifacts against their manifests (`--record-byte-length` for legacy sizes) |
 | `npm run smoke:docker` | build the image and smoke the runtime (migrate, check, health, restart, shutdown) |
-| `npm run pdf:preview`, `pdf:benchmark`, `pdf:concurrency-smoke` | PDF renderer previews and checks |
+| `npm run pdf:preview`, `pdf:benchmark`, `pdf:concurrency-smoke` | formal PDF previews (template v4), cost and concurrency checks |
+| `npm run pdf:determinism` / `pdf:determinism:runtime` | SHA-256 of the golden formal-PDF fixtures (must equal the pinned values on every OS) |
 | `npm run email:preview` | offline email template preview |
 | `QUOTE_SMOKE_RECIPIENT=… npm run email:smoke:pdf` | real Gmail smoke (manual, needs Gmail configuration) |
 
@@ -77,15 +79,15 @@ checksums, the migration/runtime role separation and the recovery model:
 
 ## Document rendering and branding
 
-- **Renderer:** `quote-pdf-v3`, in-process pdfmake, PDF-standard Helvetica,
-  repository-owned logo. It never queries the database or re-prices; it
-  renders from an issued snapshot. Historical documents are never
-  regenerated.
+- **Formal PDF (R1.5B2):** frozen issued snapshot → `IssuedQuoteDocumentModelV2`
+  → pdfmake, template `quote-pdf-template-v4`, issuer profile
+  `pesaschile-cl-v1`, embedded DejaVu Sans 2.37, code-owned renderer version.
+  Pure, deterministic, no arithmetic, no lookups, no printable HTML, no
+  personal signature: [docs/formal-document-v2.md](docs/formal-document-v2.md).
 - **Brand:** `pesaschile-brand-v1` under `src/infrastructure/branding`;
   repository-controlled assets, no CDN.
-- **Email template:** `quote-email-v2`, table-based HTML with an email view
-  model. The V2 template and renderer (Chile-local dates, validity-through
-  date, per-charge tax labels, shipping block) are R1.5 work.
+- **Email template:** `quote-email-v2`, table-based HTML with the legacy V1
+  email view model (V2 email refactor: R1.6).
 
 ## Architecture
 

@@ -183,7 +183,7 @@ success or failure. The repository re-reads durable state instead:
 
 | Item | Slice |
 |---|---|
-| V2 document model, renderer/template v4, Unicode font (U-A/U-B) | B2 |
+| ~~V2 document model, renderer/template v4, Unicode font (U-A/U-B)~~ ([formal-document-v2.md](formal-document-v2.md)) | B2: done |
 | Content-addressed publish, real attempt body, fenced manifest commit (T5), inline `syncIssueBudgetMs` path, composition into `buildApplication` | B3 |
 | `GET …/document`, integrity job, crash-window failure injection | B4 |
 | Operator tooling for T10 | R1.6 |

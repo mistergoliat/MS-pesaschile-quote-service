@@ -1,19 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  buildCanonicalIssuedQuoteSnapshot,
-  buildIssuedQuoteDocumentViewModel
-} from "../../src/application/quote/documents/issued-quote-document";
+import { buildCanonicalIssuedQuoteSnapshot } from "../../src/application/quote/documents/issued-quote-document";
 import type { QuoteSnapshot } from "../../src/domain";
 import {
   createDefaultPesasChileSenderSignatureV1,
   createPesasChileBrandV1,
   QUOTE_EMAIL_TEMPLATE_VERSION
 } from "../../src/infrastructure/branding/pesaschile-brand-v1";
-import {
-  renderQuoteEmailHtml,
-  renderQuotePrintableHtml
-} from "../../src/infrastructure/documents/document-templates";
+import * as documentTemplates from "../../src/infrastructure/documents/document-templates";
 import {
   QUOTE_EMAIL_INLINE_LOGO_DARK_CONTENT_ID,
   QUOTE_EMAIL_INLINE_LOGO_LIGHT_CONTENT_ID
@@ -97,7 +91,7 @@ function buildEmailHtml(input: {
   readonly customerOverrides?: Partial<QuoteSnapshot["customerSnapshot"]>;
   readonly senderSignature?: ReturnType<typeof createDefaultPesasChileSenderSignatureV1>;
 } = {}) {
-  return renderQuoteEmailHtml(
+  return documentTemplates.renderQuoteEmailHtml(
     buildQuoteEmailViewModel({
       snapshot: buildSnapshot(input.customerOverrides),
       brand: createPesasChileBrandV1(),
@@ -216,50 +210,11 @@ describe("document templates", () => {
     expect(html).toContain("Av. Monsenor Valech 12050, bodega 26, Maipu");
   });
 
-  it("renders printable HTML without visible technical versioning and with commercial pricing", () => {
-    const html = renderQuotePrintableHtml(
-      buildIssuedQuoteDocumentViewModel({
-        snapshot: buildSnapshot(),
-        renderVersion: "quote-pdf-v3",
-        companyName: "Pesas Chile SPA"
-      })
-    );
-
-    expect(html).toContain("Cotizacion comercial");
-    expect(html).toContain("Precios incluyen IVA");
-    expect(html).toContain("$37.566");
-    expect(html).toContain("<th>Descripción</th>");
-    expect(html).toContain("<th class=\"numeric\">Cant.</th>");
-    expect(html).toContain("<th class=\"numeric\">Precio unitario</th>");
-    expect(html).toContain("<th class=\"numeric\">Total</th>");
-    expect(html).not.toContain("<th class=\"numeric\">Subtotal</th>");
-    expect(html).not.toContain("<th class=\"numeric\">IVA</th>");
-    expect(html).toContain("SKU-9");
-    expect(html).not.toContain("SKU null");
-    expect(html).toContain("Neto");
-    expect(html).not.toContain("Version de render:");
-    expect(html).not.toContain("Quote Service");
+  it("exports no printable HTML artifact (V2 formal artifact is the PDF only)", () => {
+    expect(Object.keys(documentTemplates)).toEqual(["renderQuoteEmailHtml"]);
   });
 
-  it("does not truncate long printable descriptions", () => {
-    const description =
-      "Balanza industrial de plataforma reforzada para operaciones logísticas y comerciales, con estructura de acero, indicador digital y capacidad de 300 kg.";
-    const snapshot = buildSnapshot();
-    const html = renderQuotePrintableHtml(
-      buildIssuedQuoteDocumentViewModel({
-        snapshot: {
-          ...snapshot,
-          items: [{ ...snapshot.items[0]!, description }]
-        },
-        renderVersion: "quote-pdf-v3",
-        companyName: "Pesas Chile SPA"
-      })
-    );
-
-    expect(html).toContain(description);
-  });
-
-  it("renders Despacho in printable and email HTML", () => {
+  it("renders Despacho in the legacy email HTML", () => {
     const quote = buildQuoteSnapshot();
     const shippingSnapshot = buildCanonicalIssuedQuoteSnapshot(
       {
@@ -289,16 +244,8 @@ describe("document templates", () => {
       },
       "2026-08-12T18:30:00.000Z"
     );
-    const viewModel = buildIssuedQuoteDocumentViewModel({
-      snapshot: shippingSnapshot,
-      renderVersion: "quote-pdf-v3",
-      companyName: "Pesas Chile SPA"
-    });
-
-    expect(renderQuotePrintableHtml(viewModel)).toContain("Despacho");
-    expect(renderQuotePrintableHtml(viewModel)).not.toContain("SKU null");
     expect(
-      renderQuoteEmailHtml(
+      documentTemplates.renderQuoteEmailHtml(
         buildQuoteEmailViewModel({
           snapshot: shippingSnapshot,
           brand: createPesasChileBrandV1(),

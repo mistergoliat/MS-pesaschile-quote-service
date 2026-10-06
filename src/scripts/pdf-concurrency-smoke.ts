@@ -1,29 +1,32 @@
+import crypto from "node:crypto";
+
 import { createPdfFixture, createPdfRenderer } from "./pdf-fixture";
 
+/** Concurrent renders on one renderer must all produce the same bytes (B3 runs one at a time; this proves it is safe anyway). */
 async function main(): Promise<void> {
   const renderer = createPdfRenderer();
+  const model = createPdfFixture(30);
   const results: Array<Record<string, number | string>> = [];
 
   for (const concurrency of [1, 5, 10]) {
     const before = process.memoryUsage().rss;
     const startedAt = performance.now();
-    const pdfs = await Promise.all(
-      Array.from({ length: concurrency }, () => renderer.renderPdf(createPdfFixture(30)))
-    );
-    const after = process.memoryUsage().rss;
-    if (pdfs.some((pdf) => pdf.subarray(0, 5).toString("utf8") !== "%PDF-")) {
-      throw new Error(`Invalid PDF produced at concurrency ${concurrency}`);
+    const pdfs = await Promise.all(Array.from({ length: concurrency }, () => renderer.renderPdf(model)));
+    const hashes = new Set(pdfs.map((pdf) => crypto.createHash("sha256").update(pdf).digest("hex")));
+
+    if (hashes.size !== 1) {
+      throw new Error(`Non-identical PDFs at concurrency ${concurrency}`);
     }
+
     results.push({
       concurrency,
-      rssBeforeBytes: before,
-      rssAfterBytes: after,
-      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
-      pdfBytes: pdfs[0]?.byteLength ?? 0
+      rssDeltaMiB: Math.round(((process.memoryUsage().rss - before) / 1_048_576) * 10) / 10,
+      durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+      pdfSha256: [...hashes][0]!
     });
   }
 
-  console.log(JSON.stringify({ status: "ok", leakedBrowserProcesses: 0, results }, null, 2));
+  console.log(JSON.stringify({ status: "ok", results }, null, 2));
 }
 
 void main();

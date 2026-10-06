@@ -1,0 +1,4 @@
+# Pinned formal-PDF fonts: hashed by the renderer profile; never transform.
+*.ttf binary
+# Upstream font licence, kept verbatim.
+src/infrastructure/documents/assets/fonts/LICENSE-DejaVu.txt -whitespace

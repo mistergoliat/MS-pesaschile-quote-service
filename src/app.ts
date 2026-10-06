@@ -4,11 +4,8 @@ import { DependencyMonitor } from "./application/health/dependency-monitor";
 import { PrincipalRegistry } from "./infrastructure/auth/principal-registry";
 import { principalRegistrySource, type AppEnv } from "./infrastructure/config/env";
 import { FilesystemDocumentArtifactStorage } from "./infrastructure/documents/filesystem-document-artifact-storage";
-import { NativePdfRenderer, type PdfRendererPort } from "./infrastructure/documents/native-pdf-renderer";
-import {
-  createDefaultPesasChileSenderSignatureV1,
-  createPesasChileBrandV1
-} from "./infrastructure/branding/pesaschile-brand-v1";
+import type { PdfRendererPort } from "./application/quote-v2/document/pdf-renderer-port";
+import { NativePdfRenderer } from "./infrastructure/documents/native-pdf-renderer";
 import { buildConnectionConfig, PostgresDatabase } from "./infrastructure/persistence/postgres/postgres";
 import { PostgresDependencyProbe } from "./infrastructure/persistence/postgres/postgres-dependency-probe";
 import type { QuoteClock } from "./infrastructure/persistence/postgres/quote-clock";
@@ -82,15 +79,9 @@ export function buildApplication(
 
   const database = new PostgresDatabase(env);
   const artifactStorage = new FilesystemDocumentArtifactStorage(env.QUOTE_DOCUMENT_STORAGE_ROOT);
-  const pdfRenderer =
-    overrides.pdfRenderer ??
-    new NativePdfRenderer({
-      renderVersion: env.QUOTE_RENDER_VERSION,
-      brand: createPesasChileBrandV1({
-        legalName: env.QUOTE_COMPANY_NAME
-      }),
-      senderSignature: createDefaultPesasChileSenderSignatureV1()
-    });
+  // Formal-document identity and versions are code-owned (issuer profile,
+  // template v4, renderer profile); no environment value reaches the PDF.
+  const pdfRenderer = overrides.pdfRenderer ?? new NativePdfRenderer();
   const lifecycleState = new ApplicationLifecycleState();
   const dependencyMonitor = new DependencyMonitor(
     {

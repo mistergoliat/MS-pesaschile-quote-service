@@ -88,7 +88,6 @@ describe("loadEnv", () => {
       HEALTHCHECK_DATABASE_TIMEOUT_MS: "1500",
       QUOTE_COMPANY_NAME: "Pesas Chile SPA",
       QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
-      QUOTE_RENDER_VERSION: "quote-pdf-v3",
       QUOTE_EMAIL_PROVIDER: "gmail",
       GOOGLE_GMAIL_CLIENT_ID: "gmail-client-id",
       GOOGLE_GMAIL_CLIENT_SECRET: "gmail-client-secret",

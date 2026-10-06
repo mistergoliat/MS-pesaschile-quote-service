@@ -13,11 +13,10 @@ import {
   GmailEmailSender,
   buildGmailMimeMessage
 } from "../infrastructure/email/gmail-email-sender";
-import {
-  createMixedPdfFixture,
-  createPdfRenderer,
-  PDF_RENDER_VERSION
-} from "./pdf-fixture";
+import { buildIssuedQuoteDocumentModelV2 } from "../application/quote-v2/document/issued-quote-document-model";
+import { RENDERER_VERSION } from "../infrastructure/documents/renderer-profile";
+import { createMixedLegacyEmailFixture } from "./legacy-email-fixture";
+import { createMixedTaxFixture, createPdfRenderer } from "./pdf-fixture";
 
 function assertSmokeCheck(condition: boolean, message: string): asserts condition {
   if (!condition) {
@@ -42,7 +41,8 @@ async function main(): Promise<void> {
     "QUOTE_EMAIL_PROVIDER must be gmail"
   );
 
-  const snapshot = createMixedPdfFixture();
+  // Email body: legacy V1 email view model (R1.6). Attachment: the V2 formal PDF.
+  const snapshot = createMixedLegacyEmailFixture();
   const brand = createPesasChileBrandV1({ legalName: env.QUOTE_COMPANY_NAME });
   const senderSignature = createDefaultPesasChileSenderSignatureV1();
   const html = renderQuoteEmailHtml(
@@ -53,8 +53,8 @@ async function main(): Promise<void> {
       senderSignature
     })
   );
-  const pdf = await createPdfRenderer().renderPdf(snapshot);
-  const subject = `Smoke PDF ${snapshot.quoteNumber} ${PDF_RENDER_VERSION}`;
+  const pdf = await createPdfRenderer().renderPdf(buildIssuedQuoteDocumentModelV2(createMixedTaxFixture()));
+  const subject = `Smoke PDF ${snapshot.quoteNumber} ${RENDERER_VERSION}`;
   const attachmentFilename = `Cotizacion-${snapshot.quoteNumber}.pdf`;
   const emailInput = {
     to: recipient!,
@@ -127,7 +127,7 @@ async function main(): Promise<void> {
       providerMessageId: providerResult.providerMessageId ?? null,
       to: recipient,
       quoteNumber: snapshot.quoteNumber,
-      renderVersion: PDF_RENDER_VERSION,
+      rendererVersion: RENDERER_VERSION,
       pdfBytes: pdf.byteLength,
       checks: {
         pdfSignature: true,

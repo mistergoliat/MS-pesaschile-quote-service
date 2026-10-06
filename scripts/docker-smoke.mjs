@@ -162,8 +162,7 @@ function buildAppEnv() {
         }
       ]
     }),
-    QUOTE_DOCUMENT_STORAGE_ROOT: state.paths.storageRoot,
-    QUOTE_RENDER_VERSION: "quote-pdf-v3"
+    QUOTE_DOCUMENT_STORAGE_ROOT: state.paths.storageRoot
   };
 }
 

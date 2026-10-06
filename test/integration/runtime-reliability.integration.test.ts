@@ -291,6 +291,7 @@ describe("runtime reliability: storage and renderer", () => {
     const harness = await startHarness({
       appOverrides: {
         pdfRenderer: {
+          rendererVersion: "test-broken-renderer",
           renderPdf: () => Promise.reject(new Error("renderer broken")),
           probe: () => Promise.resolve(probeFailed("renderer_unavailable"))
         }
