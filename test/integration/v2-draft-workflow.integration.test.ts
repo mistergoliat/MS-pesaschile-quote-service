@@ -12,7 +12,7 @@ import { isVisible } from "../../src/application/auth/principal";
 import { resolveValidity } from "../../src/application/quote-v2/validity";
 import { PrincipalRegistry } from "../../src/infrastructure/auth/principal-registry";
 import { runMigrations } from "../../src/infrastructure/persistence/postgres/migrator";
-import { semanticSnapshotHash } from "../../src/infrastructure/persistence/postgres/quote-v2-acceptance";
+import { r15aSemanticSnapshotHash } from "../helpers/r15a-snapshot-hash";
 import { buildRuntimeTestEnv, waitFor } from "../helpers/runtime-test-env";
 import { createTestDatabase } from "../helpers/test-database";
 import { bearer, sha256Hex, TEST_TOKENS as SHARED_TOKENS, testRegistryDocument } from "../helpers/test-principals";
@@ -466,7 +466,7 @@ describe("POST /v2/quotes/{quoteId}/issue", () => {
     expect(await harness.footprint()).toEqual({ quotes: 1, lines: 2, shipping: 0, operations: 1, bindings: 3, documents: 0, deliveries: 0, sequence: "1:true" });
 
     const [op] = await harness.sql(`select status, generation, origin, snapshot_hash from quote_service.issuance_operations`);
-    expect(op).toEqual({ status: "pending", generation: "0", origin: "acceptance", snapshot_hash: semanticSnapshotHash(quote) });
+    expect(op).toEqual({ status: "pending", generation: "0", origin: "acceptance", snapshot_hash: r15aSemanticSnapshotHash(quote) });
 
     const accepted = (await harness.events(quoteId)).find((event) => event.event_type === "quote.issue.accepted")!;
     expect(accepted).toMatchObject({

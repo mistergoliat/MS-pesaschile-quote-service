@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   describeConfigError,
+  issuanceSettings,
   loadEnv,
   loadMigrationEnv
 } from "../../src/infrastructure/config/env";
@@ -110,5 +111,29 @@ describe("loadEnv", () => {
         QUOTE_DOCUMENT_STORAGE_ROOT: "C:/temp/test-documents",
       })
     ).toThrow();
+  });
+});
+
+describe("issuance configuration (Idempotency §4.2)", () => {
+  it("defaults to the contract defaults", () => {
+    expect(issuanceSettings(loadEnv(MINIMAL_ENV))).toEqual({
+      leaseMs: 60_000,
+      pollIntervalMs: 2_000,
+      deadlineMs: 86_400_000,
+      syncBudgetMs: 5_000
+    });
+  });
+
+  it.each([
+    ["QUOTE_ISSUANCE_LEASE_MS", "10000", "300000", "9999", "300001"],
+    ["QUOTE_ISSUANCE_POLL_INTERVAL_MS", "500", "60000", "499", "60001"],
+    ["QUOTE_ISSUANCE_DEADLINE_MS", "3600000", "259200000", "3599999", "259200001"],
+    ["QUOTE_ISSUANCE_SYNC_BUDGET_MS", "0", "10000", "-1", "10001"]
+  ])("%s accepts [%s, %s] and rejects %s and %s", (key, min, max, below, above) => {
+    expect(() => loadEnv({ ...MINIMAL_ENV, [key]: min })).not.toThrow();
+    expect(() => loadEnv({ ...MINIMAL_ENV, [key]: max })).not.toThrow();
+    expect(() => loadEnv({ ...MINIMAL_ENV, [key]: below })).toThrow();
+    expect(() => loadEnv({ ...MINIMAL_ENV, [key]: above })).toThrow();
+    expect(() => loadEnv({ ...MINIMAL_ENV, [key]: `${min}.5` })).toThrow();
   });
 });

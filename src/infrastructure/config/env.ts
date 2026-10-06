@@ -35,6 +35,14 @@ const envSchema = z
   QUOTE_COMPANY_NAME: z.string().min(1).default("Pesas Chile SPA"),
   QUOTE_DOCUMENT_STORAGE_ROOT: z.string().min(1),
   QUOTE_RENDER_VERSION: z.string().min(1).default("quote-pdf-v3"),
+  // Issuance operation (Idempotency §4.2): defaults and ranges are the
+  // contract's. The deadline is copied onto each operation at acceptance.
+  // The sync budget is implementation configuration, not an API invariant
+  // (amendment A2).
+  QUOTE_ISSUANCE_LEASE_MS: z.coerce.number().int().min(10_000).max(300_000).default(60_000),
+  QUOTE_ISSUANCE_POLL_INTERVAL_MS: z.coerce.number().int().min(500).max(60_000).default(2_000),
+  QUOTE_ISSUANCE_DEADLINE_MS: z.coerce.number().int().min(3_600_000).max(259_200_000).default(86_400_000),
+  QUOTE_ISSUANCE_SYNC_BUDGET_MS: z.coerce.number().int().min(0).max(10_000).default(5_000),
   // Email provider configuration, used only by the email smoke script until
   // the V2 delivery subsystem (R1.6). The V1 expiry, cleanup and email worker
   // settings were retired with the V1 runtime in R1.4.
@@ -91,6 +99,22 @@ const envSchema = z
   }));
 
 export type AppEnv = z.output<typeof envSchema>;
+
+export interface IssuanceSettings {
+  readonly leaseMs: number;
+  readonly pollIntervalMs: number;
+  readonly deadlineMs: number;
+  readonly syncBudgetMs: number;
+}
+
+export function issuanceSettings(env: AppEnv): IssuanceSettings {
+  return {
+    leaseMs: env.QUOTE_ISSUANCE_LEASE_MS,
+    pollIntervalMs: env.QUOTE_ISSUANCE_POLL_INTERVAL_MS,
+    deadlineMs: env.QUOTE_ISSUANCE_DEADLINE_MS,
+    syncBudgetMs: env.QUOTE_ISSUANCE_SYNC_BUDGET_MS
+  };
+}
 
 /**
  * Configuration for the explicit migration/schema commands only. The

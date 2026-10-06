@@ -185,15 +185,21 @@ function sendIssuance(reply: FastifyReply, result: QuoteOperationResult, doneSta
  * 401 → 403 (incl. the validityOverride scope) → idempotency binding → 404 →
  * 422 → 409 state/version → acceptance. Reads: 400 → 401 → 403 → 404
  * (missing or not visible). Readiness (503) is enforced earlier by the
- * business context gate. `clock` is the single expiry-projection time source.
+ * business context gate. `clock` is the single expiry-projection time source;
+ * `issuanceDeadlineMs` is copied onto every operation accepted here.
  */
-export function v2QuoteRoutes(database: PostgresDatabase, clock: QuoteClock = databaseClock): BusinessRouteRegistrar {
+export function v2QuoteRoutes(
+  database: PostgresDatabase,
+  options: { readonly issuanceDeadlineMs: number; readonly clock?: QuoteClock | undefined }
+): BusinessRouteRegistrar {
+  const clock = options.clock ?? databaseClock;
   const commandInput = (request: FastifyRequest) => ({
     principal: request.principal!,
     body: request.body,
     rawIdempotencyKey: request.headers["idempotency-key"] as string,
     correlationId: (request.headers["x-correlation-id"] as string | undefined) ?? null,
-    clock
+    clock,
+    issuanceDeadlineMs: options.issuanceDeadlineMs
   });
 
   return (app) => {

@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildApplication, type ApplicationContext } from "../../src/app";
 import { resolveValidity } from "../../src/application/quote-v2/validity";
 import { runMigrations } from "../../src/infrastructure/persistence/postgres/migrator";
-import { semanticSnapshotHash } from "../../src/infrastructure/persistence/postgres/quote-v2-acceptance";
+import { r15aSemanticSnapshotHash } from "../helpers/r15a-snapshot-hash";
 import { buildRuntimeTestEnv, waitFor } from "../helpers/runtime-test-env";
 import { createTestDatabase, type TestDatabaseHandle } from "../helpers/test-database";
 import { bearer, sha256Hex, TEST_TOKENS } from "../helpers/test-principals";
@@ -171,7 +171,7 @@ describe("POST /v2/quotes — acceptance", () => {
 
     // The operation carries the semantic snapshot hash of what was persisted.
     const [stored] = await harness.sql(`select snapshot_hash, snapshot_hash_algorithm, origin, generation from quote_service.issuance_operations`);
-    expect(stored).toEqual({ snapshot_hash: semanticSnapshotHash(quote), snapshot_hash_algorithm: "jcs-sha256-v2", origin: "acceptance", generation: "0" });
+    expect(stored).toEqual({ snapshot_hash: r15aSemanticSnapshotHash(quote), snapshot_hash_algorithm: "jcs-sha256-v2", origin: "acceptance", generation: "0" });
 
     // W/X: durable business correlation stored; the request trace is audit-only.
     const [row] = await harness.sql(`select source_system, external_reference_type, external_reference, to_jsonb(q)::text as dump from quote_service.quotes q`);

@@ -10,6 +10,7 @@ import {
   type IdempotentOperation
 } from "../../../application/idempotency/idempotency-scope";
 import { sha256Jcs } from "../../../application/quote/canonical-json";
+import { ISSUED_SNAPSHOT_HASH_ALGORITHM, issuedSnapshotHash } from "../../../application/quote-v2/issued-snapshot";
 import { chargeAmounts, MAX_CLP_AMOUNT, sumTotals, type ChargeAmounts, type TaxBasis } from "../../../application/quote-v2/arithmetic";
 import {
   createQuoteRequestSchema,
@@ -20,6 +21,7 @@ import {
 } from "../../../application/quote-v2/create-quote-request";
 import { OverrideOutOfRangeError, resolveValidity, type ResolvedValidity } from "../../../application/quote-v2/validity";
 import { PostgresIdempotencyBindingStore, type IdempotencyBinding } from "./idempotency-binding-store";
+import { loadIssuedSnapshot } from "./issued-snapshot-loader";
 import type { PostgresDatabase } from "./postgres";
 import type { QuoteClock } from "./quote-clock";
 import { omitNull, readOperation, readQuote, type Json, type OperationView, type QuoteView } from "./quote-v2-reads";
@@ -27,8 +29,6 @@ import { omitNull, readOperation, readQuote, type Json, type OperationView, type
 const OPERATION: IdempotentOperation = "quote.create_and_issue";
 const ISSUER_PROFILE_ID = "pesaschile-cl-v1";
 const QUOTE_NUMBER_PREFIX = "PC";
-// ponytail: fixed contract default (24 h); make it configuration (1–72 h) with the R1.5B worker.
-const ISSUANCE_DEADLINE = "24 hours";
 
 export interface QuoteOperationResult {
   readonly quote: QuoteView;
@@ -50,22 +50,12 @@ export interface AcceptCreateAndIssueInput {
   readonly correlationId: string | null;
   /** Expiry projection clock for the returned representation (replays read current state). */
   readonly clock?: QuoteClock | undefined;
-}
-
-/** Domain §9.2: SHA-256(JCS) of the issued snapshot fields. */
-export function semanticSnapshotHash(quote: QuoteOperationResult["quote"]): string {
-  return sha256Jcs({
-    quoteId: quote.quoteId,
-    quoteNumber: quote.quoteNumber,
-    currency: quote.currency,
-    issuerProfileId: (quote.issuance as Json).issuerProfileId,
-    issuedAt: (quote.issuance as Json).issuedAt,
-    validity: quote.validity,
-    customer: quote.customer,
-    lines: quote.lines,
-    shipping: quote.shipping,
-    totals: quote.totals
-  });
+  /**
+   * Configured issuance deadline (Idempotency §4.2, 1–72 h). Copied onto the
+   * operation at acceptance as `deadline_at = accepted_at + deadline`; a later
+   * configuration change never moves an accepted operation's deadline.
+   */
+  readonly issuanceDeadlineMs: number;
 }
 
 export async function appendAudit(
@@ -404,8 +394,9 @@ export async function freezeIssue(
 /**
  * Creates the pending issuance operation for a quote just frozen as `issuing`
  * and appends `quote.issue.accepted`. The operation is created last so it can
- * carry the snapshot hash read back from what was actually persisted
- * (quotes.current_operation_id is deferred).
+ * carry the semantic hash of the issued snapshot read back from what was
+ * actually persisted (quotes.current_operation_id is deferred); the worker
+ * recomputes the same hash with the same loader before every render.
  */
 export async function createIssuanceOperation(
   client: PoolClient,
@@ -414,21 +405,23 @@ export async function createIssuanceOperation(
     quoteId: string;
     operationId: string;
     allocation: IssueAllocation;
+    issuanceDeadlineMs: number;
     fromStatus: "draft" | null;
     overrideNote: string | null;
     data: Json;
   }
 ): Promise<QuoteOperationResult> {
   const { quoteId, operationId, allocation } = input;
-  const quote = await readQuote(client, quoteId);
+  const snapshotHash = issuedSnapshotHash(await loadIssuedSnapshot(client, quoteId));
   await client.query(
     `insert into quote_service.issuance_operations (
        operation_id, quote_id, operation_type, origin, status, generation, attempt_count, next_attempt_at,
        accepted_at, deadline_at, snapshot_hash, snapshot_hash_algorithm, created_at, updated_at
-     ) values ($1, $2, 'quote.issue', 'acceptance', 'pending', 0, 0, $3, $3, $3::timestamptz + $4::interval, $5,
-               'jcs-sha256-v2', $3, $3)`,
-    [operationId, quoteId, allocation.issuedAt, ISSUANCE_DEADLINE, semanticSnapshotHash(quote)]
+     ) values ($1, $2, 'quote.issue', 'acceptance', 'pending', 0, 0, $3, $3, $3::timestamptz + $4 * interval '1 millisecond', $5,
+               $6, $3, $3)`,
+    [operationId, quoteId, allocation.issuedAt, input.issuanceDeadlineMs, snapshotHash, ISSUED_SNAPSHOT_HASH_ALGORITHM]
   );
+  const quote = await readQuote(client, quoteId);
   const { validity } = allocation;
   const correlation = quote.externalCorrelation as Json;
   await appendAudit(client, {
@@ -523,6 +516,7 @@ export async function acceptCreateAndIssue(database: PostgresDatabase, input: Ac
       quoteId,
       operationId,
       allocation,
+      issuanceDeadlineMs: input.issuanceDeadlineMs,
       fromStatus: null,
       overrideNote: request.validityOverride?.note ?? null,
       data: {}

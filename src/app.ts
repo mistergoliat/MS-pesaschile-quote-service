@@ -155,7 +155,10 @@ export function buildApplication(
     // The email subsystem was retired with V1 and returns in R1.6.
     emailEnabled: false,
     startedAt: new Date(),
-    businessRoutes: [v2QuoteRoutes(database, overrides.quoteClock), ...(overrides.businessRoutes ?? [])]
+    businessRoutes: [
+      v2QuoteRoutes(database, { clock: overrides.quoteClock, issuanceDeadlineMs: env.QUOTE_ISSUANCE_DEADLINE_MS }),
+      ...(overrides.businessRoutes ?? [])
+    ]
   });
 
   let shutdownPromise: Promise<ShutdownOutcome> | null = null;

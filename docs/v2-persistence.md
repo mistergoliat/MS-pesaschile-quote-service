@@ -276,8 +276,9 @@ for the R1.5 routes, injected through `BuildApplicationOverrides.businessRoutes`
 |---|---|
 | V2 routes, closed schemas, error catalog (principal registry and scope enforcement: done in R1.5A, [principals.md](principals.md)) | R1.5 |
 | ~~Acceptance transaction for `POST /v2/quotes`~~ (R1.5A.2, `quote-v2-acceptance.ts`) and ~~drafts / issue-a-draft~~ (R1.5A.3, `quote-v2-drafts.ts`): done | — |
-| Issuance worker: claim / lease / fencing / backoff / deadline sweep, inline budget, content-addressed artifact write, manifest commit | R1.5 |
-| Operator retry procedure (A1, T10) and cancel-after-failed-issuance (T11) | R1.5 (state) / R1.6 (tooling) |
+| ~~Issuance operation core: claim / lease / fencing / backoff / deadline sweep, T10 state primitive~~ (R1.5B1, [issuance-operation-core.md](issuance-operation-core.md)): done, not yet composed | — |
+| Inline budget, content-addressed artifact write, manifest commit | R1.5B3 |
+| Operator retry tooling (A1, T10); cancel-after-failed-issuance (T11) is done (R1.5A.4) | R1.6 |
 | Expiry projection and materialization job | R1.5 |
 | V2 email delivery worker on `quote_deliveries` (lease, `unknown` outcome) | R1.6 |
 | Relocation of legacy artifacts into the content-addressed layout (re-hash, then update the storage key through a migration) | R1.6/R1.7 |

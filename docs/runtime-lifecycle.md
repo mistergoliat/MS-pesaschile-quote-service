@@ -194,8 +194,11 @@ already in progress.
 R1.4 retired the V1 jobs (V1 expiry, V1 email outbox, V1 orphan cleanup)
 together with the V1 persistence model. `BackgroundJobManager` currently runs
 no jobs; the V2 issuance worker and expiry materialization (R1.5) and email
-delivery (R1.6) register there. Every job runs only while the monitor reports
-ready. While unready, each job logs one `job.paused` and one `job.resumed` on
+delivery (R1.6) register there. The issuance worker and its deadline sweep
+exist since R1.5B1 but are not composed until B3
+([issuance-operation-core.md](issuance-operation-core.md)). Every job runs only while the monitor reports
+ready, except the issuance deadline sweep, which needs only the database and
+schema (`isPersistenceReady()`). While unready, each job logs one `job.paused` and one `job.resumed` on
 recovery, not one line per skipped tick. Iteration failures log `job.failed`
 with the error name and driver code only, because driver messages can echo
 row values.
@@ -259,6 +262,7 @@ same change. The integrity model, roles and V2 schema are documented in
 | `QUOTE_DOCUMENT_STORAGE_ROOT` | (required) | Single-host filesystem root. Must be a persistent volume |
 | `MIGRATION_DATABASE_URL` | falls back to `DATABASE_URL` | Read **only** by `db:migrate`, `db:check`, `db:grants` and `documents:verify` (migration principal). The server never reads it |
 | `HEALTHCHECK_DATABASE_TIMEOUT_MS` | 2000 | Deprecated alias of `HEALTH_PROBE_TIMEOUT_MS` |
+| `QUOTE_ISSUANCE_LEASE_MS`, `QUOTE_ISSUANCE_POLL_INTERVAL_MS`, `QUOTE_ISSUANCE_DEADLINE_MS`, `QUOTE_ISSUANCE_SYNC_BUDGET_MS` | 60000, 2000, 86400000, 5000 | Issuance operation (contract ranges, [issuance-operation-core.md §11](issuance-operation-core.md#11-configuration)) |
 
 `db:migrate` / `db:check` need only database configuration. The V1-only keys
 (`QUOTE_DOCUMENT_REF_SECRET` and the V1 expiry, cleanup and email worker

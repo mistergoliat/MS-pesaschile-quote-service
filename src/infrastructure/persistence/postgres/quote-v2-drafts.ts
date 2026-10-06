@@ -302,6 +302,7 @@ export async function issueDraft(database: PostgresDatabase, quoteId: string, in
       quoteId,
       operationId,
       allocation,
+      issuanceDeadlineMs: input.issuanceDeadlineMs,
       fromStatus: "draft",
       overrideNote: request.validityOverride?.note ?? null,
       data: { issuedDraftVersion: locked.version }
