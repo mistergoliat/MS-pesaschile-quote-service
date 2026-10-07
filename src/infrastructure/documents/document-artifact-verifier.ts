@@ -31,9 +31,13 @@ export interface ArtifactVerification {
   readonly quoteId: string;
   readonly origin: "issuance" | "legacy_v1";
   readonly status: ArtifactProblemStatus;
+  /** The manifest's recorded hash (operational metadata, not content). */
+  readonly pdfSha256: string;
 }
 
 export interface ArtifactVerificationReport {
+  /** False when `shouldContinue` stopped the scan between batches. */
+  readonly complete: boolean;
   readonly checked: number;
   readonly ok: number;
   readonly byStatus: Readonly<Record<ArtifactIntegrityStatus, number>>;
@@ -57,6 +61,8 @@ export async function verifyDocumentArtifacts(input: {
   readonly store: CommittedArtifactReader;
   readonly recordLegacyByteLength: boolean;
   readonly batchSize?: number;
+  /** Checked before each batch (the periodic job stops on shutdown or a lost dependency). */
+  readonly shouldContinue?: () => boolean;
 }): Promise<ArtifactVerificationReport> {
   const batchSize = input.batchSize ?? DEFAULT_BATCH_SIZE;
   const byStatus: Record<ArtifactIntegrityStatus, number> = {
@@ -72,8 +78,14 @@ export async function verifyDocumentArtifacts(input: {
   let checked = 0;
   let byteLengthsRecorded = 0;
   let after: string | null = null;
+  let complete = true;
 
   for (;;) {
+    if (input.shouldContinue && !input.shouldContinue()) {
+      complete = false;
+      break;
+    }
+
     const { rows }: { rows: ManifestRow[] } = await input.database.query<ManifestRow>(
       `select document_id, quote_id, origin, pdf_sha256, storage_key, byte_length::text
        from quote_service.quote_documents
@@ -94,7 +106,7 @@ export async function verifyDocumentArtifacts(input: {
       byStatus[result.status] += 1;
 
       if (result.status !== "OK") {
-        problems.push({ documentId: row.document_id, quoteId: row.quote_id, origin: row.origin, status: result.status });
+        problems.push({ documentId: row.document_id, quoteId: row.quote_id, origin: row.origin, status: result.status, pdfSha256: row.pdf_sha256 });
         continue;
       }
 
@@ -116,5 +128,5 @@ export async function verifyDocumentArtifacts(input: {
   }
 
   problems.sort((a, b) => a.quoteId.localeCompare(b.quoteId));
-  return { checked, ok: byStatus.OK, byStatus, problems, byteLengthsRecorded };
+  return { complete, checked, ok: byStatus.OK, byStatus, problems, byteLengthsRecorded };
 }

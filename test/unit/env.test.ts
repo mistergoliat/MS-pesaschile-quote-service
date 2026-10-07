@@ -135,3 +135,27 @@ describe("issuance configuration (Idempotency §4.2)", () => {
     expect(() => loadEnv({ ...MINIMAL_ENV, [key]: `${min}.5` })).toThrow();
   });
 });
+
+describe("R1.6D maintenance job configuration", () => {
+  it("defaults: expiry every 60 s, integrity scan disabled", () => {
+    const env = loadEnv(MINIMAL_ENV);
+
+    expect(env.QUOTE_EXPIRY_INTERVAL_MS).toBe(60_000);
+    expect(env.QUOTE_INTEGRITY_CHECK_INTERVAL_MS).toBe(0);
+  });
+
+  it.each([
+    ["QUOTE_EXPIRY_INTERVAL_MS", "1000", "3600000", "999", "3600001"],
+    ["QUOTE_INTEGRITY_CHECK_INTERVAL_MS", "1000", "604800000", "999", "604800001"]
+  ])("%s accepts [%s, %s] and rejects %s and %s", (key, min, max, below, above) => {
+    expect(() => loadEnv({ ...MINIMAL_ENV, [key]: min })).not.toThrow();
+    expect(() => loadEnv({ ...MINIMAL_ENV, [key]: max })).not.toThrow();
+    expect(() => loadEnv({ ...MINIMAL_ENV, [key]: below })).toThrow();
+    expect(() => loadEnv({ ...MINIMAL_ENV, [key]: above })).toThrow();
+  });
+
+  it("QUOTE_INTEGRITY_CHECK_INTERVAL_MS=0 explicitly disables the scan; negative values are rejected", () => {
+    expect(loadEnv({ ...MINIMAL_ENV, QUOTE_INTEGRITY_CHECK_INTERVAL_MS: "0" }).QUOTE_INTEGRITY_CHECK_INTERVAL_MS).toBe(0);
+    expect(() => loadEnv({ ...MINIMAL_ENV, QUOTE_INTEGRITY_CHECK_INTERVAL_MS: "-1" })).toThrow();
+  });
+});

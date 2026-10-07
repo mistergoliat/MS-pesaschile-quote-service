@@ -261,8 +261,9 @@ R1.4 therefore removed:
 - the V1 issuance adapter;
 - the related tests.
 
-`/v1/*` now returns 404. The formal `410 api_version_retired` remains with
-the R1.6/R1.7 cutover.
+`/v1/*` returned 404 until R1.6D, which implements the formal
+`410 api_version_retired` ([operational-hardening.md §5](operational-hardening.md#5-v1-http-retirement)).
+Going live with it is the R1.7 cutover.
 
 Kept for reuse: the domain arithmetic code, the PDF renderer and view model,
 the email template and Gmail adapter, and the generic job runner.

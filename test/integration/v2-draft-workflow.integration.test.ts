@@ -84,7 +84,7 @@ async function start(options: { migrate?: boolean; databaseUrl?: string; beforeL
       // Test-only read probe (the public read routes arrive in A.4) applying the production visibility rule.
       businessRoutes: [
         (app) =>
-          app.get("/probe/quotes/:quoteId", { config: { requiredScope: "quotes:read" } }, async (request, reply) => {
+          app.get("/probe/quotes/:quoteId", { config: { requiredScope: "quotes:read", capability: "PERSISTENCE" } }, async (request, reply) => {
             const { rows } = await holder.context!.database.query<{ created_by_principal_id: string }>(
               "select created_by_principal_id from quote_service.quotes where quote_id = $1",
               [(request.params as { quoteId: string }).quoteId]

@@ -38,6 +38,15 @@ const BUILD_TIMEOUT_MS = Number.isFinite(configuredBuildTimeoutMs) ? configuredB
 // second run not applicable; documents:repair of the artifact deleted by the
 // integrity phase (dry run, byte-exact restore, document served), integrity
 // conflict on the tampered one (never overwritten), legacy manifest refused.
+// R1.6D: /v1/* answers 410 api_version_retired for every method (not 404);
+// then an isolated-config container whose renderer is down at startup (a
+// tmpfs hides the pinned fonts) proves the capability split in the production
+// image: readiness 503 renderer, reads and the verified document still 200,
+// issuance 503; the issuance backlog seeded by a budget-0 container is
+// reported by workers.issuance while the worker is paused; a quote past its
+// validity is held (lock) so workers.expiry reports it, then materialized
+// (expired_at = validUntilExclusive, one quote.expired); the opt-in integrity
+// job detects a deleted artifact and the tampered one, read only.
 const PHASE_TIMEOUT_MS = {
   build: BUILD_TIMEOUT_MS,
   cleanup: 180_000,
@@ -61,6 +70,7 @@ const PHASE_TIMEOUT_MS = {
   crashAfterCommit: 120_000,
   integrity: 60_000,
   operatorControls: 240_000,
+  operationalHardening: 240_000,
   gracefulShutdown: 30_000
 };
 
@@ -86,7 +96,8 @@ const phaseDefinitions = [
   { key: "crashAfterCommit", label: "PHASE 19 kill after T5 commit, before the response" },
   { key: "integrity", label: "PHASE 20 tampered and missing artifacts" },
   { key: "operatorControls", label: "PHASE 21 operator controls (issuance:failed, issuance:retry, documents:repair)" },
-  { key: "gracefulShutdown", label: "PHASE 22 graceful shutdown" }
+  { key: "operationalHardening", label: "PHASE 22 operational hardening (capabilities, metrics, expiry, integrity job)" },
+  { key: "gracefulShutdown", label: "PHASE 23 graceful shutdown" }
 ];
 
 const imageTag = process.env.SMOKE_IMAGE_TAG ?? "pesaschile-quote-service:t06-smoke";
@@ -106,7 +117,9 @@ const state = {
     appRecoverBefore: `quote-smoke-app-d-${suffix}`,
     appCrashAfter: `quote-smoke-app-e-${suffix}`,
     appFinal: `quote-smoke-app-f-${suffix}`,
-    appOperator: `quote-smoke-app-g-${suffix}`
+    appOperator: `quote-smoke-app-g-${suffix}`,
+    appSeed: `quote-smoke-app-h-${suffix}`,
+    appHardening: `quote-smoke-app-i-${suffix}`
   },
   paths: {
     storageRoot: "/var/lib/pesaschile/quote-documents"
@@ -853,7 +866,7 @@ async function runPhase(key, timeoutMs, work) {
   }
 }
 
-async function startApp(containerName, timeoutMs) {
+async function startApp(containerName, timeoutMs, options = {}) {
   await docker(
     [
       "run",
@@ -866,7 +879,8 @@ async function startApp(containerName, timeoutMs) {
       "127.0.0.1::3000",
       "-v",
       `${state.names.volume}:${state.paths.storageRoot}`,
-      ...toDockerEnvArgs(buildAppEnv()),
+      ...(options.dockerArgs ?? []),
+      ...toDockerEnvArgs({ ...buildAppEnv(), ...options.env }),
       imageTag
     ],
     {
@@ -1230,8 +1244,17 @@ async function runSmoke() {
   });
 
   await runPhase("v1Retired", PHASE_TIMEOUT_MS.v1Retired, async () => {
-    const response = await fetchJson("/v1/quotes", { headers: { Authorization: authHeader }, timeoutMs: 5_000 });
-    assert(response.status === 404, `Expected retired V1 route to be absent (404), got ${response.status}`);
+    // R1.6D: Domain §12 api_version_retired for every /v1 path and method, no credential needed.
+    for (const [method, path] of [["GET", "/v1/quotes"], ["POST", "/v1/quotes"], ["PATCH", "/v1/quotes/x/draft"], ["DELETE", "/v1/anything/nested"], ["GET", "/v1"], ["GET", "/v1/"]]) {
+      const response = await fetchJson(path, { method, timeoutMs: 5_000, ...(method === "POST" || method === "PATCH" ? { body: { v1: true } } : {}) });
+      assert(response.status === 410, `${method} ${path}: expected 410, got ${response.status}`);
+      assert(response.body?.error?.code === "api_version_retired" && typeof response.body.error.requestId === "string", `${method} ${path}: ${response.text}`);
+    }
+    const authenticated = await fetchJson("/v1/quotes", { headers: { Authorization: authHeader }, timeoutMs: 5_000 });
+    assert(authenticated.status === 410, `Authenticated V1 call: ${authenticated.status}`);
+    for (const path of ["/v10", "/v11/quotes"]) {
+      assert((await fetchJson(path, { timeoutMs: 5_000 })).status === 404, `${path} must not be retired`);
+    }
   });
 
   await runPhase("restart", PHASE_TIMEOUT_MS.restart, async () => {
@@ -1544,6 +1567,110 @@ async function runSmoke() {
     const logs = await readLogs(state.app.activeContainer);
     assert(!/"event":"(email|delivery)\.(sent|send)/.test(logs) && (await queryDatabase("select count(*) from quote_service.quote_deliveries;")) === "0", "An email was sent or queued");
     state.summary.operatorControls = { t6QuoteId, t6OperationId, newOperationId, t12OperationId, repairedQuoteId: missingQuoteId };
+  });
+
+  await runPhase("operationalHardening", PHASE_TIMEOUT_MS.operationalHardening, async () => {
+    const createBody = JSON.parse(readFileSync("docs/v2/examples/create-and-issue.request.json", "utf8"));
+    const sales = { Authorization: `Bearer ${state.credentials.salesToken}` };
+    const supervisor = { Authorization: `Bearer ${state.credentials.supervisorToken}` };
+    const health = async () => (await fetchJson("/health/dependencies", { headers: { Authorization: authHeader }, timeoutMs: 5_000 })).body;
+    const waitFor = async (predicate, timeoutMs, message) => {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const value = await predicate();
+        if (value) {
+          return value;
+        }
+        assert(Date.now() < deadline, message);
+        await sleep(500);
+      }
+    };
+
+    // Seed an issuance backlog: accepted with budget 0 by a container whose worker never polls in time.
+    await stopActiveApp();
+    state.app.syncBudgetMs = "0";
+    await startApp(state.names.appSeed, 60_000, { env: { QUOTE_ISSUANCE_POLL_INTERVAL_MS: "60000" } });
+    await waitForReadiness(60_000);
+    const seeded = [];
+    for (let index = 0; index < 2; index += 1) {
+      const created = await fetchJson("/v2/quotes", { method: "POST", headers: { ...sales, "Idempotency-Key": `smoke-backlog-${index}-${suffix}` }, body: createBody, timeoutMs: 10_000 });
+      assert(created.status === 202, `Backlog seed: ${created.status} ${created.text}`);
+      seeded.push(created.body.operation.operationId);
+    }
+    await stopActiveApp();
+
+    // Isolated config: renderer down from startup (fonts hidden), integrity job on, expiry every 10 s.
+    await startApp(state.names.appHardening, 60_000, {
+      dockerArgs: ["--tmpfs", "/app/dist/infrastructure/documents/assets/fonts"],
+      env: { QUOTE_INTEGRITY_CHECK_INTERVAL_MS: "3000", QUOTE_EXPIRY_INTERVAL_MS: "10000" }
+    });
+    await waitForHealth(30_000);
+    const ready = await waitFor(async () => {
+      const response = await fetchJson("/health/ready", { timeoutMs: 5_000 });
+      return response.body?.checks?.database === "ok" ? response : null;
+    }, 30_000, "Readiness never saw the database");
+    assert(ready.status === 503 && JSON.stringify(ready.body) === JSON.stringify({ status: "not_ready", checks: { database: "ok", schema: "ok", artifactStorage: "ok", renderer: "fail", lifecycle: "ok" } }), `Renderer-down readiness: ${ready.text}`);
+
+    // Capability split: reads and verified documents work; only issuance is refused.
+    const readable = state.summary.v2Draft.quoteId;
+    assert((await fetchJson(`/v2/quotes/${readable}`, { headers: supervisor })).status === 200, "Quote read blocked by the renderer outage");
+    assert((await fetchJson("/v2/quotes?sourceSystem=sales-integration", { headers: sales })).status === 200, "List blocked by the renderer outage");
+    await verifyDocumentEndpoint(readable, state.credentials.supervisorToken);
+    const refused = await fetchJson("/v2/quotes", { method: "POST", headers: { ...sales, "Idempotency-Key": `smoke-refused-${suffix}` }, body: createBody });
+    assert(refused.status === 503 && refused.body.error.code === "dependency_unavailable" && refused.body.error.details.dependency === "renderer", `Issuance under renderer outage: ${refused.text}`);
+    const retired = await fetchJson("/v1/quotes", { method: "POST", body: {} });
+    assert(retired.status === 410, `V1 under renderer outage: ${retired.status}`);
+
+    // Issuance backlog is reported while the worker is paused (the persistence-only sweep measures it).
+    const issuanceWorker = await waitFor(async () => {
+      const worker = (await health()).workers.issuance;
+      return worker.queueDepth === 2 ? worker : null;
+    }, 30_000, "workers.issuance never reported the seeded backlog");
+    assert(issuanceWorker.enabled === true && issuanceWorker.oldestPendingAgeSeconds >= 0, `issuance worker: ${JSON.stringify(issuanceWorker)}`);
+    assert((await queryDatabase(`select count(*) from quote_service.issuance_operations where operation_id in ('${seeded.join("','")}') and status = 'pending' and attempt_count = 0;`)) === "2", "The paused worker attempted issuance");
+
+    // Expiry: move one issued quote past its validity and hold its row so the job must skip it.
+    const expiring = state.summary.v2Draft.quoteId;
+    const versionBefore = Number(await queryDatabase(`select version from quote_service.quotes where quote_id = '${expiring}';`));
+    const held = await holdLock(
+      `set local session_replication_role = replica; update quote_service.quotes set issued_at = date_trunc('milliseconds', now()) - interval '10 days', valid_until_exclusive = date_trunc('milliseconds', now()) - interval '1 hour' where quote_id = '${expiring}'; commit; begin; select 1 from quote_service.quotes where quote_id = '${expiring}' for update`
+    );
+    try {
+      const projected = await fetchJson(`/v2/quotes/${expiring}`, { headers: supervisor });
+      assert(projected.body.status === "expired" && projected.body.version === versionBefore, `Projection before materialization: ${projected.text}`);
+      const expiryWorker = await waitFor(async () => {
+        const worker = (await health()).workers.expiry;
+        return worker.lastPollAt !== null && worker.queueDepth === 1 ? worker : null;
+      }, 30_000, "workers.expiry never reported the held expired quote");
+      assert(expiryWorker.oldestPendingAgeSeconds >= 3600, `expiry worker: ${JSON.stringify(expiryWorker)}`);
+    } finally {
+      await held.release();
+    }
+    await waitForQuery(`select status from quote_service.quotes where quote_id = '${expiring}';`, "expired", 30_000, "Expiry was not materialized");
+    assert((await queryDatabase(`select (expired_at = valid_until_exclusive) || ' ' || version from quote_service.quotes where quote_id = '${expiring}';`)) === `true ${versionBefore + 1}`, "expired_at or version wrong");
+    assert((await queryDatabase(`select count(*) || ' ' || min(principal_id) from quote_service.quote_audit_events where quote_id = '${expiring}' and event_type = 'quote.expired';`)) === "1 system", "quote.expired audit");
+    await waitFor(async () => (await health()).workers.expiry.queueDepth === 0, 30_000, "workers.expiry did not drain");
+
+    // Integrity job (opt-in): a deleted artifact and the tampered one are reported; nothing is changed.
+    const deleted = await verifyArtifact(state.summary.operatorControls.t6QuoteId);
+    const tables = "select string_agg(document_id || pdf_sha256 || byte_length, ',' order by document_id) from quote_service.quote_documents;";
+    const manifestsBefore = await queryDatabase(tables);
+    await docker(["exec", state.app.activeContainer, "node", "-e", "require('fs').rmSync(process.argv[1])", `${state.paths.storageRoot}/${deleted.storageKey}`], { timeoutMs: 20_000 });
+    const failures = await waitFor(async () => {
+      const lines = (await readLogs(state.app.activeContainer)).split("\n").filter((line) => line.includes('"source":"integrity_scan"')).map((line) => JSON.parse(line.slice(line.indexOf("{"))));
+      const missing = lines.find((line) => line.quoteId === state.summary.operatorControls.t6QuoteId && line.category === "MISSING");
+      const tampered = lines.find((line) => line.quoteId === state.summary.v2Quote.quoteId && line.category === "HASH_MISMATCH");
+      return missing && tampered ? [missing, tampered] : null;
+    }, 60_000, "The integrity job did not report the deleted and tampered artifacts");
+    assert(failures.every((line) => line.event === "document.integrity_failed" && /^[0-9a-f]{64}$/.test(line.pdfSha256)), `integrity lines: ${JSON.stringify(failures)}`);
+    const logs = await readLogs(state.app.activeContainer);
+    assert(logs.includes('"event":"document.integrity_scan_completed"'), "No integrity scan summary");
+    assert(!logs.includes(state.paths.storageRoot) && !logs.includes("artifacts/sha256"), "Integrity logs leaked a path");
+    assert((await queryDatabase(tables)) === manifestsBefore, "The integrity job changed a manifest");
+    const stillMissing = await docker(["exec", state.app.activeContainer, "node", "-e", "process.stdout.write(String(require('fs').existsSync(process.argv[1])))", `${state.paths.storageRoot}/${deleted.storageKey}`], { timeoutMs: 20_000 });
+    assert(stillMissing.stdout.trim() === "false", "The integrity job regenerated an artifact");
+    assert(!/"event":"(email|delivery)\.(sent|send)/.test(logs), "An email was sent");
+    state.summary.operationalHardening = { seededBacklog: seeded.length, expiredQuoteId: expiring, integrityDetected: failures.map((line) => line.category) };
   });
 
   await runPhase("gracefulShutdown", PHASE_TIMEOUT_MS.gracefulShutdown, async () => {

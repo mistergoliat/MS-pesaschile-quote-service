@@ -935,7 +935,7 @@ describe("shutdown and activation safety", () => {
         attemptBody: body,
         leaseOwner: "worker-a",
         settings: issuanceSettings(harness.env),
-        readiness: { isReady: () => true, isPersistenceReady: () => true },
+        readiness: { canRun: () => true },
         lifecycle,
         logger: silentLogger
       });

@@ -16,9 +16,10 @@ import { quoteIdOf, resultOf, validateHeaders, validateRead } from "./v2-quote-r
  * binding → 503 `email_provider` when not configured → 404 visibility → 422
  * → 409 → accept (see `requestEmailDelivery`).
  *
- * Readiness: these routes sit behind the existing global business gate
- * (database, schema, storage, renderer). Queueing only needs persistence; the
- * capability-specific gate is R1.6D (pre-flight audit §21).
+ * Readiness (R1.6D capabilities): the request is DELIVERY_REQUEST and the read
+ * PERSISTENCE, so neither depends on storage, the renderer or provider HEALTH.
+ * Whether a provider is CONFIGURED is not a gate: it is checked inside the
+ * request after the binding lookup (A6), so a bound key still replays.
  */
 export function v2DeliveryRoutes(
   database: PostgresDatabase,
@@ -33,7 +34,7 @@ export function v2DeliveryRoutes(
   return (app) => {
     app.post(
       "/v2/quotes/:quoteId/deliveries/email",
-      { config: { requiredScope: "quotes:delivery:email" }, preValidation: validateHeaders },
+      { config: { requiredScope: "quotes:delivery:email", capability: "DELIVERY_REQUEST" }, preValidation: validateHeaders },
       async (request, reply) => {
         const outcome = await requestEmailDelivery(database, quoteIdOf(request), {
           principal: request.principal!,
@@ -54,7 +55,7 @@ export function v2DeliveryRoutes(
 
     app.get(
       "/v2/quotes/:quoteId/deliveries/:deliveryId",
-      { config: { requiredScope: "quotes:read" }, preValidation: validateRead(null) },
+      { config: { requiredScope: "quotes:read", capability: "PERSISTENCE" }, preValidation: validateRead(null) },
       async (request) =>
         getVisibleDelivery(database, request.principal!, quoteIdOf(request), (request.params as { deliveryId: string }).deliveryId)
     );

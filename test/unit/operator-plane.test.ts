@@ -145,10 +145,10 @@ describe("operator controls are CLI only (no HTTP surface, no auto repair)", () 
       await context.app.ready();
       const routes = context.app.printRoutes({ commonPrefix: false });
       expect(routes).not.toMatch(/retry|repair|failed|operator|admin|integrity/i);
-      // The route tree's segments are exactly those of the frozen V2 API and health.
+      // The route tree's segments are exactly those of the frozen V2 API, health and the V1 410 catch-all (R1.6D).
       const segments = new Set([...routes.matchAll(/(\/[^\s(]*)/g)].map((match) => match[1]!));
       expect(segments.size).toBeGreaterThan(10);
-      expect([...segments].filter((segment) => !/^\/(health|live|ready|dependencies|v2\/|drafts|:quoteId|draft|document|deliveries\/|issue|cancel|audit)/.test(segment))).toEqual([]);
+      expect([...segments].filter((segment) => !/^\/(health|live|ready|dependencies|v2\/|drafts|:quoteId|draft|document|deliveries\/|issue|cancel|audit|v1$|v1\/\*$)/.test(segment))).toEqual([]);
     } finally {
       await context.app.close();
     }

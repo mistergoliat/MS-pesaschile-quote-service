@@ -209,13 +209,13 @@ cancel is answered from its binding and adds none. A second cancel is `409`.
 The quote moves exactly once (the cancel itself). Draft (T7) and
 failed-issuance (T11) cancels touch no delivery.
 
-## 10. Interim readiness (to be corrected in R1.6D)
+## 10. Readiness (corrected in R1.6D)
 
-The delivery routes sit behind the existing global business gate (database,
-schema, artifact storage, renderer, lifecycle). Queueing needs only
-persistence, so a renderer or storage outage currently returns `503` for
-delivery requests and reads as well. This is the known interim dependency.
-The capability-specific gate is R1.6D (pre-flight audit §21).
+The request route declares `DELIVERY_REQUEST` and the read `PERSISTENCE`
+(lifecycle + database + schema only), so a renderer or storage outage no
+longer blocks them. Whether a provider is configured stays inside the
+request, after the binding lookup (A6), and is not part of the gate. See
+[operational-hardening.md §1](operational-hardening.md#1-capability-model).
 `/health/ready` is unchanged.
 
 ## 11. Evidence

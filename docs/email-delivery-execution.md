@@ -353,8 +353,8 @@ All completions are fenced on `delivery_id`, `generation`, `lease_owner` and
   timeouts and is never put back to `pending`. If the process is killed, the
   lease expiry makes the row `unknown`.
 - **`/health/ready` is unchanged.** Email is never part of readiness,
-  business-route gating, quote reads or `GET /document`. The global
-  renderer over-gating stays R1.6D debt.
+  business-route gating, quote reads or `GET /document`. The renderer
+  over-gating was removed in R1.6D (capability gates).
 - **`emailProvider`** (frozen `DependencyStatus`) is never probed by sending
   anything. It comes from configuration and the latest worker outcome:
   `disabled`; `up` (configured, or after an acceptance, which also sets
@@ -367,7 +367,7 @@ All completions are fenced on `delivery_id`, `generation`, `lease_owner` and
   row became due, measured on the database clock, or null when none is due.
   Both are measured by the sweep. Future-scheduled retries and
   `sending`/`sent`/`failed`/`unknown` rows are excluded. Issuance and expiry
-  metrics remain 0/null until R1.6D.
+  use the same "due now" definition since R1.6D.
 
 ## 13. No automatic email; no reconciliation
 
@@ -400,7 +400,7 @@ their own tests used them:
 Kept: the immutable migrations, the content-addressed and legacy document
 storage primitives, the brand asset registry and resolver (logo),
 `html-escaping.ts`, and `display-formatting.ts` (used by the PDF).
-`clock-port.ts` / `system-clock.ts` are unrelated leftovers and stay for the
+`clock-port.ts` / `system-clock.ts` were unrelated leftovers, removed in the
 R1.6D cleanup.
 
 ## 15. Evidence
@@ -421,8 +421,8 @@ R1.6D cleanup.
 | R1.6A delivery request core | **CLOSED** |
 | R1.6B delivery execution | **CLOSED** |
 | R1.6C operator controls | **CLOSED** ([operator-controls.md](operator-controls.md)) |
-| R1.6D readiness, jobs, hardening | **NEXT** |
-| R1.7 production readiness | PENDING |
+| R1.6D readiness, jobs, hardening | **CLOSED** ([operational-hardening.md](operational-hardening.md)) |
+| R1.7 production readiness | NEXT |
 
 **R1.6C**
 

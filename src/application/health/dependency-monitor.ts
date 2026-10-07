@@ -43,6 +43,29 @@ export type BusinessGateRejection =
     }
   | { readonly code: "schema_not_ready" };
 
+/**
+ * Internal capability a route or job needs (R1.6D). Never exposed by the API:
+ * `/health/ready` keeps its frozen five checks and still means "the full
+ * issuance write path". Every capability includes lifecycle + database +
+ * schema (`PERSISTENCE`); the rest add only the probed dependencies below.
+ * The email provider is never part of a gate: whether one is configured is
+ * decided by composition (send runner) and by the delivery request itself
+ * (`503 email_provider` after the binding lookup, A6), and its health is the
+ * send runner's own outcome classification.
+ */
+export type Capability = "PERSISTENCE" | "DOCUMENT_READ" | "ISSUANCE" | "DELIVERY_REQUEST" | "DELIVERY_SEND" | "DEADLINE_SWEEP";
+
+export const CAPABILITIES: readonly Capability[] = ["PERSISTENCE", "DOCUMENT_READ", "ISSUANCE", "DELIVERY_REQUEST", "DELIVERY_SEND", "DEADLINE_SWEEP"];
+
+const CAPABILITY_DEPENDENCIES: Record<Capability, readonly ("artifactStorage" | "renderer")[]> = {
+  PERSISTENCE: [],
+  DEADLINE_SWEEP: [],
+  DELIVERY_REQUEST: [],
+  DOCUMENT_READ: ["artifactStorage"],
+  DELIVERY_SEND: ["artifactStorage"],
+  ISSUANCE: ["artifactStorage", "renderer"]
+};
+
 export interface DependencyMonitorConfig {
   /** Probe cadence while every dependency is healthy. */
   readonly intervalMs: number;
@@ -187,23 +210,19 @@ export class DependencyMonitor {
     return this.readiness().status === "ready";
   }
 
-  /**
-   * Database reachable, schema at the expected head and not shutting down:
-   * enough for database-only work (the issuance deadline sweep), which must
-   * not pause during a storage or renderer outage. Never used for `/health/ready`.
-   */
-  isPersistenceReady(): boolean {
-    return !this.lifecycle.isShuttingDown && this.records.database.status === "up" && this.schemaState === "READY";
+  /** True when `capability` may run now. Never used for `/health/ready`. */
+  canRun(capability: Capability): boolean {
+    return this.gate(capability) === null;
   }
 
-  /**
-   * Persistence plus artifact storage: enough to read committed documents
-   * (the email delivery send runner, R1.6B), so a renderer outage does not
-   * pause email. Never used for `/health/ready` or route gating (the
-   * capability-gate refactor is R1.6D).
-   */
+  /** `PERSISTENCE`: database-only work (reads, drafts, cancel, sweeps, expiry). */
+  isPersistenceReady(): boolean {
+    return this.canRun("PERSISTENCE");
+  }
+
+  /** `DOCUMENT_READ`: persistence plus artifact storage (document GET, integrity scan, email send). */
   isDocumentReadReady(): boolean {
-    return this.isPersistenceReady() && this.records.artifactStorage.status === "up";
+    return this.canRun("DOCUMENT_READ");
   }
 
   readiness(): ReadinessSnapshot {
@@ -221,8 +240,11 @@ export class DependencyMonitor {
     };
   }
 
-  /** First failing requirement in a fixed order, or null when business traffic may proceed. */
-  businessGate(): BusinessGateRejection | null {
+  /**
+   * First failing requirement of `capability`, in a fixed order (lifecycle →
+   * database → schema → artifact storage → renderer), or null when it may proceed.
+   */
+  gate(capability: Capability): BusinessGateRejection | null {
     if (this.lifecycle.isShuttingDown) {
       return { code: "dependency_unavailable", dependency: "lifecycle" };
     }
@@ -235,15 +257,13 @@ export class DependencyMonitor {
       return { code: "schema_not_ready" };
     }
 
-    if (this.records.artifactStorage.status !== "up") {
-      return { code: "dependency_unavailable", dependency: "artifactStorage" };
-    }
+    const failing = CAPABILITY_DEPENDENCIES[capability].find((dependency) => this.records[dependency].status !== "up");
+    return failing ? { code: "dependency_unavailable", dependency: failing } : null;
+  }
 
-    if (this.records.renderer.status !== "up") {
-      return { code: "dependency_unavailable", dependency: "renderer" };
-    }
-
-    return null;
+  /** Compatibility alias: the full issuance gate (the pre-R1.6D business gate). */
+  businessGate(): BusinessGateRejection | null {
+    return this.gate("ISSUANCE");
   }
 
   details(): DependencyDetailsSnapshot {

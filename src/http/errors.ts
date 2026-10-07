@@ -32,7 +32,8 @@ type HttpErrorCode =
   | "payload_too_large"
   | "dependency_unavailable"
   | "schema_not_ready"
-  | "document_storage_failed";
+  | "document_storage_failed"
+  | "api_version_retired";
 
 interface HttpErrorPayload {
   readonly code: HttpErrorCode;
@@ -180,9 +181,13 @@ export function sendErrorResponse(
     // (event document.integrity_failed, ids and status only, never a path).
     request.log.warn({ code: httpError.code, requestId: request.id, route: request.routeOptions.url }, "Document not served");
   } else if (httpError.statusCode >= 500) {
+    // Name and driver/framework code only (R1.6D): an error's message, stack
+    // and driver fields (`detail`, `where`, …) can echo row values, customer
+    // data or connection details.
     request.log.error(
       {
-        err: error,
+        errorName: error instanceof Error ? error.name : "unknown",
+        errorCode: typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : null,
         requestId: request.id,
         route: request.routeOptions.url
       },

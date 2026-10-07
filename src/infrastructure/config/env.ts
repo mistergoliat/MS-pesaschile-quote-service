@@ -50,6 +50,19 @@ const envSchema = z
   QUOTE_ISSUANCE_POLL_INTERVAL_MS: z.coerce.number().int().min(500).max(60_000).default(2_000),
   QUOTE_ISSUANCE_DEADLINE_MS: z.coerce.number().int().min(3_600_000).max(259_200_000).default(86_400_000),
   QUOTE_ISSUANCE_SYNC_BUDGET_MS: z.coerce.number().int().min(0).max(10_000).default(5_000),
+  // Expiry materialization cadence (R1.6D, T9). Reads already project expiry,
+  // so this only bounds how long stored state and audit lag the boundary.
+  // Implementation configuration, not an API invariant.
+  QUOTE_EXPIRY_INTERVAL_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
+  // Periodic document integrity scan (R1.6D, W7): in-process and opt-in.
+  // 0 (default) disables it; the production cadence is an R1.7 decision.
+  QUOTE_INTEGRITY_CHECK_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .refine((value) => value === 0 || (value >= 1_000 && value <= 604_800_000), {
+      message: "QUOTE_INTEGRITY_CHECK_INTERVAL_MS must be 0 (disabled) or between 1000 and 604800000"
+    })
+    .default(0),
   // V2 email delivery (R1.6B). `disabled` (default): no sender, no send
   // runner, new delivery requests answer 503 email_provider; the persistence
   // expired-lease sweep still runs. `gmail`: the Gmail adapter and the send

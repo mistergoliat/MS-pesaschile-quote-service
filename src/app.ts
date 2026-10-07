@@ -28,7 +28,7 @@ import { FilesystemContentAddressedArtifactStore } from "./infrastructure/docume
 import { NativePdfRenderer } from "./infrastructure/documents/native-pdf-renderer";
 import { GmailMailSender } from "./infrastructure/email/gmail-mail-sender";
 import { renderEmailEnvelopeHtml } from "./infrastructure/email/quote-email-envelope-template";
-import { PostgresIssuanceOperationRepository } from "./infrastructure/persistence/postgres/issuance-operations";
+import { issuanceQueueMetrics, PostgresIssuanceOperationRepository } from "./infrastructure/persistence/postgres/issuance-operations";
 import { buildConnectionConfig, PostgresDatabase } from "./infrastructure/persistence/postgres/postgres";
 import { PostgresDependencyProbe } from "./infrastructure/persistence/postgres/postgres-dependency-probe";
 import type { QuoteClock } from "./infrastructure/persistence/postgres/quote-clock";
@@ -38,6 +38,8 @@ import { ApplicationLifecycleState } from "./infrastructure/runtime/application-
 import { BackgroundJobManager } from "./infrastructure/runtime/background-job-manager";
 import { createDeliveryJobs, type DeliveryJobs } from "./infrastructure/runtime/delivery-jobs";
 import { createIssuanceJobs, type IssuanceJobs } from "./infrastructure/runtime/issuance-jobs";
+import { createDocumentIntegrityJob, createExpiryJob, type ExpiryJob } from "./infrastructure/runtime/maintenance-jobs";
+import type { PeriodicJobRunner } from "./infrastructure/runtime/periodic-job-runner";
 import { isOperationActive } from "./infrastructure/persistence/postgres/quote-v2-reads";
 import { sendErrorResponse, toHttpError } from "./http/errors";
 import { registerRoutes, type BusinessRouteRegistrar } from "./http/routes";
@@ -56,6 +58,10 @@ export interface ApplicationContext {
   issuance: IssuanceJobs | null;
   /** Null only when a test disabled delivery execution. */
   delivery: DeliveryJobs | null;
+  /** Expiry materialization (always composed). */
+  expiry: ExpiryJob;
+  /** Opt-in periodic integrity scan; null unless QUOTE_INTEGRITY_CHECK_INTERVAL_MS > 0. */
+  documentIntegrity: PeriodicJobRunner | null;
   /** The composed mail sender (null: email disabled). */
   mailSender: MailSenderPort | null;
   lifecycleState: ApplicationLifecycleState;
@@ -135,6 +141,9 @@ export interface BuildApplicationOverrides {
  * R1.6B: explicitly requested email deliveries are executed by the delivery
  * worker (when a sender is configured) and expired `sending` leases are
  * resolved to `unknown` by a persistence-only sweep. Issuance never sends.
+ * R1.6D: every route and job is gated on the capability it needs (not on
+ * full readiness); expiry is materialized by a persistence-only job; the
+ * integrity scan is opt-in and detection only; /v1/* answers 410.
  */
 export function buildApplication(
   env: AppEnv,
@@ -149,6 +158,9 @@ export function buildApplication(
     keepAliveTimeout: env.HTTP_KEEP_ALIVE_TIMEOUT_MS,
     logger: {
       level: env.LOG_LEVEL,
+      // Defense in depth only (R1.6D): nothing logs request headers, and
+      // credentials or raw idempotency keys are never passed to a logger.
+      redact: { paths: ["req.headers.authorization", "req.headers.cookie", 'req.headers["idempotency-key"]'], censor: "[redacted]" },
       ...(overrides.logStream ? { stream: overrides.logStream } : {})
     },
     routerOptions: {
@@ -208,6 +220,7 @@ export function buildApplication(
           leaseOwner: createWorkerInstanceId(env.SERVICE_NAME),
           settings,
           readiness: dependencyMonitor,
+          measureQueue: () => issuanceQueueMetrics(database),
           lifecycle: lifecycleState,
           logger: app.log
         });
@@ -266,10 +279,30 @@ export function buildApplication(
         });
       })();
 
+  const expiry = createExpiryJob({
+    database,
+    intervalMs: env.QUOTE_EXPIRY_INTERVAL_MS,
+    readiness: dependencyMonitor,
+    lifecycle: lifecycleState,
+    logger: app.log
+  });
+  const documentIntegrity =
+    env.QUOTE_INTEGRITY_CHECK_INTERVAL_MS > 0
+      ? createDocumentIntegrityJob({
+          database,
+          store: artifactStorage,
+          intervalMs: env.QUOTE_INTEGRITY_CHECK_INTERVAL_MS,
+          readiness: dependencyMonitor,
+          logger: app.log
+        })
+      : null;
+
   const backgroundJobs = new BackgroundJobManager({
     ...(issuance ? { issuance: issuance.issuance, issuanceDeadlineSweep: issuance.issuanceDeadlineSweep } : {}),
     ...(deliveryJobs ? { deliveryOutcomeSweep: deliveryJobs.deliveryOutcomeSweep } : {}),
-    ...(deliveryJobs?.emailDelivery ? { emailDelivery: deliveryJobs.emailDelivery } : {})
+    ...(deliveryJobs?.emailDelivery ? { emailDelivery: deliveryJobs.emailDelivery } : {}),
+    expiry: expiry.runner,
+    ...(documentIntegrity ? { documentIntegrity } : {})
   });
 
   app.decorateRequest("principal", null);
@@ -320,7 +353,11 @@ export function buildApplication(
     // Health reports delivery execution: provider status from the worker's
     // outcomes (never probed), queue metrics from the database.
     emailProvider: () => providerHealth.view(),
-    emailQueueMetrics: () => deliveryJobs?.queueMetrics() ?? null,
+    queueMetrics: {
+      issuance: () => issuance?.queueMetrics() ?? null,
+      expiry: () => expiry.queueMetrics(),
+      emailDelivery: () => deliveryJobs?.queueMetrics() ?? null
+    },
     startedAt: new Date(),
     businessRoutes: [
       v2QuoteRoutes(database, {
@@ -390,6 +427,8 @@ export function buildApplication(
     backgroundJobs,
     issuance,
     delivery: deliveryJobs,
+    expiry,
+    documentIntegrity,
     mailSender,
     lifecycleState,
     dependencyMonitor,

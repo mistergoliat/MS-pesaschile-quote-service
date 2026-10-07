@@ -45,7 +45,8 @@
     "pdf:concurrency-smoke": "tsx src/scripts/pdf-concurrency-smoke.ts",
     "pdf:determinism": "tsx src/scripts/pdf-determinism.ts",
     "pdf:determinism:runtime": "node dist/scripts/pdf-determinism.js",
-    "smoke:docker": "node scripts/docker-smoke.mjs"
+    "smoke:docker": "node scripts/docker-smoke.mjs",
+    "rehearsal:migration": "node scripts/migration-rehearsal.mjs"
   },
   "engines": {
     "node": ">=24.0.0 <25"
