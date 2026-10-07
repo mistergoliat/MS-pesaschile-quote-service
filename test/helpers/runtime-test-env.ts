@@ -25,7 +25,6 @@ export function buildRuntimeTestEnv(input: {
     HEALTH_PROBE_INTERVAL_MS: "1000",
     HEALTH_PROBE_RETRY_MIN_MS: "100",
     HEALTH_PROBE_RETRY_MAX_MS: "400",
-    QUOTE_COMPANY_NAME: "Pesas Chile SPA",
     QUOTE_DOCUMENT_STORAGE_ROOT: input.storageRoot,
     ...input.overrides
   });

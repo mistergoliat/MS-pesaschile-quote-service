@@ -8,6 +8,7 @@ import {
 } from "../../application/idempotency/idempotency-scope";
 import { toFieldErrors } from "../../application/quote-v2/create-quote-request";
 import type { CommittedArtifactReader } from "../../application/quote-v2/document/artifact-store-port";
+import { documentFileName } from "../../application/quote-v2/document/document-file-name";
 import type { InlineIssuance } from "../../application/quote-v2/inline-issuance";
 import type { IssuanceFailpoints } from "../../application/quote-v2/issuance-failpoints";
 import { databaseClock, type QuoteClock } from "../../infrastructure/persistence/postgres/quote-clock";
@@ -168,15 +169,7 @@ export function resultOf<T>(outcome: CommandOutcome<T>, operation: IdempotentOpe
   return outcome.result;
 }
 
-/**
- * `Content-Disposition` file name: `<quoteNumber>.pdf` (openapi
- * `getQuoteDocument`). Built from the quote number only, never from a
- * storage key or path; anything outside a conservative character set falls
- * back to a fixed name.
- */
-export function documentFileName(quoteNumber: string | null): string {
-  return `${quoteNumber !== null && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(quoteNumber) ? quoteNumber : "quote"}.pdf`;
-}
+export { documentFileName };
 
 /** Issuance responses: status is a function of the current state (Domain §4.3). */
 function sendIssuance(reply: FastifyReply, result: QuoteOperationResult, doneStatus: 200 | 201): FastifyReply {

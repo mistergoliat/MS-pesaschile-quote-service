@@ -17,7 +17,7 @@ import { testRegistryJson } from "../helpers/test-principals";
  * integrity code cannot delete content-addressed artifacts or send email.
  */
 
-const SEAMS = ["disableIssuanceExecution", "issuanceFailpoints", "testMailSender"] as const;
+const SEAMS = ["disableIssuanceExecution", "issuanceFailpoints", "testMailSender", "disableDeliveryExecution", "deliveryFailpoints"] as const;
 
 function sourceFiles(directory: string): string[] {
   return fs
@@ -31,7 +31,6 @@ const baseEnv = {
   NODE_ENV: "production",
   DATABASE_URL: "postgres://user:secret@127.0.0.1:1/none",
   QUOTE_PRINCIPAL_REGISTRY_JSON: testRegistryJson(),
-  QUOTE_COMPANY_NAME: "Pesas Chile SPA",
   QUOTE_DOCUMENT_STORAGE_ROOT: "./.unused-storage-root"
 };
 
@@ -143,26 +142,49 @@ describe("document access and integrity: no deletion of content-addressed artifa
     expect(source).toMatch(/const directory = this\.resolve\(TEMP_DIRECTORY\);/);
   });
 
-  it("§33: issuance, document and integrity paths reach no mail sender and no delivery persistence", () => {
-    const closure = importClosure(...ENTRIES);
+  it("§33 / §78: issuance, document and integrity paths reach no mail sender, no delivery worker and no delivery persistence", () => {
+    const closure = importClosure(...ENTRIES, "src/application/quote-v2/inline-issuance.ts", "src/infrastructure/persistence/postgres/quote-v2-acceptance.ts");
 
-    expect(closure.filter((file) => /gmail|infrastructure\/email\/|quote-delivery\/|mail-sender-port|quote-v2-deliveries|v2-delivery-route/.test(file))).toEqual([]);
+    expect(
+      closure.filter((file) => /gmail|infrastructure\/email\/|mail-sender-port|delivery-worker|quote-v2-deliveries|quote-v2-delivery-execution|v2-delivery-route|delivery-jobs|email-envelope/.test(file))
+    ).toEqual([]);
   });
 
-  it("R1.6A: the runtime reaches no provider implementation, and only the composition root holds a mail sender", () => {
+  it("R1.6B: only the delivery worker calls a mail sender; routes and the request transaction never receive one", () => {
     const runtime = importClosure("src/server.ts");
+    const callers = runtime.filter((file) => /\b(?:sender|mailSender)\??\.send\(/.test(fs.readFileSync(file, "utf8")));
+    expect(callers).toEqual(["src/application/quote-v2/delivery/delivery-worker.ts"]);
 
-    // No Gmail adapter, no V1 email/delivery code (template, view model, retry policy, V1 port).
-    expect(runtime.filter((file) => /gmail|infrastructure\/email\/|quote-delivery\/|quote-email-|document-templates/.test(file))).toEqual([]);
-
-    // The port type is known to the composition root only; routes and repositories get a boolean.
-    const holders = runtime.filter((file) => fs.readFileSync(file, "utf8").includes("MailSenderPort"));
-    expect(holders.sort()).toEqual(["src/app.ts", "src/application/quote-v2/delivery/mail-sender-port.ts"]);
+    for (const file of ["src/http/routes/v2-delivery-route.ts", "src/infrastructure/persistence/postgres/quote-v2-deliveries.ts", "src/http/routes/v2-quote-route.ts"]) {
+      expect(fs.readFileSync(file, "utf8"), file).not.toMatch(/MailSenderPort|mail-sender-port|GmailMailSender/);
+    }
 
     const app = fs.readFileSync("src/app.ts", "utf8");
-    expect(app).toContain("const mailSender: MailSenderPort | null = overrides.testMailSender ?? null;");
-    expect(app).not.toMatch(/mailSender\??\.send\(/);
-    expect(app).toContain("emailEnabled: false");
+    expect(app).toContain('overrides.testMailSender ?? (env.QUOTE_EMAIL_PROVIDER === "gmail" ? new GmailMailSender(gmailSettings(env)) : null)');
+  });
+
+  it("R1.6B: no configuration value selects a fake sender or a provider endpoint", () => {
+    expect(() => loadEnv({ ...baseEnv, QUOTE_EMAIL_PROVIDER: "fake" })).toThrow();
+    const env = loadEnv({ ...baseEnv, QUOTE_EMAIL_FAKE: "true", QUOTE_EMAIL_TOKEN_ENDPOINT: "http://127.0.0.1:1/token" }) as unknown as Record<string, unknown>;
+
+    for (const key of Object.keys(env)) {
+      expect(key).not.toMatch(/fake|endpoint/i);
+    }
+
+    expect(fs.readFileSync("src/infrastructure/config/env.ts", "utf8")).not.toMatch(/endpoints?:/);
+  });
+
+  it("R1.6B: the default composition has no sender and no send runner, but always the persistence sweep", async () => {
+    const context = buildApplication(loadEnv(baseEnv), { logStream: { write: () => undefined } });
+
+    try {
+      expect(context.mailSender).toBeNull();
+      expect(context.delivery?.emailDelivery).toBeNull();
+      expect(context.delivery?.deliveryOutcomeSweep).toBeDefined();
+      expect(context.backgroundJobs.status()).toMatchObject({ emailDelivery: { enabled: false }, deliveryOutcomeSweep: { enabled: true } });
+    } finally {
+      await context.app.close();
+    }
   });
 });
 

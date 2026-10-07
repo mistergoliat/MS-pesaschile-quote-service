@@ -17,6 +17,15 @@ export interface ServiceProcessOptions {
   readonly leaseMs?: number;
   readonly halt?: string;
   readonly suspendRenewals?: boolean;
+  /** R1.6B: delivery checkpoint to hold at. */
+  readonly deliveryHalt?: string;
+  /** R1.6B: loopback base URL of a fake mail provider running in the parent test process. */
+  readonly fakeMailProvider?: string;
+  /** R1.6B: delivery lease and poll interval. */
+  readonly deliveryLeaseMs?: number;
+  readonly deliveryPollIntervalMs?: number;
+  /** Principal registry JSON (default: the shared test registry). */
+  readonly registryJson?: string;
 }
 
 export interface LogLine extends Record<string, unknown> {
@@ -49,17 +58,20 @@ export function serviceEnv(options: ServiceProcessOptions): Record<string, strin
     DB_POOL_CONNECTION_TIMEOUT_MS: "1000",
     SERVICE_NAME: "pesaschile-quote-service",
     SERVICE_VERSION: "0.1.0-crash",
-    QUOTE_PRINCIPAL_REGISTRY_JSON: testRegistryJson(),
+    QUOTE_PRINCIPAL_REGISTRY_JSON: options.registryJson ?? testRegistryJson(),
     HEALTH_PROBE_TIMEOUT_MS: "1000",
     HEALTH_PROBE_INTERVAL_MS: "1000",
     HEALTH_PROBE_RETRY_MIN_MS: "100",
     HEALTH_PROBE_RETRY_MAX_MS: "400",
-    QUOTE_COMPANY_NAME: "Pesas Chile SPA",
     QUOTE_DOCUMENT_STORAGE_ROOT: options.storageRoot,
     QUOTE_ISSUANCE_DEADLINE_MS: "3600000",
     QUOTE_ISSUANCE_LEASE_MS: String(options.leaseMs ?? 10_000),
     QUOTE_ISSUANCE_POLL_INTERVAL_MS: String(options.pollIntervalMs ?? 500),
-    QUOTE_ISSUANCE_SYNC_BUDGET_MS: String(options.syncBudgetMs)
+    QUOTE_ISSUANCE_SYNC_BUDGET_MS: String(options.syncBudgetMs),
+    QUOTE_EMAIL_DELIVERY_LEASE_MS: String(options.deliveryLeaseMs ?? 15_000),
+    QUOTE_EMAIL_POLL_INTERVAL_MS: String(options.deliveryPollIntervalMs ?? 300),
+    QUOTE_EMAIL_TOKEN_TIMEOUT_MS: "1000",
+    QUOTE_EMAIL_SEND_TIMEOUT_MS: "2000"
   };
 }
 
@@ -72,6 +84,14 @@ export async function startServiceProcess(options: ServiceProcessOptions, regist
 
   if (options.suspendRenewals) {
     args.push("--suspend-renewals");
+  }
+
+  if (options.deliveryHalt) {
+    args.push(`--delivery-halt=${options.deliveryHalt}`);
+  }
+
+  if (options.fakeMailProvider) {
+    args.push(`--fake-mail-provider=${options.fakeMailProvider}`);
   }
 
   const child = spawn(process.execPath, args, {

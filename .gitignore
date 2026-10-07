@@ -9,3 +9,4 @@ coverage/
 .tmp-pdf-previews/
 
 var/
+.preview/
