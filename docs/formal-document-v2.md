@@ -56,8 +56,8 @@ readiness reports `renderer_unavailable` and the error is `renderer_unavailable`
 A unit test fails when `package-lock.json`, the installed packages,
 `package.json` (`pdfmake` pinned exactly, `engines`) or the Dockerfile image
 drift from the profile. Neither label comes from the environment:
-`QUOTE_RENDER_VERSION` was removed, and `QUOTE_COMPANY_NAME` now feeds only
-the legacy email scripts.
+`QUOTE_RENDER_VERSION` and `QUOTE_COMPANY_NAME` were removed (the latter in
+R1.6B, with the legacy email scripts).
 
 **Why zlib.** pdfkit deflates content streams and re-deflates the RGBA logo
 with `node:zlib`, whatever the `compress` flag says. Node 20 ships zlib

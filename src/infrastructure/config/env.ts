@@ -41,9 +41,6 @@ const envSchema = z
   HEALTH_PROBE_INTERVAL_MS: z.coerce.number().int().min(1_000).max(300_000).default(10_000),
   HEALTH_PROBE_RETRY_MIN_MS: z.coerce.number().int().min(50).max(60_000).default(1_000),
   HEALTH_PROBE_RETRY_MAX_MS: z.coerce.number().int().min(50).max(300_000).default(30_000),
-  // Legacy email smoke/preview scripts only (R1.6). The formal PDF takes its
-  // issuer identity from the code-owned issuer profile, never from here.
-  QUOTE_COMPANY_NAME: z.string().min(1).default("Pesas Chile SPA"),
   QUOTE_DOCUMENT_STORAGE_ROOT: z.string().min(1),
   // Issuance operation (Idempotency §4.2): defaults and ranges are the
   // contract's. The deadline is copied onto each operation at acceptance.

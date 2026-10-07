@@ -50,7 +50,6 @@ curl -i localhost:3000/health/ready
 | `npm run pdf:preview`, `pdf:benchmark`, `pdf:concurrency-smoke` | formal PDF previews (template v4), cost and concurrency checks |
 | `npm run pdf:determinism` / `pdf:determinism:runtime` | SHA-256 of the golden formal-PDF fixtures (must equal the pinned values on every OS) |
 | `npm run email:preview` | offline preview of the V2 email envelope (`.preview/`; sends nothing) |
-| `QUOTE_SMOKE_RECIPIENT=… npm run email:smoke:pdf` | real Gmail smoke (manual, needs Gmail configuration) |
 
 ## HTTP surface
 
@@ -94,7 +93,6 @@ checksums, the migration/runtime role separation and the recovery model:
 
 ## Architecture
 
-`src/domain` (V1 domain and exact CLP arithmetic, kept for reuse) ·
 `src/application` (health monitor, document view models) ·
 `src/infrastructure` (config, persistence, documents, branding, email
 adapter, runtime) · `src/http` (health routes, readiness gate, errors).

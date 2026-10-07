@@ -163,6 +163,20 @@ describe("document access and integrity: no deletion of content-addressed artifa
     expect(app).toContain('overrides.testMailSender ?? (env.QUOTE_EMAIL_PROVIDER === "gmail" ? new GmailMailSender(gmailSettings(env)) : null)');
   });
 
+  it("R1.6B §77: the runtime contains no V1 email model, commercial content, signature or policy text", () => {
+    const runtime = importClosure("src/server.ts");
+
+    expect(runtime.filter((file) => /src\/domain\/|quote-delivery\/|quote-email-view-model|quote-email-template\.ts|document-templates|gmail-email-sender|issued-quote-document\.ts|document-formatting|pesaschile-brand-v1/.test(file))).toEqual([]);
+
+    for (const file of sourceFiles("src")) {
+      // Code only: comments may name what was removed.
+      const source = fs.readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+      expect(source, file).not.toMatch(/CanonicalIssuedQuoteSnapshot|formatCommercialUnitPriceDisplay|formatUtcShortSpanishDateDisplay|normalizeEmailAddress|QUOTE_EMAIL_VALIDITY_POLICY_DAYS|SenderSignature|Bastian|42222?0146|Valech/);
+      expect(source, file).not.toMatch(/5 d[ií]as|v[aá]lidos por/i);
+      expect(source, file).not.toMatch(/incluyen IVA/i);
+    }
+  });
+
   it("R1.6B: no configuration value selects a fake sender or a provider endpoint", () => {
     expect(() => loadEnv({ ...baseEnv, QUOTE_EMAIL_PROVIDER: "fake" })).toThrow();
     const env = loadEnv({ ...baseEnv, QUOTE_EMAIL_FAKE: "true", QUOTE_EMAIL_TOKEN_ENDPOINT: "http://127.0.0.1:1/token" }) as unknown as Record<string, unknown>;
