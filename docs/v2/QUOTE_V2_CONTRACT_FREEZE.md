@@ -108,6 +108,17 @@ error code or endpoint is added.
 |---|---|---|---|
 | A5 | Issuance attempt failures are classified by the owner as **retryable** or **non-retryable**. The classification is internal: the operation's `lastErrorCode` stays one of `document_generation_failed`, `document_storage_failed`, `dependency_unavailable`. A retryable failure returns the operation to `pending` with the frozen backoff until `deadlineAt`. A non-retryable failure (deterministic for the frozen snapshot and renderer/template version, e.g. a character the pinned font set cannot draw; or an integrity incident, e.g. different bytes already at the content address) ends the operation immediately as `failed` with that attempt's code and `completedAt` (T12). `issuance_deadline_exceeded` is used only when `deadlineAt` is reached. A failure the owner cannot classify is retryable. The quote stays `issuing` (A1); resolution remains operator retry (T10) or principal cancel (T11). | C7 ("retries every failure"); State machine §6 ("every attempt failure is retried") | State machine T12/§2/§6, Idempotency §4.2/§4.3/§4.6/§7, OpenAPI `Operation`, example `operation-failed-non-retryable.json` |
 
+## 3d. Contract amendments (R1.6A)
+
+Applied with R1.6A by explicit owner decision. They make binding the three
+delivery decisions the R1.6 pre-flight audit left to the owner (W2, W3, W4);
+no schema, state, error code or endpoint is added or changed.
+**CONTRACT_FROZEN = YES** still holds for the amended set.
+
+| # | Amendment | Supersedes | Where |
+|---|---|---|---|
+| A6 | Delivery eligibility, replay and ambiguous-provider semantics. **A6.1** A pending delivery is sendable only while its quote is effectively `issued`; if the quote is no longer effectively `issued` before provider execution the delivery becomes `failed` (`quote_expired` or `quote_cancelled`) and the provider is never called; delivery outcome never changes quote state. **A6.2** For `POST …/deliveries/email`: authorization → idempotency binding lookup → provider-enabled check → resource/semantic validation, so a previously committed binding remains replayable after the provider is disabled, and a new unbound key while it is disabled is `503 dependency_unavailable` (`email_provider`) with no binding and no delivery. **A6.3** Only failures known not to have been accepted may be automatically retried; a send-phase outcome that may have been accepted, including a provider HTTP 5xx after the send request was submitted, sets the delivery to `unknown`, which is terminal and never automatically retried; issuance and quote state are unaffected. | Domain §10.2 silence on eligibility after queueing; unspecified position of the provider check (§12 "503 at any step"); unclassified provider 5xx | Domain §10.1/§10.2/§12, State machine §7, Idempotency §5, OpenAPI `requestEmailDelivery` description |
+
 ## 4. Static validation performed
 
 Tooling: [tools/validate-contract.mjs](tools/validate-contract.mjs) (ajv 8 /
@@ -124,6 +135,9 @@ The tooling has its own `package.json`; it adds nothing to the service's
 dependencies. Result on 2026-10-04: **437 checks, 437 passed, 0 failed.**
 After amendment A5 (2026-10-06): **464 checks, 464 passed, 0 failed** (adds
 the A5 consistency checks and the non-retryable operation example).
+After amendment A6 (2026-10-06): **475 checks, 475 passed, 0 failed** (adds
+the A6 delivery eligibility, replay-order, ambiguity, terminality and
+quote-isolation checks; no example changed).
 
 | Requirement | Check(s) | Result |
 |---|---|---|

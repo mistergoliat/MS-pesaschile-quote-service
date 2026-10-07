@@ -654,7 +654,11 @@ paths:
         quote is `issued` (not expired, not cancelled). Recipient defaults to
         `customer.email`; without either, `422 delivery_recipient_missing`.
         With the email provider disabled, `503 dependency_unavailable` and
-        nothing is queued.
+        nothing is queued. A bound key is answered from its binding before the
+        provider check (amendment A6.2): it replays even while the provider is
+        disabled. A queued delivery is sent only while the quote is still
+        effectively `issued` (A6.1); a send outcome that may have been
+        accepted becomes `unknown` and is never retried automatically (A6.3).
       x-idempotency-operation: quote.delivery.email
       x-required-scopes: [quotes:delivery:email]
       parameters:

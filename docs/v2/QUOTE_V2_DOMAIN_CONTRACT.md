@@ -336,6 +336,16 @@ the only trigger. For the initial production configuration the email provider
 is **disabled**: the endpoint returns `503 dependency_unavailable`
 (`details.dependency = "email_provider"`) and queues nothing.
 
+**Bound-key replay precedes provider availability (amendment A6.2).** The
+endpoint evaluates authorization, then the idempotency binding lookup, then
+the provider-enabled check, then resource and semantic validation. A
+previously committed binding therefore remains replayable (`202`,
+`Idempotent-Replay: true`, the bound delivery in its current state) even if
+the email provider is later disabled. A new, unbound key while the provider
+is disabled is answered `503 dependency_unavailable` with
+`details.dependency = "email_provider"`, and creates no binding and no
+delivery.
+
 ### 10.2 Semantics (when enabled)
 
 - Allowed only while `status = issued` (`409 invalid_state_transition`
@@ -347,6 +357,17 @@ is **disabled**: the endpoint returns `503 dependency_unavailable`
 - Delivery states: `pending → sending → sent | failed | unknown`. A send whose
   provider acceptance is ambiguous becomes `unknown` and is NOT blindly
   retried. Only failures known not to have been accepted are retried.
+- **Eligibility at execution (amendment A6.1).** A pending delivery is
+  sendable only while its quote is effectively `issued`. If the quote is no
+  longer effectively `issued` before provider execution, the delivery becomes
+  `failed` with `lastErrorCode = quote_expired` (expired) or
+  `quote_cancelled` (cancelled), and the provider is never called.
+- **Potentially accepted outcomes are terminally ambiguous (amendment
+  A6.3).** Only failures known not to have been accepted may be automatically
+  retried. A send-phase outcome that may have been accepted, including an
+  HTTP 5xx returned by the provider after the send request was submitted,
+  sets the delivery to `unknown`. `unknown` is terminal and is never
+  automatically retried; a new key is a deliberate new delivery.
 - Delivery outcome never changes the quote state or document.
 - Gmail is one provider adapter behind a generic mail port.
 
@@ -399,7 +420,9 @@ parameters) → `401` → `403` (scopes, including the override scope when
 `validityOverride` is present) → **idempotency binding lookup** (bound + same
 fingerprint → replay; bound + different fingerprint → `409
 idempotency_key_conflict`) → `404` → `422` → `409` state/version → acceptance.
-`503` can occur at any step that needs a dependency. Because the binding is
+`503` can occur at any step that needs a dependency; for
+`POST …/deliveries/email` the provider-enabled check comes right after the
+binding lookup (amendment A6.2, §10.1). Because the binding is
 checked before resource, semantic and state checks, a retried request whose
 first attempt committed always receives the bound result. A 4xx or 503 never
 binds a key.
