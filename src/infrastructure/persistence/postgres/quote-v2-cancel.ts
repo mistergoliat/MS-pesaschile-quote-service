@@ -78,14 +78,20 @@ export async function cancelQuote(database: PostgresDatabase, quoteId: string, i
       [quoteId, now, request.reasonCode, input.principal.principalId]
     );
 
-    if (locked.status === "issued") {
-      // T8: queued email deliveries not yet `sending` never go out for a cancelled quote.
-      await client.query(
-        `update quote_service.quote_deliveries set status = 'failed', last_error_code = 'quote_cancelled', updated_at = $2
-         where quote_id = $1 and status = 'pending'`,
-        [quoteId, now]
-      );
-    }
+    // T8: queued email deliveries not yet `sending` never go out for a cancelled quote.
+    const failedDeliveryIds =
+      locked.status === "issued"
+        ? (
+            await client.query<{ delivery_id: string }>(
+              `update quote_service.quote_deliveries set status = 'failed', last_error_code = 'quote_cancelled', updated_at = $2
+               where quote_id = $1 and status = 'pending'
+               returning delivery_id`,
+              [quoteId, now]
+            )
+          ).rows
+            .map((row) => row.delivery_id)
+            .sort()
+        : [];
 
     await appendAudit(client, {
       quoteId,
@@ -106,6 +112,24 @@ export async function cancelQuote(database: PostgresDatabase, quoteId: string, i
         hasNote: request.note !== undefined
       })
     });
+
+    // One `quote.delivery.failed` per delivery failed by T8, in the cancel's
+    // transaction: ids and the code only (Domain §11; never the recipient).
+    // A replay is answered from the binding above, so these are never repeated.
+    for (const deliveryId of failedDeliveryIds) {
+      await appendAudit(client, {
+        quoteId,
+        type: "quote.delivery.failed",
+        principalId: input.principal.principalId,
+        operationId: null,
+        correlationId: context.correlationId,
+        keyHash: context.scope.keyHash,
+        fromStatus: null,
+        toStatus: null,
+        data: { deliveryId, errorCode: "quote_cancelled" }
+      });
+    }
+
     await bind(client, context, input.body, { quoteId, operationId: null });
 
     return { kind: "accepted", result: await readQuote(client, quoteId, clock) };

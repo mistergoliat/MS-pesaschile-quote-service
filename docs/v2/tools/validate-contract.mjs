@@ -217,6 +217,48 @@ check('A5: no new operation state or error code', JSON.stringify(opSchema.proper
 check('A5: non-retryable example fails before its deadline with the attempt code', nonRetryable.status === 'failed' && nonRetryable.attempts.lastErrorCode !== 'issuance_deadline_exceeded' && nonRetryable.attempts.nextAttemptAt === null && nonRetryable.completedAt !== null && Date.parse(nonRetryable.completedAt) < Date.parse(nonRetryable.deadlineAt));
 check('A5: issuance_deadline_exceeded only paired with the deadline (T6)', [...sm.matchAll(/^\| T\d+ \|[^\n]*$/gm)].every(([line]) => !line.includes('issuance_deadline_exceeded') || /deadline exceeded/.test(line)));
 
+// 12. R1.6A contract amendment A6 (QUOTE_V2_CONTRACT_FREEZE.md §3d): delivery eligibility, replay, ambiguity
+const dc = text('QUOTE_V2_DOMAIN_CONTRACT.md');
+const flat = (s) => s.replace(/\s+/g, ' ');
+const deliveryPost = P['/v2/quotes/{quoteId}/deliveries/email'].post;
+const deliverySchema = doc.components.schemas.Delivery;
+const deliveryStates = deliverySchema.properties.status.enum;
+const deliveryRows = [...sm.matchAll(/^\| D\d+ \| `([a-z]+)` \| `([a-z]+)` \|([^\n]*)$/gm)].map(([, from, to, rest]) => ({ from, to, rest }));
+check('A6: recorded in the freeze record (§3d)', /^\| A6 \| Delivery eligibility, replay and ambiguous-provider semantics\. \*\*A6\.1\*\*[^\n]*\*\*A6\.2\*\*[^\n]*\*\*A6\.3\*\*/m.test(text('QUOTE_V2_CONTRACT_FREEZE.md')));
+check('A6.1: an expired or cancelled pending delivery is failed and never sent',
+  /sendable only while its quote is effectively `issued`/.test(flat(dc)) && /`lastErrorCode = quote_expired` \(expired\) or `quote_cancelled` \(cancelled\), and the provider is never called/.test(flat(dc)) &&
+  deliveryRows.some((r) => r.from === 'pending' && r.to === 'failed' && /A6\.1/.test(r.rest) && /`quote_expired` \/ `quote_cancelled`/.test(r.rest) && /\*\*never\*\*/.test(r.rest)) &&
+  /provider is never called/.test(flat(idem)) && /effectively `issued` \(A6\.1\)/.test(flat(deliveryPost.description)));
+check('A6.2: bound-key replay precedes the provider-disabled rejection',
+  /authorization, then the idempotency binding lookup, then the provider-enabled check, then resource and semantic validation/.test(flat(dc)) &&
+  /binding lookup → provider-enabled check → resource and semantic validation/.test(flat(idem)) &&
+  /previously committed binding (therefore )?remains replayable/.test(flat(dc)) && /replays even while the provider is disabled/.test(flat(deliveryPost.description)) &&
+  /provider-enabled check comes right after the binding lookup \(amendment A6\.2/.test(flat(dc)));
+check('A6.2: a new key with the provider disabled is 503 email_provider with no binding and no delivery',
+  /new, unbound key while the provider is disabled is answered `503 dependency_unavailable` with `details\.dependency = "email_provider"`, and creates no binding and no delivery/.test(flat(dc)) &&
+  /with no binding and no delivery/.test(flat(idem)) && deliveryPost.responses['503'] !== undefined && deliveryPost['x-idempotency-operation'] === 'quote.delivery.email');
+check('A6.3: a send outcome that may have been accepted (incl. provider HTTP 5xx after submission) → unknown',
+  deliveryRows.some((r) => r.from === 'sending' && r.to === 'unknown' && /may have been accepted \(A6\.3\)/.test(r.rest) && /HTTP 5xx after the send request was submitted/.test(r.rest)) &&
+  /including an HTTP 5xx returned by the provider after the send request was submitted, sets the delivery to `unknown`/.test(flat(dc)) &&
+  /Only failures known not to have been accepted may be automatically retried/.test(flat(dc)) && /Only failures known not to have been accepted may be automatically retried/.test(flat(idem)));
+check('A6.3: unknown is terminal (sent, failed and unknown have no outgoing delivery transition)',
+  /`sent`, `failed` and `unknown` are terminal: no transition leaves them/.test(flat(sm)) && deliveryRows.length >= 7 && deliveryRows.every((r) => !['sent', 'failed', 'unknown'].includes(r.from)));
+check('A6.3: unknown is never automatically retried and a delivery is never reclaimed from sending to send again',
+  /\*\*`unknown` is never automatically retried\*\*/.test(sm) && /`unknown` is terminal and is never automatically retried/.test(flat(dc)) &&
+  /never automatically retried\. A delivery is never reclaimed from `sending` for another send/.test(flat(idem)) &&
+  !deliveryRows.some((r) => r.from === 'unknown' || (r.from === 'sending' && r.to === 'sending')));
+check('A6: quote state is unaffected by any delivery outcome',
+  /\*\*No delivery transition changes the quote\*\* \(state, version, snapshot or document\)/.test(flat(sm)) && /Delivery outcome never changes the quote state or document/.test(dc) &&
+  /Issuance and quote state are unaffected by any delivery outcome/.test(flat(idem)) &&
+  [...sm.matchAll(/^\| T\d+ \|[^\n]*$/gm)].every(([line]) => !/deliver/.test(line.split('|')[4] ?? '')));
+check('A6: delivery transitions use only frozen delivery states', deliveryRows.length > 0 && deliveryRows.every((r) => deliveryStates.includes(r.from) && deliveryStates.includes(r.to)));
+check('A6: eligibility error codes fit the frozen Delivery.lastErrorCode pattern',
+  ['quote_expired', 'quote_cancelled'].every((code) => new RegExp(deliverySchema.properties.attempts.properties.lastErrorCode.oneOf[0].pattern).test(code)));
+check('A6: no new delivery state, error code or delivery endpoint',
+  JSON.stringify(deliveryStates) === JSON.stringify(['pending', 'sending', 'sent', 'failed', 'unknown']) &&
+  doc.components.schemas.ErrorCode.enum.length === 21 &&
+  Object.keys(P).filter((p) => /deliver/.test(p)).sort().join(',') === '/v2/quotes/{quoteId}/deliveries/email,/v2/quotes/{quoteId}/deliveries/{deliveryId}');
+
 const failed = results.filter((r) => !r.ok);
 console.log(`checks: ${results.length}, passed: ${results.length - failed.length}, failed: ${failed.length}`);
 for (const f of failed) console.log('FAIL', f.name, f.detail);

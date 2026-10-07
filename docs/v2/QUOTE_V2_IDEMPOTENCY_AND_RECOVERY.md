@@ -197,6 +197,29 @@ is ambiguous (timeout after send, crash after the provider accepted) marks the
 delivery `unknown` and is not retried automatically. A new key is a deliberate
 new delivery.
 
+Amendment A6 makes the following normative:
+
+- **Order (A6.2).** Authorization → idempotency binding lookup →
+  provider-enabled check → resource and semantic validation. A previously
+  committed binding remains replayable even if the email provider is later
+  disabled; a new, unbound key while the provider is disabled is answered
+  `503 dependency_unavailable` (`dependency = email_provider`) with no binding
+  and no delivery.
+- **Eligibility at execution (A6.1).** Before any provider call the worker
+  re-evaluates the quote's effective status. A quote that is no longer
+  effectively `issued` fails the delivery (`quote_expired` /
+  `quote_cancelled`) and the provider is never called.
+- **Ambiguity (A6.3).** Only failures known not to have been accepted may be
+  automatically retried. A send-phase outcome that may have been accepted —
+  including an HTTP 5xx returned by the provider after the send request was
+  submitted, and a `sending` attempt whose holder lost its lease — sets the
+  delivery to `unknown`, which is terminal and never automatically retried.
+  A delivery is never reclaimed from `sending` for another send.
+- Command idempotency (one delivery per key) is not exactly-once delivery: the
+  guarantee is at most one automatic provider acceptance per delivery, with
+  `unknown` reported honestly. Issuance and quote state are unaffected by any
+  delivery outcome.
+
 ## 6. Consumer reconciliation procedure (normative guidance)
 
 Classify every mutation attempt:

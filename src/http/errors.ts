@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 
 import { QuoteRequestRejected, REJECTION_STATUS } from "../application/quote-v2/create-quote-request";
+import { EmailProviderDisabledError } from "../application/quote-v2/delivery/delivery-request";
 import { CommitOutcomeUnknownError } from "../infrastructure/persistence/postgres/postgres";
 import {
   isDatabaseUnavailableError,
@@ -22,6 +23,8 @@ type HttpErrorCode =
   | "idempotency_key_conflict"
   | "quote_not_found"
   | "operation_not_found"
+  | "delivery_not_found"
+  | "delivery_recipient_missing"
   | "version_conflict"
   | "invalid_state_transition"
   | "operation_in_progress"
@@ -94,6 +97,17 @@ export function toHttpError(error: unknown): HttpError {
 
   if (error instanceof InvalidCursorError) {
     return new HttpError({ statusCode: 400, code: "invalid_request", message: "cursor is invalid for this query" });
+  }
+
+  // Configuration state, not an outage: retrying does not help until the
+  // provider is configured, so no Retry-After (Domain §10.1).
+  if (error instanceof EmailProviderDisabledError) {
+    return new HttpError({
+      statusCode: 503,
+      code: "dependency_unavailable",
+      message: error.message,
+      details: { dependency: "email_provider", retryable: false }
+    });
   }
 
   if (error instanceof QuoteRequestRejected) {

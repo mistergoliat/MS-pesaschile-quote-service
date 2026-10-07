@@ -163,7 +163,7 @@ const amountsView = (row: AmountColumns) => ({
 const chargeView = (row: ChargeColumns) =>
   omitNull({ amount: Number(row.unit), taxBasis: row.tax_basis, taxRate: row.tax_rate === null ? null : canonicalDecimal(row.tax_rate) });
 
-const iso = (value: Date | null): string | null => (value === null ? null : formatInstant(value));
+export const iso = (value: Date | null): string | null => (value === null ? null : formatInstant(value));
 
 const lineView = (line: LineRow): Json =>
   omitNull({
@@ -390,7 +390,7 @@ export async function isOperationActive(database: PostgresDatabase, operationId:
  * `and <alias>.created_by_principal_id = $n` unless the principal holds
  * `quotes:read:any` (security §3). Appends the parameter it uses.
  */
-function visibilityClause(alias: string, principal: AuthenticatedPrincipal, values: unknown[]): string {
+export function visibilityClause(alias: string, principal: AuthenticatedPrincipal, values: unknown[]): string {
   if (hasScope(principal, "quotes:read:any")) {
     return "";
   }
@@ -400,14 +400,14 @@ function visibilityClause(alias: string, principal: AuthenticatedPrincipal, valu
 }
 
 /** One consistent snapshot per read (lines/shipping/manifest never mix two commits). */
-function withReadSnapshot<T>(database: PostgresDatabase, work: (client: PoolClient) => Promise<T>): Promise<T> {
+export function withReadSnapshot<T>(database: PostgresDatabase, work: (client: PoolClient) => Promise<T>): Promise<T> {
   return database.withTransaction(async (client) => {
     await client.query("set transaction isolation level repeatable read, read only");
     return work(client);
   });
 }
 
-const quoteNotFound = () => new QuoteRequestRejected("quote_not_found", "Quote not found.");
+export const quoteNotFound = () => new QuoteRequestRejected("quote_not_found", "Quote not found.");
 
 /** `GET /v2/quotes/{quoteId}`: 404 when missing or not visible. */
 export function getVisibleQuote(database: PostgresDatabase, principal: AuthenticatedPrincipal, quoteId: string, clock: QuoteClock): Promise<QuoteView> {

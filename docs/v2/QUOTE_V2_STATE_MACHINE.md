@@ -136,3 +136,24 @@ Lease and fencing rules: [QUOTE_V2_IDEMPOTENCY_AND_RECOVERY.md §4](QUOTE_V2_IDE
 A quote has one or more issuance operations over its life: at most one is
 active (`pending`/`running`) at a time and at most one `succeeded`.
 `issuance.operationId` always names the current (latest) one.
+
+## 7. Email delivery states (amendment A6)
+
+A delivery is created `pending` only by `POST /v2/quotes/{quoteId}/deliveries/email`
+while the quote is effectively `issued` (§4); issuance never creates one.
+
+| # | From | To | Trigger | Guard / rule | `lastErrorCode` | Provider called |
+|---|---|---|---|---|---|---|
+| D1 | `pending` | `sending` | delivery worker claims a due delivery | quote effectively `issued` at claim (A6.1) | — | about to be |
+| D2 | `pending` | `failed` | quote no longer effectively `issued` before provider execution (A6.1) | expired / cancelled | `quote_expired` / `quote_cancelled` | **never** |
+| D3 | `pending` | `failed` | principal cancel of the issued quote (T8) | in the cancel transaction | `quote_cancelled` | never |
+| D4 | `sending` | `sent` | provider accepted the message | — | — | yes |
+| D5 | `sending` | `pending` | failure known NOT to have been accepted, retryable | backoff, within the retry limit | the failure's code | yes or not reached |
+| D6 | `sending` | `failed` | failure known NOT to have been accepted, permanent or retry limit reached | — | the failure's code | yes or not reached |
+| D7 | `sending` | `unknown` | outcome that may have been accepted (A6.3), including a provider HTTP 5xx after the send request was submitted, a timeout or reset after submission, or a holder that lost its lease after it may have submitted (Idempotency §5) | — | the ambiguity code | possibly |
+
+`sent`, `failed` and `unknown` are terminal: no transition leaves them.
+**`unknown` is never automatically retried** (A6.3); only a request with a new
+`Idempotency-Key` creates a new delivery. **No delivery transition changes
+the quote** (state, version, snapshot or document) or any issuance
+operation.

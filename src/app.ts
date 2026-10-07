@@ -4,6 +4,7 @@ import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { DependencyMonitor } from "./application/health/dependency-monitor";
+import type { MailSenderPort } from "./application/quote-v2/delivery/mail-sender-port";
 import { PrincipalRegistry } from "./infrastructure/auth/principal-registry";
 import type { PdfRendererPort } from "./application/quote-v2/document/pdf-renderer-port";
 import { InlineIssuance } from "./application/quote-v2/inline-issuance";
@@ -24,6 +25,7 @@ import { createIssuanceJobs, type IssuanceJobs } from "./infrastructure/runtime/
 import { isOperationActive } from "./infrastructure/persistence/postgres/quote-v2-reads";
 import { sendErrorResponse, toHttpError } from "./http/errors";
 import { registerRoutes, type BusinessRouteRegistrar } from "./http/routes";
+import { v2DeliveryRoutes } from "./http/routes/v2-delivery-route";
 import { v2QuoteRoutes } from "./http/routes/v2-quote-route";
 
 export type ShutdownOutcome = "completed" | "timed_out" | "failed";
@@ -67,15 +69,24 @@ export interface BuildApplicationOverrides {
    * composition stops or holds the process. Production never passes it.
    */
   readonly issuanceFailpoints?: IssuanceFailpoints;
+  /**
+   * Test seam (R1.6A): a fake mail sender that makes email delivery
+   * "configured", so delivery requests are accepted (202) instead of `503
+   * email_provider`. R1.6A never calls it: only its presence is used, and
+   * the port is never handed to a route or repository. Production never
+   * passes it (the V2 provider adapter and worker are R1.6B).
+   */
+  readonly testMailSender?: MailSenderPort;
 }
 
 /*
  * TEST SEAMS. `BuildApplicationOverrides` is the only way to change issuance
- * behaviour for tests: `disableIssuanceExecution` and `issuanceFailpoints`
- * are constructor arguments, not configuration. `src/server.ts` (the only
- * production composition) calls `buildApplication(env)` without overrides,
- * no environment variable maps to either (env.ts), and no HTTP route reaches
- * them. test/unit/test-seams.test.ts enforces this.
+ * or delivery behaviour for tests: `disableIssuanceExecution`,
+ * `issuanceFailpoints` and `testMailSender` are constructor arguments, not
+ * configuration. `src/server.ts` (the only production composition) calls
+ * `buildApplication(env)` without overrides, no environment variable maps to
+ * any of them (env.ts), and no HTTP route reaches them.
+ * test/unit/test-seams.test.ts enforces this.
  */
 
 /**
@@ -177,6 +188,19 @@ export function buildApplication(
         logger: app.log
       })
     : undefined;
+  // Email delivery (Domain §10). R1.6A has no V2 provider adapter and no
+  // worker: production composes NO sender for any QUOTE_EMAIL_PROVIDER value,
+  // so delivery requests answer `503 email_provider` and queue nothing. Only a
+  // test composition can supply one; even then nothing calls it in R1.6A.
+  const mailSender: MailSenderPort | null = overrides.testMailSender ?? null;
+
+  if (env.QUOTE_EMAIL_PROVIDER !== "disabled" && mailSender === null) {
+    app.log.warn(
+      { event: "email.provider_not_available", provider: env.QUOTE_EMAIL_PROVIDER },
+      "Email provider configured but V2 delivery execution is not available in this release; delivery requests are rejected"
+    );
+  }
+
   const backgroundJobs = new BackgroundJobManager(
     issuance ? { issuance: issuance.issuance, issuanceDeadlineSweep: issuance.issuanceDeadlineSweep } : {}
   );
@@ -223,7 +247,8 @@ export function buildApplication(
     monitor: dependencyMonitor,
     principalRegistry,
     backgroundJobs,
-    // The email subsystem was retired with V1 and returns in R1.6.
+    // Health reports delivery EXECUTION (worker + provider), which arrives in
+    // R1.6B; R1.6A only queues, so the provider stays reported as disabled.
     emailEnabled: false,
     startedAt: new Date(),
     businessRoutes: [
@@ -234,6 +259,7 @@ export function buildApplication(
         documents: artifactStorage,
         failpoints
       }),
+      v2DeliveryRoutes(database, { clock: overrides.quoteClock, emailDeliveryEnabled: mailSender !== null }),
       ...(overrides.businessRoutes ?? [])
     ]
   });

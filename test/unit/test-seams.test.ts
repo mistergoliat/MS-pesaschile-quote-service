@@ -17,7 +17,7 @@ import { testRegistryJson } from "../helpers/test-principals";
  * integrity code cannot delete content-addressed artifacts or send email.
  */
 
-const SEAMS = ["disableIssuanceExecution", "issuanceFailpoints"] as const;
+const SEAMS = ["disableIssuanceExecution", "issuanceFailpoints", "testMailSender"] as const;
 
 function sourceFiles(directory: string): string[] {
   return fs
@@ -143,11 +143,26 @@ describe("document access and integrity: no deletion of content-addressed artifa
     expect(source).toMatch(/const directory = this\.resolve\(TEMP_DIRECTORY\);/);
   });
 
-  it("§33: issuance and document paths cannot reach an email sender; the application composes email disabled", () => {
-    const closure = importClosure(...ENTRIES, "src/app.ts");
+  it("§33: issuance, document and integrity paths reach no mail sender and no delivery persistence", () => {
+    const closure = importClosure(...ENTRIES);
 
-    expect(closure.filter((file) => /email|gmail|quote-delivery\//.test(file))).toEqual([]);
-    expect(fs.readFileSync("src/app.ts", "utf8")).toContain("emailEnabled: false");
+    expect(closure.filter((file) => /gmail|infrastructure\/email\/|quote-delivery\/|mail-sender-port|quote-v2-deliveries|v2-delivery-route/.test(file))).toEqual([]);
+  });
+
+  it("R1.6A: the runtime reaches no provider implementation, and only the composition root holds a mail sender", () => {
+    const runtime = importClosure("src/server.ts");
+
+    // No Gmail adapter, no V1 email/delivery code (template, view model, retry policy, V1 port).
+    expect(runtime.filter((file) => /gmail|infrastructure\/email\/|quote-delivery\/|quote-email-|document-templates/.test(file))).toEqual([]);
+
+    // The port type is known to the composition root only; routes and repositories get a boolean.
+    const holders = runtime.filter((file) => fs.readFileSync(file, "utf8").includes("MailSenderPort"));
+    expect(holders.sort()).toEqual(["src/app.ts", "src/application/quote-v2/delivery/mail-sender-port.ts"]);
+
+    const app = fs.readFileSync("src/app.ts", "utf8");
+    expect(app).toContain("const mailSender: MailSenderPort | null = overrides.testMailSender ?? null;");
+    expect(app).not.toMatch(/mailSender\??\.send\(/);
+    expect(app).toContain("emailEnabled: false");
   });
 });
 
