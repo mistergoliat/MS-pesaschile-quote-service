@@ -100,9 +100,10 @@ for a scan of historical PDFs, and nothing scans the table on start.
 **No auto-repair.** The B0 audit found deterministic re-rendering
 technically possible under an identical renderer build (renderer, template,
 assets, Node, pdfmake, pdfkit, zlib). B4 deliberately does not use it. Repair
-is a future operator procedure that must reproduce the recorded `pdfSha256`
-(Domain §9.3). Until then the artifact stays unavailable (`503`) and the
-historical record stays intact. The test suite proves that only bytes with
+is an explicit operator procedure (R1.6C `documents:repair`,
+[operator-controls.md](operator-controls.md)) that publishes only bytes that
+reproduce the recorded `pdfSha256` (Domain §9.3). Until an operator runs it,
+the artifact stays unavailable (`503`) and the historical record stays intact. The test suite proves that only bytes with
 the recorded hash are ever served again.
 
 ## 4. Legacy (migrated V1) documents

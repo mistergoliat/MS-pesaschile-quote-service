@@ -5,6 +5,7 @@ import type { PoolClient } from "pg";
 import {
   ISSUANCE_DEADLINE_EXCEEDED,
   issuanceBackoffMs,
+  OPERATOR_REASON_CODE_PATTERN,
   type AttemptFailure,
   type ClaimResult,
   type CommitIssuedResult,
@@ -560,6 +561,10 @@ export class PostgresIssuanceOperationRepository implements IssuanceOperationRep
    * for "one active operation".
    */
   async createOperatorRetry(input: OperatorRetryInput): Promise<OperatorRetryResult> {
+    if (input.reasonCode !== undefined && !OPERATOR_REASON_CODE_PATTERN.test(input.reasonCode)) {
+      throw new TypeError("reasonCode must be a machine-readable code");
+    }
+
     const operationId = crypto.randomUUID();
 
     try {
@@ -630,7 +635,8 @@ export class PostgresIssuanceOperationRepository implements IssuanceOperationRep
             quoteNumber: quote.quote_number,
             previousVersion: quote.version,
             version: quote.version + 1,
-            deadlineAt: deadlineAt.toISOString()
+            deadlineAt: deadlineAt.toISOString(),
+            ...(input.reasonCode === undefined ? {} : { reasonCode: input.reasonCode })
           }
         });
         return { kind: "RETRY_CREATED", operationId, deadlineAt } as const;

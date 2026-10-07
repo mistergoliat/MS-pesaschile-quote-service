@@ -46,6 +46,9 @@ curl -i localhost:3000/health/ready
 | `npm run db:grants` / `db:grants:runtime` | re-apply the `quote_runtime` grants |
 | `npm run principals:token` | new caller token plus the SHA-256 for the principal registry |
 | `npm run documents:verify` / `documents:verify:runtime` | integrity check, detection only: every committed manifest against its bytes (OK / MISSING / HASH_MISMATCH / LENGTH_MISMATCH / READ_FAILED / KEY_INVALID / OVERSIZED; exit 2 on any problem; `--record-byte-length` for legacy sizes) |
+| `npm run issuance:failed` / `issuance:failed:runtime` | operator: read-only list of quotes whose current issuance operation is `failed` ([operator-controls.md](docs/operator-controls.md)) |
+| `npm run issuance:retry` / `issuance:retry:runtime` | operator: T10 retry of a failed issuance (`--operator`, `--reason`; dry run unless `--yes`) |
+| `npm run documents:repair` / `documents:repair:runtime` | operator: restore a missing V2 PDF only if the re-render reproduces the recorded `pdfSha256` (dry run unless `--yes`) |
 | `npm run smoke:docker` | build the image and smoke the runtime (migrate, check, health, restart, shutdown) |
 | `npm run pdf:preview`, `pdf:benchmark`, `pdf:concurrency-smoke` | formal PDF previews (template v4), cost and concurrency checks |
 | `npm run pdf:determinism` / `pdf:determinism:runtime` | SHA-256 of the golden formal-PDF fixtures (must equal the pinned values on every OS) |

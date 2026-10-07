@@ -420,8 +420,8 @@ R1.6D cleanup.
 |---|---|
 | R1.6A delivery request core | **CLOSED** |
 | R1.6B delivery execution | **CLOSED** |
-| R1.6C operator controls | **NEXT** |
-| R1.6D readiness, jobs, hardening | PENDING |
+| R1.6C operator controls | **CLOSED** ([operator-controls.md](operator-controls.md)) |
+| R1.6D readiness, jobs, hardening | **NEXT** |
 | R1.7 production readiness | PENDING |
 
 **R1.6C**

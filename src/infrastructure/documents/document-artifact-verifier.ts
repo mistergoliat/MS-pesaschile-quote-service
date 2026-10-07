@@ -9,8 +9,9 @@ import type { SqlQueryable } from "../persistence/postgres/postgres";
  * the same verified read the document endpoint uses
  * (FilesystemContentAddressedArtifactStore.readVerified). DETECTION ONLY:
  * it never writes, moves, repairs, re-renders or deletes an artifact and
- * never changes a V2 manifest (Domain §9.3; repair is a future operator
- * procedure that must reproduce the recorded pdfSha256).
+ * never changes a V2 manifest (Domain §9.3; repair is the separate,
+ * operator-initiated documents:repair command, which must reproduce the
+ * recorded pdfSha256; nothing here calls it).
  *
  * The one historical exception is opt-in and legacy-only: with
  * `recordLegacyByteLength`, the verified size of a migrated V1 artifact whose
