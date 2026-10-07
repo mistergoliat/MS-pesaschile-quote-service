@@ -13,12 +13,13 @@ import { formatCivilDate } from "../document/issued-quote-document-model";
  *
  * Inputs are frozen facts only: the quote number, the Chile civil issue date
  * (`validity.issueLocalDate`, never a UTC conversion) and the delivery's own
- * recipient-name snapshot. Nothing is looked up. The Spanish copy is
- * PROVISIONAL until the owner approves it at R1.7 (W8).
+ * recipient-name snapshot. Nothing is looked up. The exact Spanish copy is
+ * owner-approved at R1.7A (W8); approval alone does not change its bytes.
  */
 
 /** Code-owned envelope version; bump on any semantic change of subject or body. */
 export const QUOTE_EMAIL_ENVELOPE_VERSION = "quote-email-envelope-v3";
+export const QUOTE_EMAIL_ENVELOPE_CONTENT_STATUS = "approved";
 
 /** Brand display name (brand, not legal identity). */
 export const EMAIL_BRAND_DISPLAY_NAME = "Pesas Chile";

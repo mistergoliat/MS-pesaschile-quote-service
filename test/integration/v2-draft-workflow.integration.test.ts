@@ -454,7 +454,7 @@ describe("POST /v2/quotes/{quoteId}/issue", () => {
     expect(Number(response.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
     expect(Object.keys(operation).sort()).toEqual(Object.keys(example("issue.response-200.json").operation).sort());
     expect(quote).toMatchObject({ quoteId, status: "issuing", version: 3, quoteNumber: "PC-000001", totals: ISSUED_TOTALS });
-    expect(quote.issuance).toEqual({ issuedAt: expect.any(String) as string, operationId: operation.operationId, issuerProfileId: "pesaschile-cl-v1" });
+    expect(quote.issuance).toEqual({ issuedAt: expect.any(String) as string, operationId: operation.operationId, issuerProfileId: "pesaschile-cl-v2" });
     expect(operation).toMatchObject({ type: "quote.issue", status: "pending", quoteId, completedAt: null, attempts: { count: 0, lastErrorCode: null } });
     expect(quote.document.available).toBe(false);
 

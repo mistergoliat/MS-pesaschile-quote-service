@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import { DELIVERY_MAX_ATTEMPTS, DELIVERY_RETRY_DELAYS_MS, nextRetry } from "../../src/application/quote-v2/delivery/delivery-policy";
-import { buildEmailEnvelope, EmailEnvelopeError, QUOTE_EMAIL_ENVELOPE_VERSION } from "../../src/application/quote-v2/delivery/email-envelope";
+import { buildEmailEnvelope, EmailEnvelopeError, QUOTE_EMAIL_ENVELOPE_VERSION, QUOTE_EMAIL_ENVELOPE_CONTENT_STATUS } from "../../src/application/quote-v2/delivery/email-envelope";
 import { documentFileName } from "../../src/application/quote-v2/document/document-file-name";
 import { assertSingleMailbox, buildMimeMessage, deliveryMessageId, encodeHeaderText, MimeMessageError } from "../../src/infrastructure/email/mime-message";
 import { renderEmailEnvelopeHtml } from "../../src/infrastructure/email/quote-email-envelope-template";
@@ -153,11 +153,18 @@ describe("R1.6B V2 email envelope (Z–AB): communication only, no commercial au
   const envelope = buildEmailEnvelope({ quoteNumber: "PC-000123", issueLocalDate: "2026-10-06", recipientName: "Camila <b>Rojas</b> & \"Co\"" });
   const rendered = renderEmailEnvelopeHtml(envelope);
 
-  it("has a code-owned version, the provisional subject and Chile-civil issue date (no UTC conversion)", () => {
+  it("has the unchanged code-owned v3, approved subject and Chile-civil issue date (no UTC conversion)", () => {
+    expect(QUOTE_EMAIL_ENVELOPE_CONTENT_STATUS).toBe("approved");
     expect(envelope.templateVersion).toBe(QUOTE_EMAIL_ENVELOPE_VERSION);
     expect(QUOTE_EMAIL_ENVELOPE_VERSION).toBe("quote-email-envelope-v3");
     expect(envelope.subject).toBe("Cotización Pesas Chile PC-000123");
     expect(envelope.paragraphs[0]).toBe("Adjuntamos la cotización PC-000123 emitida el 06/10/2026.");
+    expect(envelope.paragraphs).toEqual([
+      "Adjuntamos la cotización PC-000123 emitida el 06/10/2026.",
+      "La cotización formal se encuentra en el archivo PDF adjunto.",
+      "Para consultas, responde a este correo."
+    ]);
+    expect(envelope.signOff).toBe("Pesas Chile");
     expect(rendered.html).toContain("La cotización formal se encuentra en el archivo PDF adjunto.");
     expect(buildEmailEnvelope({ quoteNumber: "PC-1", issueLocalDate: "2026-12-31", recipientName: null }).greeting).toBe("Hola,");
   });

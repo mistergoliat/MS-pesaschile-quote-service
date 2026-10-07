@@ -11,6 +11,7 @@ import type { PoolClient } from "pg";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApplication, type ApplicationContext } from "../../src/app";
+import { buildIssuedQuoteDocumentModelV2 } from "../../src/application/quote-v2/document/issued-quote-document-model";
 import type { PdfRendererPort } from "../../src/application/quote-v2/document/pdf-renderer-port";
 import { issuedSnapshotHash } from "../../src/application/quote-v2/issued-snapshot";
 import { PrincipalRegistry } from "../../src/infrastructure/auth/principal-registry";
@@ -357,6 +358,39 @@ function ambiguous(database: PostgresDatabase, mode: "committed" | "rolled_back"
 }
 
 const operationIds = (result: { body: AnyRecord }): string[] => (result.body.items as AnyRecord[]).map((item) => item.operationId as string);
+
+describe("R1.7A frozen historical issuer release behavior", () => {
+  it("retries and recovers a synthetic pre-release v1 snapshot under archived v4, never substituting v2", async () => {
+    const harness = await start();
+    const accepted = await harness.draftIssue();
+    expect((await harness.quote(accepted.quoteId)).issuer_profile_id).toBe("pesaschile-cl-v2");
+    // Explicit disposable fixture setup to represent a pre-release acceptance.
+    // No historical fixture or production snapshot is upgraded or rewritten.
+    await harness.travel(`update quote_service.quotes set issuer_profile_id = 'pesaschile-cl-v1' where quote_id = $1`, [accepted.quoteId]);
+    const snapshot = await harness.database.withTransaction((client) => loadIssuedSnapshot(client, accepted.quoteId));
+    const snapshotHash = issuedSnapshotHash(snapshot);
+    await harness.travel(`update quote_service.issuance_operations set snapshot_hash = $2 where operation_id = $1`, [accepted.operationId, snapshotHash]);
+    const before = await harness.frozen(accepted.quoteId);
+    const expectedPdf = await renderer.renderPdf(buildIssuedQuoteDocumentModelV2(snapshot));
+    await harness.failNonRetryable(accepted.operationId);
+    const retried = await harness.retry({ quoteId: accepted.quoteId, failedOperationId: accepted.operationId });
+    expect(retried.exitCode).toBe(0);
+    expect(await harness.frozen(accepted.quoteId)).toEqual(before);
+    await harness.issueWithWorker(accepted.quoteId);
+    const manifest = await harness.manifest(accepted.quoteId);
+    const file = path.join(harness.storageRoot, ...String(manifest.storage_key).split("/"));
+    expect(manifest.template_version).toBe("quote-pdf-template-v4");
+    expect(manifest.semantic_snapshot_hash).toBe(snapshotHash);
+    expect(fs.readFileSync(file).equals(expectedPdf)).toBe(true);
+    expect((await harness.quote(accepted.quoteId)).issuer_profile_id).toBe("pesaschile-cl-v1");
+    const unchanged = await harness.tables();
+    expect(await harness.repair({ quoteId: accepted.quoteId })).toMatchObject({ exitCode: 0, body: { status: "already_intact" } });
+    fs.rmSync(file);
+    expect(await harness.repair({ quoteId: accepted.quoteId })).toMatchObject({ exitCode: 2, body: { reason: "TEMPLATE_VERSION_MISMATCH" } });
+    expect(fs.existsSync(file)).toBe(false);
+    expect(await harness.tables()).toEqual(unchanged);
+  }, TEST_TIMEOUT_MS);
+});
 
 describe("issuance:failed", () => {
   it(

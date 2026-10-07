@@ -16,7 +16,8 @@ import {
   RENDERER_VERSION,
   rendererRuntimeMismatches
 } from "../../src/infrastructure/documents/renderer-profile";
-import { createIssuedSnapshotFixture, createLinesFixture, createMixedTaxFixture, goldenPdfFixtures } from "../../src/scripts/pdf-fixture";
+import { createIssuedSnapshotFixture, createLinesFixture, createMixedTaxFixture, goldenPdfFixtures, productionPdfFixtures } from "../../src/scripts/pdf-fixture";
+import { PESASCHILE_CL_V2 } from "../../src/application/quote-v2/document/issuer-profiles";
 import { importClosure } from "../helpers/import-closure";
 import { compact, extractPdfText, pdfInfo } from "../helpers/pdf-text";
 
@@ -37,6 +38,21 @@ const GOLDEN_PDF_SHA256: Record<string, string> = {
   "unicode-latin-extended": "bb37935bb60ee3da7470d821670117230b02852f5b6075990dfeca2e431c5028"
 };
 
+/** R1.7A NEW production identity v2 / template v5, Node 24.14.0.
+ * Archived GOLDEN_PDF_SHA256 above is preserved, not refreshed.
+ */
+const PRODUCTION_GOLDEN_PDF_SHA256: Record<string, string> = {
+  "person-shipping-included": "18e101e656f2330c09afd346beed350cfbf09182b20a82ed8f0f1884b7fc5bcd",
+  "company-mixed-tax": "0d9a64e586ef4ce46a3d2d8cba3a1013d751f76ca6ada4ebad9b686b47af2a9b",
+  "guest-no-data-no-shipping": "1552625abae77ada8bd2a6748ca6c7b69c0bb2dd2c647ebc051f92966ae976f0",
+  "guest-with-contact": "19f3d6d4ac49d83163f53fc7b163b25ab9932d0972218732d027e87866cb3173",
+  "long-descriptions": "20a7ecbe39791404e72601c3f32875c87d6818d7a511bb6913b44659dbaeb7d1",
+  "hundred-lines": "c149ecf556dba674206b4de8c08c95f215b4d4d3f92607feede90fffd6e8aeda",
+  "unicode-latin-extended": "88e1a630826435eab89bcbeb82be628e17bd6d1c2b5b8d9deaa4e633ed4b5b19",
+  "excluded-no-shipping": "d0ec7614c28a650328f53734ff4e60aba824ae0ffac47b49f5c6a15fd554213f",
+  "exempt-no-shipping": "55d13f7775876937a003e617d1252ce58522321918c44ad7e770ca977bcb2c87"
+};
+
 const renderer = new NativePdfRenderer();
 const sha256 = (bytes: Buffer) => crypto.createHash("sha256").update(bytes).digest("hex");
 const render = (snapshot: IssuedSnapshot) => renderer.renderPdf(buildIssuedQuoteDocumentModelV2(snapshot));
@@ -54,6 +70,18 @@ async function renderError(snapshot: IssuedSnapshot): Promise<DocumentRenderErro
 }
 
 describe("formal PDF: content survives rendering (text extraction)", () => {
+  it.each(productionPdfFixtures())("R1.7A %s: approved identity, tax presentation and frozen totals survive the PDF", async (_name, snapshot) => {
+    const model = buildIssuedQuoteDocumentModelV2(snapshot);
+    const pdf = await render(snapshot);
+    const text = compact(await extractPdfText(pdf));
+    for (const expected of [PESASCHILE_CL_V2.legalName, `RUT: ${PESASCHILE_CL_V2.rut}`, PESASCHILE_CL_V2.address!, PESASCHILE_CL_V2.website!, model.validityStatement, model.totals.net, model.totals.tax, model.totals.gross, ...model.lines.map((line) => line.taxBasis)]) {
+      expect(text).toContain(compact(expected));
+    }
+    expect(text).not.toContain("Datostributariosdelemisorpendientesdeaprobación");
+    expect(text.includes("ValoresconIVAincluido.")).toBe(model.taxStatement !== null);
+    expect(pdf.toString("latin1").match(/\/Subtype\s*\/Image/g)?.length).toBe(2);
+    expect(model.templateVersion).toBe("quote-pdf-template-v5");
+  });
   it("renders every section of the model and nothing internal", async () => {
     const text = compact(await extractPdfText(await render(createMixedTaxFixture())));
 
@@ -123,6 +151,20 @@ describe("formal PDF: determinism", () => {
     expect(actual).toEqual(GOLDEN_PDF_SHA256);
   });
 
+  it("R1.7A production fixtures render to NEW pinned hashes, repeatedly and with fresh renderers", async () => {
+    const actual: Record<string, string> = {};
+    for (const [name, snapshot] of productionPdfFixtures()) {
+      const model = buildIssuedQuoteDocumentModelV2(snapshot);
+      const first = await renderer.renderPdf(model);
+      const repeated = await renderer.renderPdf(model);
+      const fresh = await new NativePdfRenderer().renderPdf(model);
+      expect(first.equals(repeated)).toBe(true);
+      expect(first.equals(fresh)).toBe(true);
+      actual[name] = sha256(first);
+    }
+    expect(actual).toEqual(PRODUCTION_GOLDEN_PDF_SHA256);
+  });
+
   it("Y/Z: same model → same bytes: repeated, fresh vs reused renderer, concurrent calls", async () => {
     const model = buildIssuedQuoteDocumentModelV2(createLinesFixture(30));
     const reused = await Promise.all([renderer.renderPdf(model), renderer.renderPdf(model)]);
@@ -146,9 +188,10 @@ describe("formal PDF: determinism", () => {
       });
 
       expect(result.status, result.stderr).toBe(0);
-      const output = JSON.parse(result.stdout) as { tz: string; hashes: Record<string, string> };
+      const output = JSON.parse(result.stdout) as { tz: string; hashes: Record<string, string>; productionHashes: Record<string, string> };
       expect(output.tz).toBe(env.TZ);
       expect(output.hashes).toEqual(GOLDEN_PDF_SHA256);
+      expect(output.productionHashes).toEqual(PRODUCTION_GOLDEN_PDF_SHA256);
     }
   }, 240_000);
 

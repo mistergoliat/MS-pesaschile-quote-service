@@ -173,7 +173,12 @@ describe("document access and integrity: no deletion of content-addressed artifa
 
     for (const file of sourceFiles("src")) {
       // Code only: comments may name what was removed.
-      const source = fs.readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+      let source = fs.readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+      // R1.7A permits the exact approved legal address only in the code-owned
+      // issuer profile. It remains forbidden in email and every other module.
+      if (file === "src/application/quote-v2/document/issuer-profiles.ts") {
+        source = source.replace('address: "Av. Monseñor Valech 12050 bodega 26, comuna de Maipú, Región Metropolitana."', 'address: "[approved issuer address]"');
+      }
       expect(source, file).not.toMatch(/CanonicalIssuedQuoteSnapshot|formatCommercialUnitPriceDisplay|formatUtcShortSpanishDateDisplay|normalizeEmailAddress|QUOTE_EMAIL_VALIDITY_POLICY_DAYS|SenderSignature|Bastian|42222?0146|Valech/);
       expect(source, file).not.toMatch(/5 d[ií]as|v[aá]lidos por/i);
       expect(source, file).not.toMatch(/incluyen IVA/i);

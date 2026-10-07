@@ -6,10 +6,8 @@
  * `issuerProfileId` for new quotes) or a template version bump; an accepted
  * quote's profile id is frozen in its snapshot.
  *
- * U3 (issuer legal name, RUT, address, contact) is still open: the values
- * below are the current provisional ones and `contentStatus` says so. The
- * document renders an explicit pending notice instead of inventing a RUT or
- * an address.
+ * R1.7A approves v2 for new acceptances. V1 is archived with its exact
+ * provisional values; historical snapshots never select the current profile.
  */
 
 export interface IssuerProfile {
@@ -35,7 +33,20 @@ export const PESASCHILE_CL_V1: IssuerProfile = {
   contentStatus: "provisional-u3"
 };
 
-const PROFILES: ReadonlyMap<string, IssuerProfile> = new Map([[PESASCHILE_CL_V1.id, PESASCHILE_CL_V1]]);
+export const PESASCHILE_CL_V2: IssuerProfile = Object.freeze({
+  id: "pesaschile-cl-v2",
+  legalName: "Pesas Chile S.p.A",
+  rut: "76.921.044-K",
+  address: "Av. Monseñor Valech 12050 bodega 26, comuna de Maipú, Región Metropolitana.",
+  website: "https://pesaschile.cl",
+  logoAssetId: "asset://pesaschile-brand-v1/logo-on-light",
+  contentStatus: "approved"
+});
+
+const PROFILES: ReadonlyMap<string, IssuerProfile> = new Map([
+  [PESASCHILE_CL_V1.id, PESASCHILE_CL_V1],
+  [PESASCHILE_CL_V2.id, PESASCHILE_CL_V2]
+]);
 
 export class UnknownIssuerProfileError extends Error {
   override readonly name = "UnknownIssuerProfileError";
