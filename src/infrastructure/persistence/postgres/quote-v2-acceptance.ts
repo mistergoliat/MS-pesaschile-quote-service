@@ -290,21 +290,24 @@ export async function answerFromBinding<T>(
     : { kind: "conflict", boundRequestFingerprint: bound.requestFingerprint };
 }
 
-/** Binds the key in the transaction that commits its effect (I-2). */
+/**
+ * Binds the key in the transaction that commits its effect (I-2). A
+ * `deliveryId` binds a delivery (`quote.delivery.email`), otherwise the quote.
+ */
 export async function bind(
   client: PoolClient,
   context: CommandContext,
   body: unknown,
-  resource: { quoteId: string; operationId: string | null }
+  resource: { quoteId: string; operationId: string | null; deliveryId?: string }
 ): Promise<void> {
   await new PostgresIdempotencyBindingStore(client).insert(client, {
     ...context.scope,
     requestFingerprint: context.fingerprint,
     requestSnapshot: body,
-    resourceType: "quote",
+    resourceType: resource.deliveryId === undefined ? "quote" : "delivery",
     quoteId: resource.quoteId,
     operationId: resource.operationId,
-    deliveryId: null
+    deliveryId: resource.deliveryId ?? null
   });
 }
 

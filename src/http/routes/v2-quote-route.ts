@@ -40,11 +40,11 @@ const ISSUING_RETRY_AFTER_SECONDS = 2;
 const invalidRequest = (message: string, details?: Record<string, unknown>) =>
   new HttpError({ statusCode: 400, code: "invalid_request", message, ...(details ? { details } : {}) });
 
-/** 400 checks on path parameters (`quoteId`, `operationId` are UUIDs). */
+/** 400 checks on path parameters (`quoteId`, `operationId`, `deliveryId` are UUIDs). */
 function pathParameterError(request: FastifyRequest): HttpError | null {
   const params = request.params as Record<string, string | undefined>;
 
-  for (const name of ["quoteId", "operationId"]) {
+  for (const name of ["quoteId", "operationId", "deliveryId"]) {
     const value = params[name];
 
     if (value !== undefined && !UUID_PATTERN.test(value)) {
@@ -56,7 +56,7 @@ function pathParameterError(request: FastifyRequest): HttpError | null {
 }
 
 /** 400 checks that precede authentication (Domain §12): mutation headers and path parameters. */
-const validateHeaders: preValidationHookHandler = (request, _reply, done) => {
+export const validateHeaders: preValidationHookHandler = (request, _reply, done) => {
   if (!isValidIdempotencyKey(request.headers["idempotency-key"])) {
     done(invalidRequest("Idempotency-Key header is missing or invalid"));
     return;
@@ -113,7 +113,7 @@ function parseQuery<T>(schema: z.ZodType<T>, request: FastifyRequest): T {
 }
 
 /** preValidation (before 401/403, Domain §12) for read routes: path parameters, query, optional key header. */
-function validateRead(schema: z.ZodType<unknown> | null, options: { idempotencyKey?: boolean } = {}): preValidationHookHandler {
+export function validateRead(schema: z.ZodType<unknown> | null, options: { idempotencyKey?: boolean } = {}): preValidationHookHandler {
   return (request, _reply, done) => {
     try {
       const pathError = pathParameterError(request);
@@ -139,7 +139,7 @@ function validateRead(schema: z.ZodType<unknown> | null, options: { idempotencyK
 
 // ---------- mutations ----------
 
-const quoteIdOf = (request: FastifyRequest) => (request.params as { quoteId: string }).quoteId;
+export const quoteIdOf = (request: FastifyRequest) => (request.params as { quoteId: string }).quoteId;
 
 /** `validityOverride` additionally needs the override scope, before any idempotency lookup (security §2). */
 function authorizeOverride(request: FastifyRequest): void {
@@ -151,7 +151,7 @@ function authorizeOverride(request: FastifyRequest): void {
 }
 
 /** Unwraps a command outcome: 409 on a conflicting binding, `Idempotent-Replay` on a replay. */
-function resultOf<T>(outcome: CommandOutcome<T>, operation: IdempotentOperation, reply: FastifyReply): T {
+export function resultOf<T>(outcome: CommandOutcome<T>, operation: IdempotentOperation, reply: FastifyReply): T {
   if (outcome.kind === "conflict") {
     throw new HttpError({
       statusCode: 409,

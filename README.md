@@ -64,6 +64,8 @@ curl -i localhost:3000/health/ready
 | `POST /v2/quotes/drafts` | `quotes:draft:write` | editable draft, version 1, owner totals; no number, validity, operation or document → `201` |
 | `PATCH /v2/quotes/{quoteId}/draft` | `quotes:draft:write` | replaces the present top-level members (`shipping: null` removes), recomputes totals, version + 1, fenced by `expectedVersion` (`409 version_conflict`) → `200` |
 | `POST /v2/quotes/{quoteId}/issue` | `quotes:issue` (+ `quotes:validity:override`) | same acceptance as `POST /v2/quotes` applied to the draft at `expectedVersion`: same `quoteId`, number, validity → `200` `issued` within the sync budget, else `202` `issuing` |
+| `POST /v2/quotes/{quoteId}/deliveries/email` | `quotes:delivery:email` (+ visibility) | the **only** email trigger. R1.6A queues one durable `pending` delivery of an effectively `issued` quote (recipient snapshot, pinned PDF hash, audit, binding) → `202`; **sends nothing**. No sender is composed in production yet, so it answers `503 dependency_unavailable` (`email_provider`). See [docs/email-delivery-request.md](docs/email-delivery-request.md) |
+| `GET /v2/quotes/{quoteId}/deliveries/{deliveryId}` | `quotes:read` (+ visibility) | contract `Delivery` (masked recipient only) → `200` |
 
 Semantics, failure policy and configuration:
 [docs/runtime-lifecycle.md](docs/runtime-lifecycle.md). Principals, scopes and

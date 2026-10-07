@@ -28,6 +28,8 @@ const BUILD_TIMEOUT_MS = Number.isFinite(configuredBuildTimeoutMs) ? configuredB
 //     restart, same-key retry returns the same issued quote and document;
 // then a tampered and a missing artifact (503 document_storage_failed, never
 // regenerated) and the integrity verifier inside the image.
+// R1.6A: delivery requests in the production image (no sender composed):
+// 403 without the scope, 503 email_provider with it, nothing queued or bound.
 const PHASE_TIMEOUT_MS = {
   build: BUILD_TIMEOUT_MS,
   cleanup: 180_000,
@@ -43,6 +45,7 @@ const PHASE_TIMEOUT_MS = {
   v2Create: 30_000,
   v2Draft: 30_000,
   v2ReadCancel: 30_000,
+  v2Delivery: 30_000,
   v1Retired: 15_000,
   restart: 90_000,
   asyncIssuance: 60_000,
@@ -66,13 +69,14 @@ const phaseDefinitions = [
   { key: "v2Create", label: "PHASE 11 v2 create-and-issue" },
   { key: "v2Draft", label: "PHASE 12 v2 draft, edit and issue" },
   { key: "v2ReadCancel", label: "PHASE 13 v2 read, reconcile and cancel" },
-  { key: "v1Retired", label: "PHASE 14 v1 retired" },
-  { key: "restart", label: "PHASE 15 restart" },
-  { key: "asyncIssuance", label: "PHASE 16 async issuance after restart" },
-  { key: "crashBeforeCommit", label: "PHASE 17 kill after publication, before T5 commit" },
-  { key: "crashAfterCommit", label: "PHASE 18 kill after T5 commit, before the response" },
-  { key: "integrity", label: "PHASE 19 tampered and missing artifacts" },
-  { key: "gracefulShutdown", label: "PHASE 20 graceful shutdown" }
+  { key: "v2Delivery", label: "PHASE 14 v2 delivery request, provider not configured" },
+  { key: "v1Retired", label: "PHASE 15 v1 retired" },
+  { key: "restart", label: "PHASE 16 restart" },
+  { key: "asyncIssuance", label: "PHASE 17 async issuance after restart" },
+  { key: "crashBeforeCommit", label: "PHASE 18 kill after publication, before T5 commit" },
+  { key: "crashAfterCommit", label: "PHASE 19 kill after T5 commit, before the response" },
+  { key: "integrity", label: "PHASE 20 tampered and missing artifacts" },
+  { key: "gracefulShutdown", label: "PHASE 21 graceful shutdown" }
 ];
 
 const imageTag = process.env.SMOKE_IMAGE_TAG ?? "pesaschile-quote-service:t06-smoke";
@@ -104,7 +108,9 @@ const state = {
     // Manual-flow operator: drafts, issues, reads, audits and cancels its own quotes.
     backofficeToken: crypto.randomBytes(32).toString("base64url"),
     // Supervisor with quotes:read:any (reads everything) and quotes:cancel (own quotes only, A4).
-    supervisorToken: crypto.randomBytes(32).toString("base64url")
+    supervisorToken: crypto.randomBytes(32).toString("base64url"),
+    // Customer communication profile (security §5): read:any + delivery:email.
+    commsToken: crypto.randomBytes(32).toString("base64url")
   },
   app: {
     hostPort: null,
@@ -188,6 +194,12 @@ function buildAppEnv() {
           principalType: "operator",
           scopes: ["quotes:read", "quotes:read:any", "quotes:document:read", "quotes:cancel", "quotes:audit:read"],
           tokenSha256: [crypto.createHash("sha256").update(state.credentials.supervisorToken).digest("hex")]
+        },
+        {
+          principalId: "smoke-comms",
+          principalType: "service",
+          scopes: ["quotes:read", "quotes:read:any", "quotes:delivery:email"],
+          tokenSha256: [crypto.createHash("sha256").update(state.credentials.commsToken).digest("hex")]
         }
       ]
     }),
@@ -1149,6 +1161,48 @@ async function runSmoke() {
 
     const counts = (await queryDatabase("select count(*) || ':' || (select count(*) from quote_service.issuance_operations) from quote_service.quotes;")).trim();
     assert(counts === "3:2", `Expected 3 quotes and 2 operations, found ${counts}`);
+  });
+
+  // R1.6A: the production image composes no mail sender (the V2 provider
+  // adapter and worker are R1.6B), so an otherwise valid delivery request of
+  // an issued quote answers 503 email_provider and leaves no state. No email
+  // can be sent from this image.
+  await runPhase("v2Delivery", PHASE_TIMEOUT_MS.v2Delivery, async () => {
+    const comms = { Authorization: `Bearer ${state.credentials.commsToken}` };
+    const { quoteId } = state.summary.v2Quote;
+    const path = `/v2/quotes/${quoteId}/deliveries/email`;
+    const body = { recipient: { email: "smoke-recipient@example.invalid" } };
+
+    const forbidden = await fetchJson(path, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${state.credentials.supervisorToken}`, "Idempotency-Key": `smoke-delivery-${suffix}` },
+      body
+    });
+    assert(forbidden.status === 403 && forbidden.body.error.details.requiredScope === "quotes:delivery:email", `Expected 403, got ${forbidden.status}`);
+
+    const disabled = await fetchJson(path, { method: "POST", headers: { ...comms, "Idempotency-Key": `smoke-delivery-${suffix}` }, body });
+    assert(
+      disabled.status === 503 &&
+        disabled.body.error.code === "dependency_unavailable" &&
+        disabled.body.error.details.dependency === "email_provider",
+      `Expected 503 email_provider, got ${disabled.status} ${disabled.text}`
+    );
+    assert(!disabled.text.includes("smoke-recipient"), "Delivery error echoed the recipient");
+
+    const lookup = await fetchJson("/v2/idempotency/current?operation=quote.delivery.email", {
+      headers: { ...comms, "Idempotency-Key": `smoke-delivery-${suffix}` }
+    });
+    assert(lookup.status === 200 && lookup.body.state === "not_found", `A rejected delivery bound its key: ${lookup.text}`);
+
+    const missing = await fetchJson(`/v2/quotes/${quoteId}/deliveries/${crypto.randomUUID()}`, { headers: comms });
+    assert(missing.status === 404 && missing.body.error.code === "delivery_not_found", `GET delivery: ${missing.status} ${missing.text}`);
+
+    const counts = (
+      await queryDatabase(
+        "select (select count(*) from quote_service.quote_deliveries) || ':' || (select count(*) from quote_service.idempotency_bindings where operation = 'quote.delivery.email');"
+      )
+    ).trim();
+    assert(counts === "0:0", `Expected no delivery and no delivery binding, found ${counts}`);
   });
 
   await runPhase("v1Retired", PHASE_TIMEOUT_MS.v1Retired, async () => {

@@ -34,7 +34,9 @@ Never reorder. The service never migrates by itself.
 - PostgreSQL ≥ 15.
 - A persistent volume for `QUOTE_DOCUMENT_STORAGE_ROOT`, owned by the
   service user.
-- `QUOTE_EMAIL_PROVIDER=disabled`. Email delivery is not wired until R1.6.
+- `QUOTE_EMAIL_PROVIDER=disabled`. Since R1.6A delivery requests exist but no
+  sender is composed in production: they answer `503 email_provider` and queue
+  nothing. Delivery execution (worker, provider) is R1.6B.
 
 ### 0b. Backup first (any database or document root that may hold V1 data)
 

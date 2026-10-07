@@ -9,7 +9,8 @@ import { z } from "zod";
 
 // eslint-disable-next-line no-control-regex -- the contract `Text` pattern rejects control characters
 const textPattern = /^[^\s\x00-\x1F\x7F](?:[^\x00-\x1F\x7F]*[^\s\x00-\x1F\x7F])?$/;
-const text = (max: number) => z.string().min(1).max(max).regex(textPattern);
+/** Contract `Text` limited to `max` characters. */
+export const text = (max: number) => z.string().min(1).max(max).regex(textPattern);
 const systemCode = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/);
 const opaqueReference = z.string().min(1).max(200).regex(/^[!-~](?:[ -~]{0,198}[!-~])?$/);
 const quantity = z.string().regex(/^(?:[1-9][0-9]{0,3}(?:\.[0-9]{0,5}[1-9])?|0\.[0-9]{0,5}[1-9])$/);
@@ -226,7 +227,9 @@ export const REJECTION_STATUS = {
   operation_not_found: 404,
   invalid_state_transition: 409,
   version_conflict: 409,
-  operation_in_progress: 409
+  operation_in_progress: 409,
+  delivery_not_found: 404,
+  delivery_recipient_missing: 422
 } as const;
 
 /** 4xx rejection of a quote command; the transaction rolls back and nothing is bound. */
