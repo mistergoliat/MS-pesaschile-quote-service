@@ -5,6 +5,7 @@ import {
 } from "../application/quote-v2/document/issued-quote-document-model";
 import type { IssuedCharge, IssuedLine, IssuedShipping, IssuedSnapshot } from "../application/quote-v2/issued-snapshot";
 import { NativePdfRenderer } from "../infrastructure/documents/native-pdf-renderer";
+import { PESASCHILE_CL_V2 } from "../application/quote-v2/document/issuer-profiles";
 
 /*
  * Synthetic, non-sensitive issued snapshots for the formal PDF (previews,
@@ -209,4 +210,27 @@ export function goldenPdfFixtures(): ReadonlyArray<readonly [string, IssuedSnaps
       })
     ]
   ];
+}
+
+/** New synthetic acceptances with distinct ids/numbers and approved issuer v2.
+ * Reuse only synthetic commercial scenarios; archived snapshots stay v1.
+ */
+export function productionPdfFixtures(): ReadonlyArray<readonly [string, IssuedSnapshot]> {
+  const fixtures: ReadonlyArray<readonly [string, IssuedSnapshot]> = [
+    ...goldenPdfFixtures(),
+    ["excluded-no-shipping", createIssuedSnapshotFixture({
+      customer: { kind: "person", displayName: "Cliente de prueba" },
+      lines: [{ description: "Balanza de prueba", price: { amount: 100_000, taxBasis: "excluded", taxRate: "0.19" } }]
+    })],
+    ["exempt-no-shipping", createIssuedSnapshotFixture({
+      customer: { kind: "guest" },
+      lines: [{ description: "Servicio de prueba", kind: "service", price: { amount: 45_000, taxBasis: "exempt" } }]
+    })]
+  ];
+  return fixtures.map(([name, snapshot], index) => [name, {
+    ...snapshot,
+    quoteId: `17000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    quoteNumber: `PC-${1_700_001 + index}`,
+    issuerProfileId: PESASCHILE_CL_V2.id
+  }] as const);
 }

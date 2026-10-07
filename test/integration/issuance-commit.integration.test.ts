@@ -232,7 +232,7 @@ function documentInput(attempt: ClaimedAttempt, published: { pdfSha256: string; 
     byteLength: published.byteLength,
     storageKey: published.storageKey,
     rendererVersion: RENDERER_VERSION,
-    templateVersion: "quote-pdf-template-v4"
+    templateVersion: "quote-pdf-template-v5"
   };
 }
 
@@ -274,7 +274,7 @@ describe("T5: publish + fenced manifest commit", () => {
         pdf_sha256: sha256(expected),
         byte_length: String(expected.byteLength),
         renderer_version: RENDERER_VERSION,
-        template_version: "quote-pdf-template-v4",
+        template_version: "quote-pdf-template-v5",
         storage_key: `artifacts/sha256/${sha256(expected).slice(0, 2)}/${sha256(expected).slice(2, 4)}/${sha256(expected)}.pdf`,
         artifact_ref: `sha256:${sha256(expected)}`
       });
@@ -301,7 +301,7 @@ describe("T5: publish + fenced manifest commit", () => {
             pdfSha256: manifest.pdf_sha256,
             byteLength: expected.byteLength,
             rendererVersion: RENDERER_VERSION,
-            templateVersion: "quote-pdf-template-v4",
+            templateVersion: "quote-pdf-template-v5",
             attempts: 1
           }
         }
@@ -312,7 +312,7 @@ describe("T5: publish + fenced manifest commit", () => {
       const read = await harness.call("GET", `/v2/quotes/${quoteId}`, TEST_TOKENS.sales, undefined, null);
       expect(read.body).toMatchObject({
         status: "issued",
-        document: { available: true, pdfSha256: manifest.pdf_sha256, byteLength: expected.byteLength, rendererVersion: RENDERER_VERSION, templateVersion: "quote-pdf-template-v4", artifactRef: manifest.artifact_ref }
+        document: { available: true, pdfSha256: manifest.pdf_sha256, byteLength: expected.byteLength, rendererVersion: RENDERER_VERSION, templateVersion: "quote-pdf-template-v5", artifactRef: manifest.artifact_ref }
       });
       expect(read.body.document.generatedAt).toBe((manifest.generated_at as Date).toISOString().replace(".000Z", "Z"));
     },

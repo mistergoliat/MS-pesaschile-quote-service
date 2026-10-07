@@ -11,6 +11,7 @@ import {
 } from "../../../application/idempotency/idempotency-scope";
 import { sha256Jcs } from "../../../application/quote/canonical-json";
 import { ISSUED_SNAPSHOT_HASH_ALGORITHM, issuedSnapshotHash } from "../../../application/quote-v2/issued-snapshot";
+import { PESASCHILE_CL_V2 } from "../../../application/quote-v2/document/issuer-profiles";
 import { chargeAmounts, MAX_CLP_AMOUNT, sumTotals, type ChargeAmounts, type TaxBasis } from "../../../application/quote-v2/arithmetic";
 import {
   createQuoteRequestSchema,
@@ -27,7 +28,7 @@ import type { QuoteClock } from "./quote-clock";
 import { omitNull, readOperation, readQuote, type Json, type OperationView, type QuoteView } from "./quote-v2-reads";
 
 const OPERATION: IdempotentOperation = "quote.create_and_issue";
-const ISSUER_PROFILE_ID = "pesaschile-cl-v1";
+const ISSUER_PROFILE_ID = PESASCHILE_CL_V2.id;
 const QUOTE_NUMBER_PREFIX = "PC";
 
 export interface QuoteOperationResult {

@@ -167,7 +167,7 @@ describe("POST /v2/quotes — acceptance", () => {
     });
     const withoutLineId = (line: AnyRecord) => Object.fromEntries(Object.entries(line).filter(([key]) => key !== "lineId"));
     expect(quote.lines.map(withoutLineId)).toEqual(frozen.quote.lines.map(withoutLineId));
-    expect(quote.issuance).toEqual({ issuedAt: quote.createdAt, operationId: operation.operationId, issuerProfileId: "pesaschile-cl-v1" });
+    expect(quote.issuance).toEqual({ issuedAt: quote.createdAt, operationId: operation.operationId, issuerProfileId: "pesaschile-cl-v2" });
     expect(quote.validity).toEqual(resolveValidity(Date.parse(quote.issuance.issuedAt)));
     expect(operation).toEqual({
       operationId: operation.operationId,

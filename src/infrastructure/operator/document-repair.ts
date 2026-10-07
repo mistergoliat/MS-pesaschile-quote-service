@@ -9,7 +9,7 @@ import {
 } from "../../application/quote-v2/document/artifact-store-port";
 import { buildIssuedQuoteDocumentModelV2, type IssuedQuoteDocumentModelV2 } from "../../application/quote-v2/document/issued-quote-document-model";
 import type { PdfRendererPort } from "../../application/quote-v2/document/pdf-renderer-port";
-import { TEMPLATE_VERSION } from "../../application/quote-v2/document/template-v4";
+import { TEMPLATE_VERSION } from "../../application/quote-v2/document/template-v5";
 import { ISSUED_SNAPSHOT_HASH_ALGORITHM, issuedSnapshotHash, type IssuedSnapshot } from "../../application/quote-v2/issued-snapshot";
 import type { PrincipalRegistry } from "../auth/principal-registry";
 import { loadIssuedSnapshot } from "../persistence/postgres/issued-snapshot-loader";
