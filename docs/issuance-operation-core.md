@@ -108,7 +108,7 @@ poll.
 
 ## 7. Operator retry (T10)
 
-`createOperatorRetry({quoteId, failedOperationId, actorPrincipalId})` runs
+`createOperatorRetry({quoteId, failedOperationId, actorPrincipalId, reasonCode?})` runs
 under the quote row lock and requires all of the following: the quote is
 `issuing`, `failedOperationId` is its current operation, and that operation is
 `failed`. It then:
@@ -119,13 +119,16 @@ under the quote row lock and requires all of the following: the quote is
    snapshot hash, `generation 0`, `pending`, `next_attempt_at = accepted_at = now`,
    `deadline_at = now + QUOTE_ISSUANCE_DEADLINE_MS`);
 3. sets `current_operation_id` and increments the quote version;
-4. records `quote.issue.accepted` with `retryOf` (`issuing → issuing`).
+4. records `quote.issue.accepted` with `retryOf` (`issuing → issuing`) and,
+   when given, the machine-readable `reasonCode` (`^[a-z][a-z0-9_]{1,63}$`,
+   rejected before any database access otherwise; R1.6C).
 
 Concurrent retries serialize on the quote lock: one wins and the rest get
 `INVALID_STATE`. A retry racing a creator cancel (T11) serializes the same
 way. If the retry wins, the cancel answers `409 operation_in_progress`. If the
 cancel wins, the retry gets `INVALID_STATE` (`cancelled`) and creates nothing.
-There is no HTTP or operator tooling yet (R1.6).
+There is no HTTP surface. The operator invokes it with the R1.6C
+`issuance:retry` command ([operator-controls.md](operator-controls.md)).
 
 ## 8. Issued snapshot and hash ownership
 

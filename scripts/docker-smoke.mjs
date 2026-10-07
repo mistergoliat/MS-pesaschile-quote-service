@@ -31,6 +31,13 @@ const BUILD_TIMEOUT_MS = Number.isFinite(configuredBuildTimeoutMs) ? configuredB
 // R1.6A/B: delivery requests in the production image (provider disabled by
 // default, no sender composed): 403 without the scope, 503 email_provider
 // with it, nothing queued or bound, emailProvider disabled, no delivery logs.
+// R1.6C: operator controls through the compiled runtime commands inside the
+// image: a T6 failure (holder killed inside T5, deadline passed) and a T12
+// failure (a glyph the pinned font cannot draw) listed by issuance:failed;
+// issuance:retry dry run, W6 refusals, T10 with --yes, issued by the worker,
+// second run not applicable; documents:repair of the artifact deleted by the
+// integrity phase (dry run, byte-exact restore, document served), integrity
+// conflict on the tampered one (never overwritten), legacy manifest refused.
 const PHASE_TIMEOUT_MS = {
   build: BUILD_TIMEOUT_MS,
   cleanup: 180_000,
@@ -53,6 +60,7 @@ const PHASE_TIMEOUT_MS = {
   crashBeforeCommit: 120_000,
   crashAfterCommit: 120_000,
   integrity: 60_000,
+  operatorControls: 240_000,
   gracefulShutdown: 30_000
 };
 
@@ -77,7 +85,8 @@ const phaseDefinitions = [
   { key: "crashBeforeCommit", label: "PHASE 18 kill after publication, before T5 commit" },
   { key: "crashAfterCommit", label: "PHASE 19 kill after T5 commit, before the response" },
   { key: "integrity", label: "PHASE 20 tampered and missing artifacts" },
-  { key: "gracefulShutdown", label: "PHASE 21 graceful shutdown" }
+  { key: "operatorControls", label: "PHASE 21 operator controls (issuance:failed, issuance:retry, documents:repair)" },
+  { key: "gracefulShutdown", label: "PHASE 22 graceful shutdown" }
 ];
 
 const imageTag = process.env.SMOKE_IMAGE_TAG ?? "pesaschile-quote-service:t06-smoke";
@@ -96,7 +105,8 @@ const state = {
     appCrashBefore: `quote-smoke-app-c-${suffix}`,
     appRecoverBefore: `quote-smoke-app-d-${suffix}`,
     appCrashAfter: `quote-smoke-app-e-${suffix}`,
-    appFinal: `quote-smoke-app-f-${suffix}`
+    appFinal: `quote-smoke-app-f-${suffix}`,
+    appOperator: `quote-smoke-app-g-${suffix}`
   },
   paths: {
     storageRoot: "/var/lib/pesaschile/quote-documents"
@@ -1416,6 +1426,124 @@ async function runSmoke() {
     assert(report.ok === report.checked - 2, `Other artifacts must verify: ${verify.stdout}`);
     assert(!verify.stdout.includes("artifacts/") && !verify.stdout.includes(state.paths.storageRoot), "Verifier output leaked paths");
     state.summary.integrity = { byStatus: report.byStatus };
+  });
+
+  await runPhase("operatorControls", PHASE_TIMEOUT_MS.operatorControls, async () => {
+    /** A compiled operator command inside the active container: exit code and its one JSON object. */
+    const operator = async (command, args = []) => {
+      const result = await docker(["exec", state.app.activeContainer, "npm", "run", "--silent", command, "--", ...args], { timeoutMs: 90_000, allowFailure: true });
+      const text = `${result.stdout}\n${result.stderr}`;
+      assert(!text.includes(state.paths.storageRoot) && !text.includes("artifacts/") && !text.includes("postgres:postgres"), `${command} leaked a path or credential: ${text}`);
+      assert(!/Camila|camila\.rojas|Mancuerna|漢/.test(text), `${command} leaked customer or commercial data: ${text}`);
+      const json = result.stdout.trim() || result.stderr.trim();
+      return { code: result.code, body: JSON.parse(json.slice(json.indexOf("{"))) };
+    };
+    const tables = () =>
+      queryDatabase(
+        "select (select string_agg(document_id || origin || pdf_sha256 || byte_length || renderer_version || template_version || storage_key, ',' order by document_id) from quote_service.quote_documents) || '|' || (select count(*) from quote_service.issuance_operations) || '|' || (select count(*) from quote_service.quote_audit_events);"
+      );
+
+    const empty = await operator("issuance:failed:runtime");
+    assert(empty.code === 0 && empty.body.status === "ok" && empty.body.count === 0, `issuance:failed (empty): ${JSON.stringify(empty)}`);
+
+    // T6 in the production image: the holder dies inside T5, then the deadline passes.
+    const lock = await holdLock("lock table quote_service.quote_documents in share mode");
+    const body = JSON.parse(readFileSync("docs/v2/examples/create-and-issue.request.json", "utf8"));
+    body.externalCorrelation = { ...body.externalCorrelation, externalReference: `smoke-operator-${suffix}` };
+    const headers = { Authorization: `Bearer ${state.credentials.salesToken}`, "Idempotency-Key": `smoke-operator-${suffix}` };
+    const pending = fetchJson("/v2/quotes", { method: "POST", headers, body, timeoutMs: 60_000 }).catch((error) => ({ error: String(error) }));
+    await waitForQuery(
+      "select count(*) from pg_stat_activity where wait_event_type = 'Lock' and query like 'insert into quote_service.quote_documents%';",
+      "1",
+      30_000,
+      "T5 did not reach the manifest insert"
+    );
+    const t6QuoteId = await queryDatabase(`select quote_id from quote_service.quotes where external_reference = 'smoke-operator-${suffix}';`);
+    const t6OperationId = await queryDatabase(`select current_operation_id from quote_service.quotes where quote_id = '${t6QuoteId}';`);
+    await killActiveApp();
+    await lock.release();
+    await pending;
+    // Time travel (smoke fixture only): the absolute deadline and the dead holder's lease are in the past.
+    await queryDatabase(
+      `begin; set local session_replication_role = replica; update quote_service.issuance_operations set deadline_at = clock_timestamp() - interval '1 second', lease_expires_at = clock_timestamp() - interval '2 seconds', accepted_at = least(accepted_at, clock_timestamp() - interval '2 hours') where operation_id = '${t6OperationId}'; commit;`
+    );
+    state.app.syncBudgetMs = "0";
+    await startApp(state.names.appOperator, PHASE_TIMEOUT_MS.appStart);
+    await waitForReadiness(60_000);
+    await waitForQuery(`select status || ':' || last_error_code from quote_service.issuance_operations where operation_id = '${t6OperationId}';`, "failed:issuance_deadline_exceeded", 30_000, "Deadline sweep did not fail the operation (T6)");
+
+    // T12 in the production image: a character the pinned font set cannot draw.
+    const glyph = JSON.parse(readFileSync("docs/v2/examples/create-and-issue.request.json", "utf8"));
+    glyph.customer = { ...glyph.customer, displayName: "Cliente 漢字" };
+    glyph.externalCorrelation = { ...glyph.externalCorrelation, externalReference: `smoke-glyph-${suffix}` };
+    const glyphCreated = await fetchJson("/v2/quotes", { method: "POST", headers: { ...headers, "Idempotency-Key": `smoke-glyph-${suffix}` }, body: glyph, timeoutMs: 20_000 });
+    assert(glyphCreated.status === 202, `Glyph quote: ${glyphCreated.status} ${glyphCreated.text}`);
+    const t12OperationId = glyphCreated.body.operation.operationId;
+    await waitForQuery(`select status || ':' || last_error_code from quote_service.issuance_operations where operation_id = '${t12OperationId}';`, "failed:document_generation_failed", 30_000, "Unsupported glyph did not fail the operation (T12)");
+
+    const failed = await operator("issuance:failed:runtime");
+    assert(failed.code === 0 && failed.body.count === 2, `issuance:failed: ${JSON.stringify(failed.body)}`);
+    const listed = Object.fromEntries(failed.body.items.map((item) => [item.operationId, item.lastErrorCode]));
+    assert(listed[t6OperationId] === "issuance_deadline_exceeded" && listed[t12OperationId] === "document_generation_failed", `issuance:failed items: ${JSON.stringify(failed.body)}`);
+    const filtered = await operator("issuance:failed:runtime", ["--error", "document_generation_failed"]);
+    assert(filtered.code === 0 && filtered.body.count === 1 && filtered.body.items[0].operationId === t12OperationId, `issuance:failed --error: ${JSON.stringify(filtered.body)}`);
+
+    // issuance:retry: dry run, W6 refusals, then T10, issued by the worker, then not applicable.
+    const retryArgs = ["--quote", t6QuoteId, "--operation", t6OperationId, "--operator", "smoke-backoffice", "--reason", "operator_recovery"];
+    const before = await tables();
+    const dryRun = await operator("issuance:retry:runtime", retryArgs);
+    assert(dryRun.code === 0 && dryRun.body.status === "dry_run" && dryRun.body.dryRun === true, `retry dry run: ${JSON.stringify(dryRun)}`);
+    for (const [principal, check] of [["smoke-sales", "not_operator"], ["ghost-operator", "unknown"], ["system", "reserved"]]) {
+      const refused = await operator("issuance:retry:runtime", [...retryArgs.slice(0, 4), "--operator", principal, "--reason", "operator_recovery", "--yes"]);
+      assert(refused.code === 2 && refused.body.principalCheck === check, `retry as ${principal}: ${JSON.stringify(refused)}`);
+    }
+    const freeText = await operator("issuance:retry:runtime", [...retryArgs.slice(0, 6), "--reason", "fixed it", "--yes"]);
+    assert(freeText.code === 2 && freeText.body.status === "usage_invalid", `retry with a free-text reason: ${JSON.stringify(freeText)}`);
+    assert((await tables()) === before, "A dry run or refused retry changed durable state");
+
+    const retried = await operator("issuance:retry:runtime", [...retryArgs, "--yes"]);
+    assert(retried.code === 0 && retried.body.status === "retry_created", `retry --yes: ${JSON.stringify(retried)}`);
+    const newOperationId = retried.body.newOperationId;
+    await waitForQuery(`select status || ':' || current_operation_id from quote_service.quotes where quote_id = '${t6QuoteId}';`, `issued:${newOperationId}`, 60_000, "The retried quote was not issued");
+    const audit = await queryDatabase(
+      `select principal_id || ':' || (data->>'retryOf') || ':' || (data->>'reasonCode') from quote_service.quote_audit_events where quote_id = '${t6QuoteId}' and operation_id = '${newOperationId}' and event_type = 'quote.issue.accepted';`
+    );
+    assert(audit === `smoke-backoffice:${t6OperationId}:operator_recovery`, `Retry audit: ${audit}`);
+    await verifyDocumentEndpoint(t6QuoteId);
+    const again = await operator("issuance:retry:runtime", [...retryArgs, "--yes"]);
+    assert(again.code === 3 && again.body.status === "not_applicable", `second retry: ${JSON.stringify(again)}`);
+    assert((await queryDatabase(`select count(*) from quote_service.issuance_operations where quote_id = '${t6QuoteId}';`)) === "2", "Expected exactly one retry operation");
+
+    // documents:repair: the artifact deleted in the integrity phase is restored byte-exactly.
+    const missingQuoteId = state.summary.v2Draft.quoteId;
+    const repairBefore = await tables();
+    const repairDryRun = await operator("documents:repair:runtime", ["--quote", missingQuoteId, "--operator", "smoke-backoffice"]);
+    assert(repairDryRun.code === 0 && repairDryRun.body.outcome === "would_repair" && repairDryRun.body.integrity === "MISSING", `repair dry run: ${JSON.stringify(repairDryRun)}`);
+    assert((await fetchDocument(missingQuoteId, state.credentials.supervisorToken)).status === 503, "Dry run published the artifact");
+    const serviceRepair = await operator("documents:repair:runtime", ["--quote", missingQuoteId, "--operator", "smoke-comms", "--yes"]);
+    assert(serviceRepair.code === 2 && serviceRepair.body.principalCheck === "not_operator", `repair as a service principal: ${JSON.stringify(serviceRepair)}`);
+    const repaired = await operator("documents:repair:runtime", ["--quote", missingQuoteId, "--operator", "smoke-backoffice", "--yes"]);
+    assert(repaired.code === 0 && repaired.body.status === "repaired", `repair --yes: ${JSON.stringify(repaired)}`);
+    const restored = await verifyDocumentEndpoint(missingQuoteId, state.credentials.supervisorToken);
+    assert(restored.pdfSha256 === repaired.body.pdfSha256, "Restored bytes differ from the manifest");
+
+    // The tampered artifact: reproducible, but the different bytes at the address are never overwritten.
+    const tamperedQuoteId = state.summary.v2Quote.quoteId;
+    const tamperedBefore = await verifyArtifact(tamperedQuoteId).catch((error) => String(error));
+    const conflict = await operator("documents:repair:runtime", ["--quote", tamperedQuoteId, "--operator", "smoke-backoffice", "--yes"]);
+    assert(conflict.code === 2 && conflict.body.reason === "INTEGRITY_CONFLICT" && conflict.body.reproducible === true, `repair of tampered bytes: ${JSON.stringify(conflict)}`);
+    assert(String(await verifyArtifact(tamperedQuoteId).catch((error) => String(error))) === String(tamperedBefore), "The tampered artifact changed");
+    assert((await tables()) === repairBefore, "Repair changed a manifest, an operation or the audit");
+
+    // A migrated V1 manifest (origin flipped on this smoke database only) is never repairable.
+    const legacyQuoteId = state.summary.v2Async.quoteId;
+    await queryDatabase(`begin; set local session_replication_role = replica; update quote_service.quote_documents set origin = 'legacy_v1' where quote_id = '${legacyQuoteId}'; commit;`);
+    const legacy = await operator("documents:repair:runtime", ["--quote", legacyQuoteId, "--operator", "smoke-backoffice", "--yes"]);
+    assert(legacy.code === 2 && legacy.body.status === "refused" && legacy.body.reason === "NOT_REPAIRABLE_LEGACY", `repair of a legacy manifest: ${JSON.stringify(legacy)}`);
+
+    const logs = await readLogs(state.app.activeContainer);
+    assert(!/"event":"(email|delivery)\.(sent|send)/.test(logs) && (await queryDatabase("select count(*) from quote_service.quote_deliveries;")) === "0", "An email was sent or queued");
+    state.summary.operatorControls = { t6QuoteId, t6OperationId, newOperationId, t12OperationId, repairedQuoteId: missingQuoteId };
   });
 
   await runPhase("gracefulShutdown", PHASE_TIMEOUT_MS.gracefulShutdown, async () => {

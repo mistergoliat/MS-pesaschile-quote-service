@@ -112,8 +112,13 @@ export interface OperatorRetryInput {
   readonly failedOperationId: string;
   /** Operator principal recorded on the audit event. */
   readonly actorPrincipalId: string;
+  /** Machine-readable reason recorded as audit `data.reasonCode` (never free text: audit data is non-PII). */
+  readonly reasonCode?: string;
   readonly correlationId?: string | null;
 }
+
+/** Operator reason codes: the contract's `reasonCode` shape, so no free text (and no PII) reaches audit data. */
+export const OPERATOR_REASON_CODE_PATTERN = /^[a-z][a-z0-9_]{1,63}$/;
 
 /** What the fenced T5 commit records (everything verified before the call). */
 export interface IssuedDocumentInput {

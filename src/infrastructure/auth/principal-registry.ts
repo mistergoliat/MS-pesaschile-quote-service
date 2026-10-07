@@ -173,6 +173,11 @@ export class PrincipalRegistry {
     return this.entries.map((entry) => entry.principal.principalId);
   }
 
+  /** The registered principal with this id, or null (operator-plane attribution; no credential involved). */
+  find(principalId: string): AuthenticatedPrincipal | null {
+    return this.entries.find((entry) => entry.principal.principalId === principalId)?.principal ?? null;
+  }
+
   /**
    * Re-reads the source (rotation/revocation without restart). An invalid
    * new registry is rejected and the current one stays active.
