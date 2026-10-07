@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { safeErrorSummary } from "../application/safe-error";
 
 import { Client } from "pg";
 import { z } from "zod";
@@ -18,7 +19,8 @@ import { verifyDocumentArtifacts } from "../infrastructure/documents/document-ar
 async function main(): Promise<void> {
   const env = loadMigrationEnv();
   const storageRoot = z.string().min(1).parse(process.env.QUOTE_DOCUMENT_STORAGE_ROOT);
-  const client = new Client({ connectionString: env.databaseUrl });
+  const client = new Client(env.connectionConfig);
+  client.on("error", () => undefined);
   await client.connect();
 
   try {
@@ -41,7 +43,7 @@ main().catch((error: unknown) => {
     JSON.stringify(
       configError
         ? { status: "config_invalid", ...configError }
-        : { status: "failed", errorName: error instanceof Error ? error.name : "unknown" }
+        : { status: "failed", tool: "documents:verify", phase: "artifact_check", ...safeErrorSummary(error) }
     )
   );
   process.exit(1);

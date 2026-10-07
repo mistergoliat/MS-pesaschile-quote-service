@@ -118,7 +118,9 @@ export function evaluateSchemaHead(
     };
   }
 
-  const actualHead = applied[applied.length - 1] ?? null;
+  const lastApplied = applied[applied.length - 1];
+  // Unknown database strings are not trusted diagnostic identifiers.
+  const actualHead = lastApplied !== undefined && expected.includes(lastApplied) ? lastApplied : null;
   const isPrefix =
     applied.length <= expected.length && applied.every((name, index) => expected[index] === name);
 

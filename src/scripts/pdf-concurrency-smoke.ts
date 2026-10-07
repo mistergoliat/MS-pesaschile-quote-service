@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { safeErrorSummary } from "../application/safe-error";
 
 import { createPdfFixture, createPdfRenderer } from "./pdf-fixture";
 
@@ -29,4 +30,7 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({ status: "ok", results }, null, 2));
 }
 
-void main();
+main().catch((error: unknown) => {
+  process.stderr.write(`${JSON.stringify(safeErrorSummary(error))}\n`);
+  process.exitCode = 1;
+});

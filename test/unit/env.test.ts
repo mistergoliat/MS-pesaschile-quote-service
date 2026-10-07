@@ -62,11 +62,11 @@ describe("loadMigrationEnv", () => {
         DATABASE_URL: "postgres://app@db/quotes",
         MIGRATION_DATABASE_URL: "postgres://migrator@db/quotes"
       })
-    ).toEqual({ databaseUrl: "postgres://migrator@db/quotes" });
+    ).toMatchObject({ databaseUrl: "postgres://migrator@db/quotes", connectionConfig: { ssl: false } });
   });
 
   it("falls back to DATABASE_URL and fails without either", () => {
-    expect(loadMigrationEnv({ DATABASE_URL: "postgres://app@db/quotes" })).toEqual({
+    expect(loadMigrationEnv({ DATABASE_URL: "postgres://app@db/quotes" })).toMatchObject({
       databaseUrl: "postgres://app@db/quotes"
     });
     expect(() => loadMigrationEnv({})).toThrow();

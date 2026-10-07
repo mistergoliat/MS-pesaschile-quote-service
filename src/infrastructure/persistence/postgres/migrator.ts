@@ -1,5 +1,6 @@
 import { runner } from "node-pg-migrate";
-import { Client } from "pg";
+import { Client, type ClientConfig } from "pg";
+import { buildConnectionConfig } from "./connection-config";
 
 import { MIGRATIONS_DIRECTORY, MIGRATIONS_TABLE } from "./migrations-location";
 import {
@@ -14,11 +15,13 @@ export { MIGRATIONS_DIRECTORY, MIGRATIONS_TABLE } from "./migrations-location";
 
 export class MigrationIntegrityError extends Error {
   override readonly name = "MigrationIntegrityError";
+  constructor(message: string, readonly migrationNames: readonly string[] = []) { super(message); }
 }
 
 export interface RunMigrationsInput {
   databaseUrl: string;
   direction: "up" | "down";
+  connectionConfig?: ClientConfig;
 }
 
 /**
@@ -32,10 +35,11 @@ export interface RunMigrationsInput {
  */
 export async function runMigrations({
   databaseUrl,
-  direction
+  direction,
+  connectionConfig
 }: RunMigrationsInput): Promise<void> {
   const manifest = loadMigrationManifest();
-  const client = new Client({ connectionString: databaseUrl });
+  const client = new Client(connectionConfig ?? buildConnectionConfig({ DATABASE_URL: databaseUrl }));
   client.on("error", () => undefined);
   await client.connect();
 
@@ -86,7 +90,8 @@ async function assertRecordedChecksums(client: Client, manifest: MigrationManife
 
   if (mismatched.length > 0) {
     throw new MigrationIntegrityError(
-      `Applied migration(s) differ from the packaged files or are unknown to this build: ${mismatched.join(", ")}`
+      `Applied migration(s) differ from the packaged files or are unknown to this build: ${mismatched.join(", ")}`,
+      mismatched.filter((name) => manifest.names.includes(name))
     );
   }
 }
@@ -128,8 +133,8 @@ async function recordChecksums(
  * quote_runtime role is provisioned after the migrations ran. Must run as the
  * migration principal (object owner).
  */
-export async function applyRuntimeGrants(databaseUrl: string): Promise<{ readonly runtimeRolePresent: boolean }> {
-  const client = new Client({ connectionString: databaseUrl });
+export async function applyRuntimeGrants(databaseUrl: string, connectionConfig?: ClientConfig): Promise<{ readonly runtimeRolePresent: boolean }> {
+  const client = new Client(connectionConfig ?? buildConnectionConfig({ DATABASE_URL: databaseUrl }));
   client.on("error", () => undefined);
   await client.connect();
 

@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { safeErrorSummary } from "./application/safe-error";
 
 import { buildApplication, type ApplicationContext } from "./app";
 import { PrincipalRegistryError } from "./infrastructure/auth/principal-registry";
@@ -24,12 +25,6 @@ function writeFatal(event: string, payload: Record<string, unknown>): void {
   );
 }
 
-function errorSummary(error: unknown): Record<string, unknown> {
-  return error instanceof Error
-    ? { errorName: error.name, errorMessage: error.message, stack: error.stack }
-    : { errorName: typeof error };
-}
-
 let application: ApplicationContext | null = null;
 let termination: Promise<void> | null = null;
 
@@ -46,9 +41,9 @@ function terminate(exitCode: number, reason: string): Promise<void> {
 function installProcessHandlers(): void {
   const onProgrammerError = (kind: string) => (error: unknown) => {
     if (application) {
-      application.app.log.fatal({ event: "runtime.fatal", kind, ...errorSummary(error) }, "Programmer error");
+      application.app.log.fatal({ event: "runtime.fatal", kind, ...safeErrorSummary(error) }, "Programmer error");
     } else {
-      writeFatal("runtime.fatal", { kind, ...errorSummary(error) });
+      writeFatal("runtime.fatal", { kind, ...safeErrorSummary(error) });
     }
 
     void terminate(1, kind);
@@ -73,7 +68,7 @@ function installProcessHandlers(): void {
       );
     } else {
       application.app.log.error(
-        { event: "principal_registry.reload_rejected", issues: result.error.issues },
+        { event: "principal_registry.reload_rejected", ...safeErrorSummary(result.error) },
         "Principal registry reload rejected; previous registry kept"
       );
     }
@@ -102,9 +97,9 @@ async function main(): Promise<void> {
     application = buildApplication(env);
   } catch (error) {
     if (error instanceof PrincipalRegistryError) {
-      writeFatal("runtime.config_invalid", { errorMessage: error.message, issues: error.issues });
+      writeFatal("runtime.config_invalid", safeErrorSummary(error));
     } else {
-      writeFatal("runtime.init_failed", errorSummary(error));
+      writeFatal("runtime.init_failed", safeErrorSummary(error));
     }
 
     process.exit(1);
@@ -116,7 +111,7 @@ async function main(): Promise<void> {
       port: env.PORT
     });
   } catch (error) {
-    application.app.log.fatal({ event: "runtime.bind_failed", ...errorSummary(error) }, "Could not bind");
+    application.app.log.fatal({ event: "runtime.bind_failed", ...safeErrorSummary(error) }, "Could not bind");
     await terminate(1, "bind_failed");
     return;
   }
@@ -133,6 +128,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  writeFatal("runtime.fatal", { kind: "main", ...errorSummary(error) });
+  writeFatal("runtime.fatal", { kind: "main", ...safeErrorSummary(error) });
   process.exit(1);
 });

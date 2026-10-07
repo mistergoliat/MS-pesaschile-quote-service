@@ -1,4 +1,5 @@
 import type { IssuanceWorker, WorkerLogger } from "./issuance-worker";
+import { safeErrorSummary } from "../safe-error";
 
 /*
  * Bounded inline issuance (Idempotency §4.4, amendment A2). After an
@@ -58,7 +59,7 @@ export class InlineIssuance {
       budgetTimer.unref();
     });
     const run = worker.runOperation(operationId, correlationId).catch((error: unknown) => {
-      logger.error({ event: "issuance.inline_failed", operationId, errorName: error instanceof Error ? error.name : "unknown" }, "Inline issuance attempt failed");
+      logger.error({ event: "issuance.inline_failed", operationId, ...safeErrorSummary(error) }, "Inline issuance attempt failed");
       return { kind: "busy" } as const;
     });
 

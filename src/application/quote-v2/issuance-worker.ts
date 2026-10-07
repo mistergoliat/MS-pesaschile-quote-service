@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { safeErrorSummary } from "../safe-error";
 
 import { classifyAttemptError } from "./attempt-failure";
 import type { IssuanceFailpoints } from "./issuance-failpoints";
@@ -169,7 +170,7 @@ export class LeaseRenewal {
   }
 }
 
-const errorName = (error: unknown): string => (error instanceof Error ? error.name : "unknown");
+const errorName = (error: unknown): string => safeErrorSummary(error).errorName;
 
 export interface IssuanceWorkerConfig {
   readonly leaseOwner: string;

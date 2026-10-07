@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { safeErrorSummary } from "../application/safe-error";
 
 import { describeConfigError, loadMigrationEnv } from "../infrastructure/config/env";
 import { applyRuntimeGrants } from "../infrastructure/persistence/postgres/migrator";
@@ -7,7 +8,7 @@ import { applyRuntimeGrants } from "../infrastructure/persistence/postgres/migra
 // Runs with MIGRATION_DATABASE_URL (or DATABASE_URL) as the object owner.
 async function main(): Promise<void> {
   const env = loadMigrationEnv();
-  const result = await applyRuntimeGrants(env.databaseUrl);
+  const result = await applyRuntimeGrants(env.databaseUrl, env.connectionConfig);
 
   console.log(JSON.stringify({ status: result.runtimeRolePresent ? "ok" : "skipped_role_missing" }));
   process.exitCode = result.runtimeRolePresent ? 0 : 2;
@@ -19,7 +20,7 @@ main().catch((error: unknown) => {
     JSON.stringify(
       configError
         ? { status: "config_invalid", ...configError }
-        : { status: "failed", errorName: error instanceof Error ? error.name : "unknown" }
+        : { status: "failed", tool: "db:grants", phase: "grants", ...safeErrorSummary(error) }
     )
   );
   process.exit(1);

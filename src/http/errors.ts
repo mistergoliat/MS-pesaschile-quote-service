@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
+import { safeErrorSummary } from "../application/safe-error";
 
 import { QuoteRequestRejected, REJECTION_STATUS } from "../application/quote-v2/create-quote-request";
 import { EmailProviderDisabledError } from "../application/quote-v2/delivery/delivery-request";
@@ -186,8 +187,7 @@ export function sendErrorResponse(
     // data or connection details.
     request.log.error(
       {
-        errorName: error instanceof Error ? error.name : "unknown",
-        errorCode: typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : null,
+        ...safeErrorSummary(error),
         requestId: request.id,
         route: request.routeOptions.url
       },

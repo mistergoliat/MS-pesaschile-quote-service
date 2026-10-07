@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { safeErrorSummary } from "../application/safe-error";
 
 import { describeConfigError, loadMigrationEnv } from "../infrastructure/config/env";
 import { PostgresDependencyProbe } from "../infrastructure/persistence/postgres/postgres-dependency-probe";
@@ -14,7 +15,7 @@ const PROBE_TIMEOUT_MS = 5_000;
 async function main(): Promise<void> {
   const env = loadMigrationEnv();
   const manifest = loadMigrationManifest();
-  const probe = new PostgresDependencyProbe({ connectionString: env.databaseUrl }, manifest);
+  const probe = new PostgresDependencyProbe(env.connectionConfig, manifest);
   const result = await probe.probe(PROBE_TIMEOUT_MS);
   const ready = result.connection.ok && result.schema.state === "READY";
 
@@ -42,7 +43,7 @@ main().catch((error: unknown) => {
     JSON.stringify(
       configError
         ? { status: "config_invalid", ...configError }
-        : { status: "failed", errorName: error instanceof Error ? error.name : "unknown" }
+        : { status: "failed", tool: "db:check", phase: "schema_check", ...safeErrorSummary(error) }
     )
   );
   process.exit(1);

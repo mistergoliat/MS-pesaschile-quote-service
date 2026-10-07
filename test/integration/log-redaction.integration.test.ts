@@ -43,7 +43,9 @@ const S = {
   customerPhone: `+56 9 ${digits.slice(0, 4)} ${digits.slice(4)}`,
   commercialText: `Sentinel Mancuerna Comercial ${tag}`,
   driverDetail: `SENTINEL-DRIVER-DETAIL-${tag}`,
-  dbPassword: `SENTINELPASS${tag}`
+  dbPassword: `SENTINELPASS${tag}`,
+  errorName: `SENTINEL-ERROR-NAME-${tag}`,
+  errorCode: `SENTINEL-ERROR-CODE-${tag}`
 } as const;
 
 function hostileCreateBody(): AnyRecord {
@@ -97,7 +99,7 @@ describe("hostile log redaction (AX-BH)", () => {
         businessRoutes: [
           (app) =>
             app.get("/probe/explode", { config: { requiredScope: "quotes:read", capability: "PERSISTENCE" } }, () => {
-              throw Object.assign(new Error(`boom ${S.driverDetail}`), { detail: `Failing row contains (${S.customerName}, ${S.driverDetail})`, code: "23514" });
+              throw Object.assign(new Error(`boom ${S.driverDetail}`), { name: S.errorName, detail: `Failing row contains (${S.customerName}, ${S.driverDetail})`, code: S.errorCode });
             })
         ]
       }
@@ -190,7 +192,7 @@ describe("hostile log redaction (AX-BH)", () => {
     });
 
     expect(result.code).toBe(1);
-    expect(JSON.parse(result.output.trim())).toEqual({ status: "failed", errorName: expect.any(String) });
+    expect(JSON.parse(result.output.trim())).toEqual({ status: "failed", tool: "documents:verify", phase: "artifact_check", errorName: expect.any(String), errorCode: "ECONNREFUSED" });
     expect(result.output).not.toContain(S.dbPassword);
     expect(result.output).not.toMatch(/postgres:\/\/|sentinel-storage|\bat [\w.<>]+ \(|node:internal/);
   }, TEST_TIMEOUT_MS);

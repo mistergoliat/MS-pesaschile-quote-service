@@ -1,5 +1,6 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { safeErrorSummary } from "../application/safe-error";
 
 import { buildEmailEnvelope } from "../application/quote-v2/delivery/email-envelope";
 import { renderEmailEnvelopeHtml } from "../infrastructure/email/quote-email-envelope-template";
@@ -31,6 +32,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(`${JSON.stringify(safeErrorSummary(error))}\n`);
   process.exitCode = 1;
 });

@@ -104,8 +104,8 @@ describe("server process lifecycle", () => {
   duplicatePrincipal.principals[2]!.principalId = "sales-integration";
 
   it.each([
-    ["E: duplicate credential", JSON.stringify(duplicateCredential), "duplicate credential"],
-    ["F: duplicate principalId", JSON.stringify(duplicatePrincipal), "duplicate principalId"],
+    ["E: duplicate credential", JSON.stringify(duplicateCredential), '"errorName":"PrincipalRegistryError"'],
+    ["F: duplicate principalId", JSON.stringify(duplicatePrincipal), '"errorName":"PrincipalRegistryError"'],
     ["no registry configured", null, "QUOTE_PRINCIPAL_REGISTRY_FILE"]
   ])("exits 1 at startup on a malformed principal registry: %s", async (_label, registryJson, expectedMessage) => {
     const server = startServer({
@@ -117,6 +117,8 @@ describe("server process lifecycle", () => {
     expect(await server.exited).toBe(1);
     expect(events(server.output())).toContain("runtime.config_invalid");
     expect(server.output()).toContain(expectedMessage);
+    expect(server.output()).not.toContain("sales-integration");
+    expect(server.output()).not.toContain("errorMessage");
     for (const token of Object.values(TEST_TOKENS)) {
       expect(server.output()).not.toContain(token);
       expect(server.output()).not.toContain(sha256Hex(token));

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { safeErrorSummary } from "../application/safe-error";
 
 import { buildIssuedQuoteDocumentModelV2 } from "../application/quote-v2/document/issued-quote-document-model";
 import { RENDERER_VERSION } from "../infrastructure/documents/renderer-profile";
@@ -34,4 +35,7 @@ async function main(): Promise<void> {
   }
 }
 
-void main();
+main().catch((error: unknown) => {
+  process.stderr.write(`${JSON.stringify(safeErrorSummary(error))}\n`);
+  process.exitCode = 1;
+});

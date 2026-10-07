@@ -460,7 +460,8 @@ describe("issuance:failed", () => {
       await harness.sql(`insert into public.schema_migrations (name, run_on) values ('000010_unknown_future', now())`);
       const ahead = await harness.cli("list-failed-issuances", []);
       expect(ahead.code).toBe(2);
-      expect(ahead.json).toMatchObject({ status: "schema_incompatible", schemaState: "SCHEMA_AHEAD_OR_UNKNOWN", actualHead: "000010_unknown_future" });
+      expect(ahead.json).toMatchObject({ status: "schema_incompatible", schemaState: "SCHEMA_AHEAD_OR_UNKNOWN", actualHead: null });
+      expect(`${ahead.stdout}${ahead.stderr}`).not.toContain("000010_unknown_future");
       expect(`${ahead.stdout}${ahead.stderr}`).not.toMatch(/postgres:|password|at .*\.ts/);
 
       // The gate itself: `work` never runs against an incompatible schema.
