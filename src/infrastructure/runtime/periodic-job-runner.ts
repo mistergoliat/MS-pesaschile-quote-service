@@ -1,3 +1,5 @@
+import { safeErrorSummary } from "../../application/safe-error";
+
 type JobLogger = {
   info(payload: Record<string, unknown>, message: string): void;
   warn(payload: Record<string, unknown>, message: string): void;
@@ -20,15 +22,6 @@ export interface PeriodicJobStatus {
   readonly lastPollAt: string | null;
   readonly lastSuccessAt: string | null;
   readonly lastIterationFailed: boolean;
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error === "object" && error !== null && "code" in error) {
-    const code = error.code;
-    return typeof code === "string" ? code : undefined;
-  }
-
-  return undefined;
 }
 
 export class PeriodicJobRunner {
@@ -132,8 +125,7 @@ export class PeriodicJobRunner {
         {
           event: "job.failed",
           job: this.config.name,
-          errorName: error instanceof Error ? error.name : "unknown",
-          errorCode: errorCode(error) ?? null
+          ...safeErrorSummary(error)
         },
         "Background job iteration failed"
       );

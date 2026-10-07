@@ -1,15 +1,16 @@
 # Runbook (DRAFT): Quote Service production bootstrap
 
-> **Status: DRAFT, not approved for production use.** As of R1.4 the runtime
-> survives dependency outages and the V2 schema is in place, but the V2 API
-> (R1.5), delivery (R1.6) and the production readiness gate (R1.7) are still
-> outstanding. The service currently serves health endpoints only. Do not run
-> this against production until the owner readiness gate passes.
+> **Status: DRAFT, not approved for production use.** R1.6 is closed and the V2
+> API, delivery and operator controls are implemented. The R1.7 production
+> readiness gate remains open. Do not run this against production until the
+> owner readiness gate passes. R1.7B-S1 adds local security foundations only.
 
 References:
 
 - lifecycle and health: [`docs/runtime-lifecycle.md`](../runtime-lifecycle.md);
 - schema, roles, integrity and recovery: [`docs/v2-persistence.md`](../v2-persistence.md).
+- transport modes, mounted CA, credential separation and safe diagnostics:
+  [`docs/database-transport.md`](../database-transport.md).
 
 ## Order of operations
 
@@ -34,8 +35,9 @@ Never reorder. The service never migrates by itself.
 - PostgreSQL ≥ 15.
 - A persistent volume for `QUOTE_DOCUMENT_STORAGE_ROOT`, owned by the
   service user.
-- `QUOTE_EMAIL_PROVIDER=disabled`. Since R1.6A delivery requests exist but no
-  sender is composed in production: they answer `503 email_provider` and queue
+- `QUOTE_EMAIL_PROVIDER=disabled` until the separate owner email gate passes.
+  R1.6B supports the Gmail adapter, but with the provider disabled requests
+  answer `503 email_provider` and queue
   nothing. Delivery execution (worker, provider) is R1.6B.
 
 ### 0b. Backup first (any database or document root that may hold V1 data)
@@ -70,7 +72,7 @@ Expected output: `{"status":"ok","direction":"up"}` and exit 0.
 
 | Failure | Meaning | Action |
 |---|---|---|
-| `V1 -> V2 migration exceptions: N row(s) …` | V1 data violates the frozen mapping; **nothing was changed** | Resolve the listed `<quote_id> <code>` rows on a restored copy, or by an approved data fix, then rerun |
+| `errorCode=P0001`, `migrationName=000007_quote_v2_persistence`, structured `exceptions` | V1 data violates the frozen mapping; **nothing was changed** | Resolve the listed UUID/code entries on a restored copy, or by an approved data fix, then rerun; raw driver prose is suppressed |
 | `MigrationIntegrityError` | An applied migration differs from this build's file | **Stop.** Wrong build or tampered database |
 | `MigrationManifestError` | The packaged migrations differ from the build manifest | **Stop.** Broken package |
 

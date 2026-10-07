@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { safeErrorSummary } from "../../safe-error";
 
 import type { CommittedArtifactReader } from "../document/artifact-store-port";
 import type { WorkerLogger } from "../issuance-worker";
@@ -60,7 +61,7 @@ export interface DeliveryWorkerDependencies {
 }
 
 const sha256 = (bytes: Buffer): string => crypto.createHash("sha256").update(bytes).digest("hex");
-const errorName = (error: unknown): string => (error instanceof Error ? error.name : "unknown");
+const errorName = (error: unknown): string => safeErrorSummary(error).errorName;
 
 type Prepared =
   | { readonly kind: "ready"; readonly mail: Parameters<MailSenderPort["send"]>[0]; readonly templateVersion: string }

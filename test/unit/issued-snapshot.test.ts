@@ -97,7 +97,9 @@ describe("issued snapshot ownership", () => {
       "src/application/quote-v2/delivery/strict-mailbox.ts",
       "src/application/quote-v2/issued-snapshot.ts",
       "src/application/quote/canonical-json.ts",
+      "src/application/safe-error.ts",
       "src/infrastructure/config/env.ts",
+      "src/infrastructure/persistence/postgres/connection-config.ts",
       "src/infrastructure/persistence/postgres/issued-snapshot-loader.ts",
       "src/infrastructure/persistence/postgres/postgres.ts"
     ]);

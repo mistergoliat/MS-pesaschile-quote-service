@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { safeErrorSummary } from "../application/safe-error";
 
 import { buildIssuedQuoteDocumentModelV2 } from "../application/quote-v2/document/issued-quote-document-model";
 import { RENDERER_VERSION } from "../infrastructure/documents/renderer-profile";
@@ -24,6 +25,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  process.stderr.write(`${error instanceof Error ? error.name : "error"}\n`);
+  process.stderr.write(`${JSON.stringify(safeErrorSummary(error))}\n`);
   process.exit(1);
 });

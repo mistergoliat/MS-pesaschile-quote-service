@@ -252,7 +252,9 @@ describe("runtime reliability: schema head", () => {
 
     expect(await readyStatus(harness)).toBe(503);
     expect(harness.context.dependencyMonitor.details().schema.state).toBe("SCHEMA_AHEAD_OR_UNKNOWN");
-    expect((await schemaBody(harness)).schema.actualHead).toBe("000099_from_the_future");
+    const details = await schemaBody(harness);
+    expect(details.schema.actualHead).toBeNull();
+    expect(JSON.stringify(details)).not.toContain("000099_from_the_future");
   }, TEST_TIMEOUT_MS);
 
   it("F: expected head → schema passes", async () => {

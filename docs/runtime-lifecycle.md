@@ -259,6 +259,8 @@ same change. The integrity model, roles and V2 schema are documented in
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `DATABASE_SSL_MODE` | `disable` | `disable`, legacy unauthenticated `require`, or authenticated `verify-full`; production permits loopback plaintext or `verify-full` only |
+| `DATABASE_SSL_CA_FILE` | (unset) | Required mounted CA PEM bundle for `verify-full`, max 256 KiB; same policy for maintenance/runtime; [details](database-transport.md) |
 | `HEALTH_PROBE_TIMEOUT_MS` | `HEALTHCHECK_DATABASE_TIMEOUT_MS` (2000) | Bound per probe (100–30000) |
 | `HEALTH_PROBE_INTERVAL_MS` | 10000 | Cadence while healthy |
 | `HEALTH_PROBE_RETRY_MIN_MS` | 1000 | First retry while unready |
@@ -279,6 +281,7 @@ settings) were removed in R1.4; leftover values are ignored.
 npm ci
 npm run db:compose:up                 # disposable PostgreSQL 16 on :5432
 cp .env.example .env                  # email provider is disabled by default
+# Replace database placeholders with local test credentials and configure the principal registry.
 npm run db:check                      # → SCHEMA_MISSING, exit 2 (expected)
 npm run db:migrate -- up              # explicit DDL step
 npm run db:check                      # → READY, exit 0

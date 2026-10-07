@@ -1,4 +1,5 @@
 import { PrincipalRegistryError } from "../infrastructure/auth/principal-registry";
+import { safeErrorSummary } from "../application/safe-error";
 import { describeConfigError } from "../infrastructure/config/env";
 import { MigrationManifestError } from "../infrastructure/persistence/postgres/schema-head";
 import { OPERATOR_EXIT, OperatorUsageError, type OperatorResult } from "../infrastructure/operator/operator-plane";
@@ -23,10 +24,10 @@ export function runOperatorCommand(command: (argv: readonly string[]) => Promise
           : configError
             ? [OPERATOR_EXIT.REFUSED, { status: "config_invalid", ...configError }]
             : error instanceof PrincipalRegistryError
-              ? [OPERATOR_EXIT.REFUSED, { status: "principal_registry_invalid", issues: error.issues }]
+              ? [OPERATOR_EXIT.REFUSED, { status: "principal_registry_invalid", ...safeErrorSummary(error) }]
               : error instanceof MigrationManifestError
                 ? [OPERATOR_EXIT.REFUSED, { status: "migration_manifest_invalid" }]
-                : [OPERATOR_EXIT.FAILED, { status: "failed", errorName: error instanceof Error ? error.name : "unknown" }];
+                : [OPERATOR_EXIT.FAILED, { status: "failed", phase: "operator", ...safeErrorSummary(error) }];
       process.stderr.write(`${JSON.stringify(body)}\n`);
       process.exitCode = exitCode;
     }

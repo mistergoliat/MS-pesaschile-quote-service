@@ -1,15 +1,8 @@
-import { Pool, type ClientConfig, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
+import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 
 import type { AppEnv } from "../../config/env";
-
-/** Connection settings shared by the request pool and the dependency probe. */
-export function buildConnectionConfig(env: AppEnv): ClientConfig {
-  return {
-    connectionString: env.DATABASE_URL,
-    ssl: env.DATABASE_SSL_MODE === "require" ? { rejectUnauthorized: false } : false,
-    application_name: env.SERVICE_NAME
-  };
-}
+import { buildConnectionConfig } from "./connection-config";
+export { buildConnectionConfig } from "./connection-config";
 
 export class PostgresDatabase {
   private readonly pool: Pool;

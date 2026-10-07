@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { createPostgresTlsFixture } from "./postgres-tls-fixture.mjs";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
@@ -51,7 +52,7 @@ const PHASE_TIMEOUT_MS = {
   build: BUILD_TIMEOUT_MS,
   cleanup: 180_000,
   network: 30_000,
-  postgresStart: 60_000,
+  postgresStart: 180_000,
   postgresReady: 60_000,
   migrations: 120_000,
   schemaCheck: 60_000,
@@ -101,7 +102,7 @@ const phaseDefinitions = [
 ];
 
 const imageTag = process.env.SMOKE_IMAGE_TAG ?? "pesaschile-quote-service:t06-smoke";
-const postgresImage = process.env.SMOKE_POSTGRES_IMAGE ?? "postgres:16-alpine";
+let tlsFixture;
 const skipBuild = process.env.SMOKE_SKIP_BUILD === "1";
 const keepResources = process.env.SMOKE_KEEP_RESOURCES === "1";
 const suffix = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
@@ -179,7 +180,7 @@ function assert(condition, message) {
 }
 
 function toDockerEnvArgs(envObject) {
-  return Object.entries(envObject).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
+  return ["-v", `${tlsFixture.volume}:/certs:ro`, ...Object.entries(envObject).flatMap(([key, value]) => ["-e", `${key}=${value}`])];
 }
 
 function buildAppEnv() {
@@ -188,8 +189,9 @@ function buildAppEnv() {
     HOST: "0.0.0.0",
     PORT: "3000",
     LOG_LEVEL: "info",
-    DATABASE_URL: `postgres://postgres:postgres@${state.names.postgres}:5432/quote_smoke`,
-    DATABASE_SSL_MODE: "disable",
+    DATABASE_URL: `postgres://postgres:fixture-only@${state.names.postgres}:5432/quote_smoke`,
+    DATABASE_SSL_MODE: "verify-full",
+    DATABASE_SSL_CA_FILE: "/certs/ca.crt",
     SERVICE_NAME: "pesaschile-quote-service",
     SERVICE_VERSION: "0.1.0-smoke",
     QUOTE_PRINCIPAL_REGISTRY_JSON: JSON.stringify({
@@ -932,34 +934,7 @@ async function runSmoke() {
   });
 
   await runPhase("postgresStart", PHASE_TIMEOUT_MS.postgresStart, async () => {
-    await docker(
-      [
-        "run",
-        "-d",
-        "--name",
-        state.names.postgres,
-        "--network",
-        state.names.network,
-        "--health-cmd",
-        "pg_isready -U postgres -d quote_smoke",
-        "--health-interval",
-        "1s",
-        "--health-timeout",
-        "5s",
-        "--health-retries",
-        "30",
-        "-e",
-        "POSTGRES_DB=quote_smoke",
-        "-e",
-        "POSTGRES_USER=postgres",
-        "-e",
-        "POSTGRES_PASSWORD=postgres",
-        postgresImage
-      ],
-      {
-        timeoutMs: PHASE_TIMEOUT_MS.postgresStart
-      }
-    );
+    tlsFixture = createPostgresTlsFixture({ network: state.names.network, name: state.names.postgres });
     state.containersStarted.add(state.names.postgres);
   });
 
@@ -993,6 +968,19 @@ async function runSmoke() {
     const report = JSON.parse(result.stdout.slice(result.stdout.indexOf("{")));
     state.summary.schemaHead = report.schema;
     assert(report.status === "ok" && report.schema.state === "READY", `db:check not ready: ${result.stdout}`);
+    for (const invalidEnv of [
+      { DATABASE_SSL_CA_FILE: "/SENTINEL_CA_PRIVATE_PATH" },
+      { DATABASE_SSL_CA_FILE: "/certs/other.crt" },
+      { DATABASE_URL: `${buildAppEnv().DATABASE_URL}?sslmode=no-verify` }
+    ]) {
+      const entry = invalidEnv.DATABASE_SSL_CA_FILE === "/certs/other.crt" ? "dist/scripts/db-check.js" : "dist/server.js";
+      const failure = await docker(["run", "--rm", "--network", state.names.network, ...toDockerEnvArgs({ ...buildAppEnv(), ...invalidEnv }), imageTag, "node", entry], { timeoutMs: 20_000, allowFailure: true });
+      const output = failure.stdout + failure.stderr;
+      // Startup/config failures exit 1; untrusted server trust makes db:check unready (exit 2).
+      assert(failure.code !== 0, "Misconfigured TLS unexpectedly started successfully");
+      assert(!output.includes("SENTINEL") && !output.includes("fixture-only") && !output.includes("BEGIN CERTIFICATE"), "TLS failure leaked sensitive data");
+      assert(output.includes("config_invalid") || output.includes("not_ready"), "Missing safe TLS failure diagnostic");
+    }
   });
 
   await runPhase("appStart", PHASE_TIMEOUT_MS.appStart, async () => {
@@ -1685,7 +1673,7 @@ async function runSmoke() {
 ${state.logs.restartedApp}`;
     assert(combinedLogs.includes('"event":"shutdown.started"'), "Missing shutdown.started event");
     assert(combinedLogs.includes('"event":"shutdown.completed"'), "Missing shutdown.completed event");
-    assert(!combinedLogs.includes("postgres:postgres"), "Logs leaked database credentials");
+    assert(!combinedLogs.includes("fixture-only"), "Logs leaked database credentials");
   });
 }
 
@@ -1718,6 +1706,7 @@ async function main() {
   } finally {
     if (!keepResources) {
       await cleanupResources();
+      tlsFixture?.close();
     }
   }
 }

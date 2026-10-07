@@ -1,6 +1,9 @@
 import { z } from "zod";
+import type { ClientConfig } from "pg";
+import { safeErrorSummary } from "../../application/safe-error";
 
 import { isStrictMailbox } from "../../application/quote-v2/delivery/strict-mailbox";
+import { buildConnectionConfig, DatabaseTransportConfigError } from "../persistence/postgres/connection-config";
 
 /** Kept between the end of a provider call and delivery lease expiry, for recording the outcome. */
 export const DELIVERY_COMPLETION_MARGIN_MS = 10_000;
@@ -9,7 +12,7 @@ export const DELIVERY_DOCUMENT_READ_TIMEOUT_MS = 10_000;
 // eslint-disable-next-line no-control-regex -- control characters are exactly what must be rejected
 const CONTROL_CHARACTERS = /[\x00-\x1F\x7F]/;
 
-const envSchema = z
+const envObjectSchema = z
   .object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   HOST: z.string().min(1).default("0.0.0.0"),
@@ -23,7 +26,8 @@ const envSchema = z
   HTTP_KEEP_ALIVE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(5_000),
   APP_SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(10_000),
   DATABASE_URL: z.string().url(),
-  DATABASE_SSL_MODE: z.enum(["disable", "require"]).default("disable"),
+  DATABASE_SSL_MODE: z.enum(["disable", "require", "verify-full"]).default("disable"),
+  DATABASE_SSL_CA_FILE: z.string().min(1).optional(),
   DB_POOL_MAX: z.coerce.number().int().min(1).max(50).default(10),
   DB_POOL_IDLE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(30_000),
   DB_POOL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(5_000),
@@ -82,7 +86,8 @@ const envSchema = z
   GOOGLE_GMAIL_CLIENT_SECRET: z.string().trim().min(1).optional(),
   GOOGLE_GMAIL_REFRESH_TOKEN: z.string().trim().min(1).optional(),
   GOOGLE_GMAIL_USER: z.string().trim().min(1).optional()
-})
+});
+const envSchema = envObjectSchema
   .superRefine((env, context) => {
     if (env.HEALTH_PROBE_RETRY_MIN_MS > env.HEALTH_PROBE_RETRY_MAX_MS) {
       context.addIssue({
@@ -208,11 +213,15 @@ export function gmailSettings(env: AppEnv): {
  */
 const migrationEnvSchema = z.object({
   DATABASE_URL: z.string().url().optional(),
-  MIGRATION_DATABASE_URL: z.string().url().optional()
+  MIGRATION_DATABASE_URL: z.string().url().optional(),
+  DATABASE_SSL_MODE: z.enum(["disable", "require", "verify-full"]).default("disable"),
+  DATABASE_SSL_CA_FILE: z.string().min(1).optional(),
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development")
 });
 
 export interface MigrationEnv {
   readonly databaseUrl: string;
+  readonly connectionConfig: ClientConfig;
 }
 
 export function loadMigrationEnv(rawEnv: NodeJS.ProcessEnv = process.env): MigrationEnv {
@@ -231,7 +240,8 @@ export function loadMigrationEnv(rawEnv: NodeJS.ProcessEnv = process.env): Migra
   }
 
   return {
-    databaseUrl
+    databaseUrl,
+    connectionConfig: buildConnectionConfig({ ...env, DATABASE_URL: databaseUrl })
   };
 }
 
@@ -240,20 +250,35 @@ export function loadMigrationEnv(rawEnv: NodeJS.ProcessEnv = process.env): Migra
  * messages only, never the offending values.
  */
 export function describeConfigError(error: unknown): { readonly issues: Array<{ path: string; message: string }> } | null {
+  try {
+    return configErrorDescription(error);
+  } catch {
+    return null;
+  }
+}
+
+function configErrorDescription(error: unknown): { readonly issues: Array<{ path: string; message: string }> } | null {
+  if (error instanceof DatabaseTransportConfigError) {
+    const code = safeErrorSummary(error).errorCode ?? "DB_TRANSPORT_INVALID";
+    return { issues: [{ path: "DATABASE_TRANSPORT", message: code }] };
+  }
   if (!(error instanceof z.ZodError)) {
     return null;
   }
 
   return {
-    issues: error.issues.map((issue) => ({
-      path: issue.path.join("."),
-      message: issue.message
+    issues: error.issues.slice(0, 64).map((issue) => ({
+      path: typeof issue.path[0] === "string" && (Object.hasOwn(envObjectSchema.shape, issue.path[0]) || issue.path[0] === "MIGRATION_DATABASE_URL") ? issue.path[0] : "CONFIGURATION",
+      // Zod errors from third-party code can include rejected values in prose and paths too.
+      message: "Invalid configuration value or combination"
     }))
   };
 }
 
 export function loadEnv(rawEnv: NodeJS.ProcessEnv = process.env): AppEnv {
-  return envSchema.parse(rawEnv);
+  const env = envSchema.parse(rawEnv);
+  buildConnectionConfig(env);
+  return env;
 }
 
 export function principalRegistrySource(

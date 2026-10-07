@@ -337,6 +337,10 @@ The pre-flight audit §29 asked for these to be checked in R1.6D. Removed:
 
 ## 11. Remaining for R1.7 (not R1.6)
 
+R1.7B-S1 adds shared bounded error summaries and authenticated PostgreSQL transport
+for runtime and maintenance. See [database-transport.md](database-transport.md).
+It does not close the production readiness gate or authorize any items below.
+
 The following stay out of R1.6:
 
 - production integrity-job cadence and alert routing;
