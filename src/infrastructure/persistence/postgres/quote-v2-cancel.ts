@@ -83,7 +83,8 @@ export async function cancelQuote(database: PostgresDatabase, quoteId: string, i
       locked.status === "issued"
         ? (
             await client.query<{ delivery_id: string }>(
-              `update quote_service.quote_deliveries set status = 'failed', last_error_code = 'quote_cancelled', updated_at = $2
+              `update quote_service.quote_deliveries
+               set status = 'failed', last_error_code = 'quote_cancelled', next_attempt_at = null, updated_at = $2
                where quote_id = $1 and status = 'pending'
                returning delivery_id`,
               [quoteId, now]

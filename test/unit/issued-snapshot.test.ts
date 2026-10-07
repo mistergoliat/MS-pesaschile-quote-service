@@ -93,6 +93,8 @@ describe("issued snapshot ownership", () => {
 
     expect(closure).not.toContain("src/infrastructure/persistence/postgres/quote-v2-reads.ts");
     expect(closure).toEqual([
+      // env.ts validates sender mailboxes with this dependency-free syntax check (R1.6B).
+      "src/application/quote-v2/delivery/strict-mailbox.ts",
       "src/application/quote-v2/issued-snapshot.ts",
       "src/application/quote/canonical-json.ts",
       "src/infrastructure/config/env.ts",

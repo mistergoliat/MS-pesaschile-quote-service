@@ -196,6 +196,16 @@ export class DependencyMonitor {
     return !this.lifecycle.isShuttingDown && this.records.database.status === "up" && this.schemaState === "READY";
   }
 
+  /**
+   * Persistence plus artifact storage: enough to read committed documents
+   * (the email delivery send runner, R1.6B), so a renderer outage does not
+   * pause email. Never used for `/health/ready` or route gating (the
+   * capability-gate refactor is R1.6D).
+   */
+  isDocumentReadReady(): boolean {
+    return this.isPersistenceReady() && this.records.artifactStorage.status === "up";
+  }
+
   readiness(): ReadinessSnapshot {
     const checks: Record<ReadinessCheckName, CheckResult> = {
       database: this.records.database.status === "up" ? "ok" : "fail",

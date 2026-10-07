@@ -1,5 +1,14 @@
 import { z } from "zod";
 
+import { isStrictMailbox } from "../../application/quote-v2/delivery/strict-mailbox";
+
+/** Kept between the end of a provider call and delivery lease expiry, for recording the outcome. */
+export const DELIVERY_COMPLETION_MARGIN_MS = 10_000;
+/** Upper bound of reading a committed PDF before a send attempt. */
+export const DELIVERY_DOCUMENT_READ_TIMEOUT_MS = 10_000;
+// eslint-disable-next-line no-control-regex -- control characters are exactly what must be rejected
+const CONTROL_CHARACTERS = /[\x00-\x1F\x7F]/;
+
 const envSchema = z
   .object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -32,9 +41,6 @@ const envSchema = z
   HEALTH_PROBE_INTERVAL_MS: z.coerce.number().int().min(1_000).max(300_000).default(10_000),
   HEALTH_PROBE_RETRY_MIN_MS: z.coerce.number().int().min(50).max(60_000).default(1_000),
   HEALTH_PROBE_RETRY_MAX_MS: z.coerce.number().int().min(50).max(300_000).default(30_000),
-  // Legacy email smoke/preview scripts only (R1.6). The formal PDF takes its
-  // issuer identity from the code-owned issuer profile, never from here.
-  QUOTE_COMPANY_NAME: z.string().min(1).default("Pesas Chile SPA"),
   QUOTE_DOCUMENT_STORAGE_ROOT: z.string().min(1),
   // Issuance operation (Idempotency §4.2): defaults and ranges are the
   // contract's. The deadline is copied onto each operation at acceptance.
@@ -44,10 +50,18 @@ const envSchema = z
   QUOTE_ISSUANCE_POLL_INTERVAL_MS: z.coerce.number().int().min(500).max(60_000).default(2_000),
   QUOTE_ISSUANCE_DEADLINE_MS: z.coerce.number().int().min(3_600_000).max(259_200_000).default(86_400_000),
   QUOTE_ISSUANCE_SYNC_BUDGET_MS: z.coerce.number().int().min(0).max(10_000).default(5_000),
-  // Email provider configuration, used only by the email smoke script until
-  // the V2 delivery subsystem (R1.6). The V1 expiry, cleanup and email worker
-  // settings were retired with the V1 runtime in R1.4.
+  // V2 email delivery (R1.6B). `disabled` (default): no sender, no send
+  // runner, new delivery requests answer 503 email_provider; the persistence
+  // expired-lease sweep still runs. `gmail`: the Gmail adapter and the send
+  // runner are composed. There is deliberately no `fake` value: a test sender
+  // can only be injected through BuildApplicationOverrides.
   QUOTE_EMAIL_PROVIDER: z.enum(["disabled", "gmail"]).default("disabled"),
+  // Delivery lease (no renewal): must exceed token + send timeouts plus the
+  // completion margin; an attempt that outlives it becomes `unknown`.
+  QUOTE_EMAIL_DELIVERY_LEASE_MS: z.coerce.number().int().min(15_000).max(600_000).default(120_000),
+  QUOTE_EMAIL_POLL_INTERVAL_MS: z.coerce.number().int().min(200).max(60_000).default(5_000),
+  QUOTE_EMAIL_TOKEN_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(10_000),
+  QUOTE_EMAIL_SEND_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(30_000),
   QUOTE_EMAIL_FROM_ADDRESS: z.string().trim().min(1).optional(),
   QUOTE_EMAIL_FROM_NAME: z.string().trim().min(1).optional(),
   QUOTE_EMAIL_REPLY_TO: z.string().trim().min(1).optional(),
@@ -92,6 +106,26 @@ const envSchema = z
           });
         }
       }
+
+      for (const key of ["QUOTE_EMAIL_FROM_ADDRESS", "QUOTE_EMAIL_REPLY_TO"] as const) {
+        const value = env[key];
+
+        if (value !== undefined && !isStrictMailbox(value)) {
+          context.addIssue({ code: "custom", path: [key], message: `${key} must be exactly one bare mailbox` });
+        }
+      }
+
+      if (env.QUOTE_EMAIL_FROM_NAME !== undefined && (env.QUOTE_EMAIL_FROM_NAME.length > 200 || CONTROL_CHARACTERS.test(env.QUOTE_EMAIL_FROM_NAME))) {
+        context.addIssue({ code: "custom", path: ["QUOTE_EMAIL_FROM_NAME"], message: "QUOTE_EMAIL_FROM_NAME must be at most 200 characters without control characters" });
+      }
+    }
+
+    if (env.QUOTE_EMAIL_DELIVERY_LEASE_MS <= env.QUOTE_EMAIL_TOKEN_TIMEOUT_MS + env.QUOTE_EMAIL_SEND_TIMEOUT_MS + DELIVERY_COMPLETION_MARGIN_MS) {
+      context.addIssue({
+        code: "custom",
+        path: ["QUOTE_EMAIL_DELIVERY_LEASE_MS"],
+        message: `QUOTE_EMAIL_DELIVERY_LEASE_MS must exceed QUOTE_EMAIL_TOKEN_TIMEOUT_MS + QUOTE_EMAIL_SEND_TIMEOUT_MS + ${DELIVERY_COMPLETION_MARGIN_MS}`
+      });
     }
   })
   .transform((env) => ({
@@ -114,6 +148,43 @@ export function issuanceSettings(env: AppEnv): IssuanceSettings {
     pollIntervalMs: env.QUOTE_ISSUANCE_POLL_INTERVAL_MS,
     deadlineMs: env.QUOTE_ISSUANCE_DEADLINE_MS,
     syncBudgetMs: env.QUOTE_ISSUANCE_SYNC_BUDGET_MS
+  };
+}
+
+export interface DeliverySettings {
+  readonly leaseMs: number;
+  readonly pollIntervalMs: number;
+  readonly tokenTimeoutMs: number;
+  readonly sendTimeoutMs: number;
+}
+
+export function deliverySettings(env: AppEnv): DeliverySettings {
+  return {
+    leaseMs: env.QUOTE_EMAIL_DELIVERY_LEASE_MS,
+    pollIntervalMs: env.QUOTE_EMAIL_POLL_INTERVAL_MS,
+    tokenTimeoutMs: env.QUOTE_EMAIL_TOKEN_TIMEOUT_MS,
+    sendTimeoutMs: env.QUOTE_EMAIL_SEND_TIMEOUT_MS
+  };
+}
+
+/** Gmail adapter configuration; only meaningful (and validated) when QUOTE_EMAIL_PROVIDER=gmail. */
+export function gmailSettings(env: AppEnv): {
+  readonly clientId: string;
+  readonly clientSecret: string;
+  readonly refreshToken: string;
+  readonly from: { readonly address: string; readonly name: string | null };
+  readonly replyTo: string | null;
+  readonly tokenTimeoutMs: number;
+  readonly sendTimeoutMs: number;
+} {
+  return {
+    clientId: env.GOOGLE_GMAIL_CLIENT_ID!,
+    clientSecret: env.GOOGLE_GMAIL_CLIENT_SECRET!,
+    refreshToken: env.GOOGLE_GMAIL_REFRESH_TOKEN!,
+    from: { address: env.QUOTE_EMAIL_FROM_ADDRESS!, name: env.QUOTE_EMAIL_FROM_NAME ?? null },
+    replyTo: env.QUOTE_EMAIL_REPLY_TO ?? null,
+    tokenTimeoutMs: env.QUOTE_EMAIL_TOKEN_TIMEOUT_MS,
+    sendTimeoutMs: env.QUOTE_EMAIL_SEND_TIMEOUT_MS
   };
 }
 

@@ -34,7 +34,6 @@
     "documents:verify": "tsx src/scripts/verify-document-artifacts.ts",
     "documents:verify:runtime": "node dist/scripts/verify-document-artifacts.js",
     "email:preview": "tsx src/scripts/preview-quote-email.ts",
-    "email:smoke:pdf": "tsx src/scripts/smoke-send-quote-pdf.ts",
     "pdf:preview": "tsx src/scripts/preview-quote-pdf.ts",
     "pdf:benchmark": "tsx src/scripts/benchmark-pdf-renderer.ts",
     "pdf:concurrency-smoke": "tsx src/scripts/pdf-concurrency-smoke.ts",

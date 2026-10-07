@@ -184,6 +184,11 @@ The provider check runs **after** the binding lookup. Consequences:
 - With the provider disabled, visibility, body and state are not evaluated
   (`503` before `404`/`422`/`409`). `401` and `403` still come first.
 
+> **Superseded by R1.6B** ([email-delivery-execution.md](email-delivery-execution.md)):
+> `QUOTE_EMAIL_PROVIDER=gmail` now composes the Gmail adapter and the send
+> runner; `disabled` (default) still answers `503 email_provider`. The
+> paragraph below records the R1.6A state.
+
 Production in R1.6A composes **no** sender for any `QUOTE_EMAIL_PROVIDER`
 value. With `gmail` configured, the service logs
 `email.provider_not_available` at startup and still rejects requests with

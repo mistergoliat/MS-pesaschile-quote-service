@@ -28,8 +28,9 @@ const BUILD_TIMEOUT_MS = Number.isFinite(configuredBuildTimeoutMs) ? configuredB
 //     restart, same-key retry returns the same issued quote and document;
 // then a tampered and a missing artifact (503 document_storage_failed, never
 // regenerated) and the integrity verifier inside the image.
-// R1.6A: delivery requests in the production image (no sender composed):
-// 403 without the scope, 503 email_provider with it, nothing queued or bound.
+// R1.6A/B: delivery requests in the production image (provider disabled by
+// default, no sender composed): 403 without the scope, 503 email_provider
+// with it, nothing queued or bound, emailProvider disabled, no delivery logs.
 const PHASE_TIMEOUT_MS = {
   build: BUILD_TIMEOUT_MS,
   cleanup: 180_000,
@@ -1163,10 +1164,11 @@ async function runSmoke() {
     assert(counts === "3:2", `Expected 3 quotes and 2 operations, found ${counts}`);
   });
 
-  // R1.6A: the production image composes no mail sender (the V2 provider
-  // adapter and worker are R1.6B), so an otherwise valid delivery request of
-  // an issued quote answers 503 email_provider and leaves no state. No email
-  // can be sent from this image.
+  // R1.6A/R1.6B: the production image defaults to QUOTE_EMAIL_PROVIDER=disabled,
+  // so it composes no mail sender and no send runner: an otherwise valid
+  // delivery request of an issued quote answers 503 email_provider and leaves
+  // no state, health reports the provider disabled, and no delivery activity
+  // ever appears in the logs. No email can be sent from this image as run.
   await runPhase("v2Delivery", PHASE_TIMEOUT_MS.v2Delivery, async () => {
     const comms = { Authorization: `Bearer ${state.credentials.commsToken}` };
     const { quoteId } = state.summary.v2Quote;
@@ -1203,6 +1205,18 @@ async function runSmoke() {
       )
     ).trim();
     assert(counts === "0:0", `Expected no delivery and no delivery binding, found ${counts}`);
+
+    const health = await fetchJson("/health/dependencies", { headers: { Authorization: authHeader }, timeoutMs: 5_000 });
+    assert(health.status === 200, `health/dependencies: ${health.status}`);
+    const emailProvider = health.body.dependencies.emailProvider;
+    const emailWorker = health.body.workers.emailDelivery;
+    assert(emailProvider.status === "disabled" && emailProvider.lastSuccessAt === null, `Expected emailProvider disabled, got ${JSON.stringify(emailProvider)}`);
+    assert(emailWorker.enabled === false && emailWorker.queueDepth === 0, `Expected no send runner and an empty queue, got ${JSON.stringify(emailWorker)}`);
+    const ready = await fetchJson("/health/ready", { timeoutMs: 5_000 });
+    assert(ready.status === 200, `Readiness changed with email disabled: ${ready.status}`);
+    const logs = await readLogs(state.app.activeContainer);
+    assert(!/"event":"delivery\.(claimed|sent|attempt_failed|failed|outcome_unknown|late_result)"/.test(logs), "Delivery activity in the production image logs");
+    assert(!logs.includes("googleapis"), "Provider endpoint in the production image logs");
   });
 
   await runPhase("v1Retired", PHASE_TIMEOUT_MS.v1Retired, async () => {

@@ -4,6 +4,7 @@ import type {
   DependencyMonitor,
   DependencyStatusView
 } from "../../application/health/dependency-monitor";
+import type { DeliveryQueueMetrics } from "../../application/quote-v2/delivery/delivery-execution";
 import type { PrincipalRegistry } from "../../infrastructure/auth/principal-registry";
 import type { AppEnv } from "../../infrastructure/config/env";
 import type {
@@ -17,7 +18,10 @@ export interface HealthRouteDependencies {
   readonly monitor: DependencyMonitor;
   readonly principalRegistry: PrincipalRegistry;
   readonly backgroundJobs: BackgroundJobManager;
-  readonly emailEnabled: boolean;
+  /** `emailProvider` status, derived from configuration and the delivery worker's outcomes; never a provider probe. */
+  readonly emailProvider: () => EmailProviderView;
+  /** Last measured `emailDelivery` queue metrics (database), or null before the first measurement. */
+  readonly emailQueueMetrics: () => DeliveryQueueMetrics | null;
   readonly startedAt: Date;
 }
 
@@ -34,32 +38,16 @@ interface EmailProviderView {
   readonly lastSuccessAt: string | null;
 }
 
-// Queue metrics are not measured before the V2 workers (R1.5); the frozen
-// contract requires the fields, so they report an empty queue.
-function toWorkerView(job: BackgroundJobStatus): WorkerStatusView {
+// Issuance and expiry queue metrics are still not measured (R1.6D); the
+// frozen contract requires the fields, so they report an empty queue.
+// emailDelivery reports the due `pending` deliveries measured by the
+// persistence sweep (R1.6B).
+function toWorkerView(job: BackgroundJobStatus, metrics: DeliveryQueueMetrics | null = null): WorkerStatusView {
   return {
     enabled: job.enabled,
     lastPollAt: job.lastPollAt,
-    queueDepth: 0,
-    oldestPendingAgeSeconds: null
-  };
-}
-
-// The provider is never called by a health check. Its status is derived from
-// the delivery worker's last iteration; email never affects readiness.
-function toEmailProviderView(emailEnabled: boolean, job: BackgroundJobStatus): EmailProviderView {
-  if (!emailEnabled) {
-    return {
-      status: "disabled",
-      failureCategory: null,
-      lastSuccessAt: null
-    };
-  }
-
-  return {
-    status: job.lastSuccessAt !== null && !job.lastIterationFailed ? "up" : "degraded",
-    failureCategory: job.lastIterationFailed ? "provider_error" : null,
-    lastSuccessAt: job.lastSuccessAt
+    queueDepth: metrics?.queueDepth ?? 0,
+    oldestPendingAgeSeconds: metrics?.oldestPendingAgeSeconds ?? null
   };
 }
 
@@ -69,7 +57,7 @@ function toEmailProviderView(emailEnabled: boolean, job: BackgroundJobStatus): E
  * fast and cannot fan out load onto a struggling database.
  */
 export function registerHealthRoute(app: FastifyInstance, deps: HealthRouteDependencies): void {
-  const { env, monitor, principalRegistry, backgroundJobs, emailEnabled, startedAt } = deps;
+  const { env, monitor, principalRegistry, backgroundJobs, emailProvider, emailQueueMetrics, startedAt } = deps;
 
   app.get("/health/live", async (_request, reply) => {
     return reply.header("Cache-Control", "no-store").code(200).send({ status: "live" });
@@ -112,12 +100,13 @@ export function registerHealthRoute(app: FastifyInstance, deps: HealthRouteDepen
         },
         dependencies: {
           ...details.dependencies,
-          emailProvider: toEmailProviderView(emailEnabled, jobs.emailDelivery)
+          // Never a provider call; email never affects readiness.
+          emailProvider: emailProvider()
         },
         workers: {
           issuance: toWorkerView(jobs.issuance),
           expiry: toWorkerView(jobs.expiry),
-          emailDelivery: toWorkerView(jobs.emailDelivery)
+          emailDelivery: toWorkerView(jobs.emailDelivery, emailQueueMetrics())
         }
       });
     }

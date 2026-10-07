@@ -75,6 +75,15 @@ async function start(
   });
   options.beforeListen?.(context);
   const baseUrl = await context.app.listen({ host: "127.0.0.1", port: 0 });
+
+  // A healthy composition must be ready before the first business request: the
+  // first probe cycle is bounded (HEALTH_PROBE_TIMEOUT_MS) and can miss under
+  // full-suite load. Bounded wait; never a retry of a commercial request. The
+  // unready compositions (unreachable or unmigrated database) are not awaited.
+  if ((options.migrate ?? true) && options.databaseUrl === undefined) {
+    await waitFor(async () => (await fetch(`${baseUrl}/health/ready`)).status === 200, 30_000, 50);
+  }
+
   const admin = new pg.Client({ connectionString: database.connectionString });
   await admin.connect();
   cleanups.push(() => admin.end());

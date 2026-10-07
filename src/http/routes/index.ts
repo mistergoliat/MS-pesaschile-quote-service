@@ -6,17 +6,16 @@ import type { AppEnv } from "../../infrastructure/config/env";
 import type { BackgroundJobManager } from "../../infrastructure/runtime/background-job-manager";
 import { enforceRouteScopes } from "../authentication";
 import { createReadinessGate } from "../readiness-gate";
-import { registerHealthRoute } from "./health-route";
+import { registerHealthRoute, type HealthRouteDependencies } from "./health-route";
 
 /** Registers business routes inside the readiness-gated, scope-enforced context. Every route must set `config.requiredScope`. */
 export type BusinessRouteRegistrar = (businessApp: FastifyInstance) => void;
 
-export interface RegisterRoutesInput {
+export interface RegisterRoutesInput extends HealthRouteDependencies {
   readonly env: AppEnv;
   readonly monitor: DependencyMonitor;
   readonly principalRegistry: PrincipalRegistry;
   readonly backgroundJobs: BackgroundJobManager;
-  readonly emailEnabled: boolean;
   readonly startedAt: Date;
   readonly businessRoutes: readonly BusinessRouteRegistrar[];
 }

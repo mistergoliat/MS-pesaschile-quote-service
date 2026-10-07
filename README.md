@@ -49,8 +49,7 @@ curl -i localhost:3000/health/ready
 | `npm run smoke:docker` | build the image and smoke the runtime (migrate, check, health, restart, shutdown) |
 | `npm run pdf:preview`, `pdf:benchmark`, `pdf:concurrency-smoke` | formal PDF previews (template v4), cost and concurrency checks |
 | `npm run pdf:determinism` / `pdf:determinism:runtime` | SHA-256 of the golden formal-PDF fixtures (must equal the pinned values on every OS) |
-| `npm run email:preview` | offline email template preview |
-| `QUOTE_SMOKE_RECIPIENT=… npm run email:smoke:pdf` | real Gmail smoke (manual, needs Gmail configuration) |
+| `npm run email:preview` | offline preview of the V2 email envelope (`.preview/`; sends nothing) |
 
 ## HTTP surface
 
@@ -64,7 +63,7 @@ curl -i localhost:3000/health/ready
 | `POST /v2/quotes/drafts` | `quotes:draft:write` | editable draft, version 1, owner totals; no number, validity, operation or document → `201` |
 | `PATCH /v2/quotes/{quoteId}/draft` | `quotes:draft:write` | replaces the present top-level members (`shipping: null` removes), recomputes totals, version + 1, fenced by `expectedVersion` (`409 version_conflict`) → `200` |
 | `POST /v2/quotes/{quoteId}/issue` | `quotes:issue` (+ `quotes:validity:override`) | same acceptance as `POST /v2/quotes` applied to the draft at `expectedVersion`: same `quoteId`, number, validity → `200` `issued` within the sync budget, else `202` `issuing` |
-| `POST /v2/quotes/{quoteId}/deliveries/email` | `quotes:delivery:email` (+ visibility) | the **only** email trigger. R1.6A queues one durable `pending` delivery of an effectively `issued` quote (recipient snapshot, pinned PDF hash, audit, binding) → `202`; **sends nothing**. No sender is composed in production yet, so it answers `503 dependency_unavailable` (`email_provider`). See [docs/email-delivery-request.md](docs/email-delivery-request.md) |
+| `POST /v2/quotes/{quoteId}/deliveries/email` | `quotes:delivery:email` (+ visibility) | the **only** email trigger. Queues one durable `pending` delivery of an effectively `issued` quote (recipient snapshot, pinned PDF hash, audit, binding) → `202`; never sends synchronously. The delivery worker sends it when `QUOTE_EMAIL_PROVIDER=gmail`; with the default `disabled` it answers `503 dependency_unavailable` (`email_provider`). See [docs/email-delivery-request.md](docs/email-delivery-request.md) and [docs/email-delivery-execution.md](docs/email-delivery-execution.md) |
 | `GET /v2/quotes/{quoteId}/deliveries/{deliveryId}` | `quotes:read` (+ visibility) | contract `Delivery` (masked recipient only) → `200` |
 
 Semantics, failure policy and configuration:
@@ -86,14 +85,14 @@ checksums, the migration/runtime role separation and the recovery model:
   `pesaschile-cl-v1`, embedded DejaVu Sans 2.37, code-owned renderer version.
   Pure, deterministic, no arithmetic, no lookups, no printable HTML, no
   personal signature: [docs/formal-document-v2.md](docs/formal-document-v2.md).
-- **Brand:** `pesaschile-brand-v1` under `src/infrastructure/branding`;
-  repository-controlled assets, no CDN.
-- **Email template:** `quote-email-v2`, table-based HTML with the legacy V1
-  email view model (V2 email refactor: R1.6).
+- **Brand assets:** `asset://pesaschile-brand-v1/*` under
+  `src/infrastructure/branding`; repository-controlled files, no CDN.
+- **Email envelope:** `quote-email-envelope-v3`: a communication wrapper
+  around the attached formal PDF, with no commercial content (provisional copy,
+  owner approval at R1.7): [docs/email-delivery-execution.md](docs/email-delivery-execution.md).
 
 ## Architecture
 
-`src/domain` (V1 domain and exact CLP arithmetic, kept for reuse) ·
 `src/application` (health monitor, document view models) ·
 `src/infrastructure` (config, persistence, documents, branding, email
 adapter, runtime) · `src/http` (health routes, readiness gate, errors).

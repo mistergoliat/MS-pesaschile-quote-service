@@ -21,8 +21,10 @@ import { HOSTILE_RECIPIENTS } from "../helpers/hostile-recipients";
 
 /*
  * R1.6A — V2 email delivery request and read core, on real PostgreSQL.
- * Every suite composes a SPY mail sender (or none). R1.6A must never call it:
- * `afterEach` asserts zero `send()` calls across every test (AO).
+ * Every suite composes a SPY mail sender (or none) with delivery EXECUTION
+ * disabled (test seam), so requests are observed in `pending`. The request
+ * path itself must never call the sender: `afterEach` asserts zero `send()`
+ * calls across every test (AO, BV).
  */
 
 type AnyRecord = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -139,6 +141,8 @@ async function start(options: StartOptions = {}) {
       quoteClock: clock,
       ...(options.issuance ? {} : { disableIssuanceExecution: true }),
       ...((options.mail ?? true) ? { testMailSender: spySender } : {}),
+      // Request-only suite: no send runner, no sweep (R1.6B execution is covered by the delivery execution suites).
+      disableDeliveryExecution: true,
       ...(options.logs ? { logStream: { write: (line: string) => void options.logs!.push(line) } } : {})
     }
   );
