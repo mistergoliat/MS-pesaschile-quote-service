@@ -1,20 +1,27 @@
+import fsPromises from "node:fs/promises";
+import path from "node:path";
+
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { DependencyMonitor } from "./application/health/dependency-monitor";
 import { PrincipalRegistry } from "./infrastructure/auth/principal-registry";
-import { principalRegistrySource, type AppEnv } from "./infrastructure/config/env";
-import { FilesystemDocumentArtifactStorage } from "./infrastructure/documents/filesystem-document-artifact-storage";
-import { NativePdfRenderer, type PdfRendererPort } from "./infrastructure/documents/native-pdf-renderer";
-import {
-  createDefaultPesasChileSenderSignatureV1,
-  createPesasChileBrandV1
-} from "./infrastructure/branding/pesaschile-brand-v1";
+import type { PdfRendererPort } from "./application/quote-v2/document/pdf-renderer-port";
+import { InlineIssuance } from "./application/quote-v2/inline-issuance";
+import type { IssuanceFailpoints } from "./application/quote-v2/issuance-failpoints";
+import { createIssuanceAttemptBody } from "./application/quote-v2/issuance-attempt";
+import { createWorkerInstanceId } from "./application/quote-v2/issuance-worker";
+import { issuanceSettings, principalRegistrySource, type AppEnv } from "./infrastructure/config/env";
+import { FilesystemContentAddressedArtifactStore } from "./infrastructure/documents/content-addressed-artifact-store";
+import { NativePdfRenderer } from "./infrastructure/documents/native-pdf-renderer";
+import { PostgresIssuanceOperationRepository } from "./infrastructure/persistence/postgres/issuance-operations";
 import { buildConnectionConfig, PostgresDatabase } from "./infrastructure/persistence/postgres/postgres";
 import { PostgresDependencyProbe } from "./infrastructure/persistence/postgres/postgres-dependency-probe";
 import type { QuoteClock } from "./infrastructure/persistence/postgres/quote-clock";
 import { loadMigrationManifest } from "./infrastructure/persistence/postgres/schema-head";
 import { ApplicationLifecycleState } from "./infrastructure/runtime/application-lifecycle-state";
 import { BackgroundJobManager } from "./infrastructure/runtime/background-job-manager";
+import { createIssuanceJobs, type IssuanceJobs } from "./infrastructure/runtime/issuance-jobs";
+import { isOperationActive } from "./infrastructure/persistence/postgres/quote-v2-reads";
 import { sendErrorResponse, toHttpError } from "./http/errors";
 import { registerRoutes, type BusinessRouteRegistrar } from "./http/routes";
 import { v2QuoteRoutes } from "./http/routes/v2-quote-route";
@@ -24,9 +31,11 @@ export type ShutdownOutcome = "completed" | "timed_out" | "failed";
 export interface ApplicationContext {
   app: FastifyInstance;
   database: PostgresDatabase;
-  artifactStorage: FilesystemDocumentArtifactStorage;
+  artifactStorage: FilesystemContentAddressedArtifactStore;
   pdfRenderer: PdfRendererPort;
   backgroundJobs: BackgroundJobManager;
+  /** Null only when a test disabled issuance execution. */
+  issuance: IssuanceJobs | null;
   lifecycleState: ApplicationLifecycleState;
   dependencyMonitor: DependencyMonitor;
   principalRegistry: PrincipalRegistry;
@@ -47,7 +56,27 @@ export interface BuildApplicationOverrides {
   readonly businessRoutes?: readonly BusinessRouteRegistrar[];
   /** Expiry-projection time source (tests pin it; production uses the database clock). */
   readonly quoteClock?: QuoteClock;
+  /**
+   * Test seam: build without issuance execution (no periodic worker, no
+   * deadline sweep, no inline attempt), so acceptance-only suites observe
+   * quotes in `issuing`. Production always runs issuance.
+   */
+  readonly disableIssuanceExecution?: boolean;
+  /**
+   * Test seam (R1.5B4 crash harness): issuance checkpoints where a test
+   * composition stops or holds the process. Production never passes it.
+   */
+  readonly issuanceFailpoints?: IssuanceFailpoints;
 }
+
+/*
+ * TEST SEAMS. `BuildApplicationOverrides` is the only way to change issuance
+ * behaviour for tests: `disableIssuanceExecution` and `issuanceFailpoints`
+ * are constructor arguments, not configuration. `src/server.ts` (the only
+ * production composition) calls `buildApplication(env)` without overrides,
+ * no environment variable maps to either (env.ts), and no HTTP route reaches
+ * them. test/unit/test-seams.test.ts enforces this.
+ */
 
 /**
  * Builds the application without touching any external dependency. Throws
@@ -55,10 +84,13 @@ export interface BuildApplicationOverrides {
  * not match the compiled manifest, a malformed principal registry);
  * dependency availability is the DependencyMonitor's concern.
  *
- * R1.4 state: the V1 API and its workers are retired (their persistence
- * model was replaced by the V2 schema); the V2 API arrives in R1.5. The
- * runtime therefore serves health only, with the readiness gate in place for
- * the business routes to come.
+ * R1.5B3 state: the V2 API (acceptance, drafts, reads, cancel) and durable
+ * issuance run here: the issuance worker (gated on full readiness), the
+ * deadline sweep (gated on persistence readiness only) and the bounded
+ * inline attempt after acceptance. Formal documents are published to the
+ * content-addressed store and committed with the fenced T5 transaction.
+ * R1.5B4: `GET /v2/quotes/{id}/document` serves the committed, verified
+ * bytes from the same store (read only; never re-rendered).
  */
 export function buildApplication(
   env: AppEnv,
@@ -81,16 +113,25 @@ export function buildApplication(
   });
 
   const database = new PostgresDatabase(env);
-  const artifactStorage = new FilesystemDocumentArtifactStorage(env.QUOTE_DOCUMENT_STORAGE_ROOT);
-  const pdfRenderer =
-    overrides.pdfRenderer ??
-    new NativePdfRenderer({
-      renderVersion: env.QUOTE_RENDER_VERSION,
-      brand: createPesasChileBrandV1({
-        legalName: env.QUOTE_COMPANY_NAME
-      }),
-      senderSignature: createDefaultPesasChileSenderSignatureV1()
-    });
+  const failpoints = overrides.issuanceFailpoints;
+  // V2 write-once, content-addressed store; also the storage readiness probe.
+  // F5 (test only): a checkpoint before link() of a publication temp.
+  const artifactStorage = new FilesystemContentAddressedArtifactStore(
+    env.QUOTE_DOCUMENT_STORAGE_ROOT,
+    failpoints
+      ? {
+          fs: {
+            link: async (existing, target) => {
+              await failpoints.reach("before_artifact_link", { detail: path.basename(String(existing)) });
+              await fsPromises.link(existing, target);
+            }
+          }
+        }
+      : {}
+  );
+  // Formal-document identity and versions are code-owned (issuer profile,
+  // template v4, renderer profile); no environment value reaches the PDF.
+  const pdfRenderer = overrides.pdfRenderer ?? new NativePdfRenderer();
   const lifecycleState = new ApplicationLifecycleState();
   const dependencyMonitor = new DependencyMonitor(
     {
@@ -111,7 +152,34 @@ export function buildApplication(
   database.onConnectionError(() => {
     dependencyMonitor.requestProbe();
   });
-  const backgroundJobs = new BackgroundJobManager();
+  const settings = issuanceSettings(env);
+  const issuance = overrides.disableIssuanceExecution
+    ? null
+    : (() => {
+        const repository = new PostgresIssuanceOperationRepository(database, { leaseMs: settings.leaseMs, deadlineMs: settings.deadlineMs, failpoints });
+        return createIssuanceJobs({
+          repository,
+          attemptBody: createIssuanceAttemptBody({ repository, renderer: pdfRenderer, store: artifactStorage, logger: app.log, failpoints }),
+          failpoints,
+          leaseOwner: createWorkerInstanceId(env.SERVICE_NAME),
+          settings,
+          readiness: dependencyMonitor,
+          lifecycle: lifecycleState,
+          logger: app.log
+        });
+      })();
+  const inlineIssuance = issuance
+    ? new InlineIssuance({
+        worker: issuance.worker,
+        readiness: dependencyMonitor,
+        isOperationActive: (operationId) => isOperationActive(database, operationId),
+        syncBudgetMs: settings.syncBudgetMs,
+        logger: app.log
+      })
+    : undefined;
+  const backgroundJobs = new BackgroundJobManager(
+    issuance ? { issuance: issuance.issuance, issuanceDeadlineSweep: issuance.issuanceDeadlineSweep } : {}
+  );
 
   app.decorateRequest("principal", null);
 
@@ -139,6 +207,9 @@ export function buildApplication(
 
   app.addHook("preClose", async () => {
     lifecycleState.markShuttingDown();
+    // No new claims; an in-flight attempt (worker or inline) is aborted and
+    // never marked succeeded: its lease expires and any process reclaims it.
+    issuance?.worker.stop();
     await dependencyMonitor.stop();
     await backgroundJobs.stop();
   });
@@ -155,7 +226,16 @@ export function buildApplication(
     // The email subsystem was retired with V1 and returns in R1.6.
     emailEnabled: false,
     startedAt: new Date(),
-    businessRoutes: [v2QuoteRoutes(database, overrides.quoteClock), ...(overrides.businessRoutes ?? [])]
+    businessRoutes: [
+      v2QuoteRoutes(database, {
+        clock: overrides.quoteClock,
+        issuanceDeadlineMs: env.QUOTE_ISSUANCE_DEADLINE_MS,
+        inlineIssuance,
+        documents: artifactStorage,
+        failpoints
+      }),
+      ...(overrides.businessRoutes ?? [])
+    ]
   });
 
   let shutdownPromise: Promise<ShutdownOutcome> | null = null;
@@ -211,6 +291,7 @@ export function buildApplication(
     artifactStorage,
     pdfRenderer,
     backgroundJobs,
+    issuance,
     lifecycleState,
     dependencyMonitor,
     principalRegistry,

@@ -187,6 +187,15 @@ export class DependencyMonitor {
     return this.readiness().status === "ready";
   }
 
+  /**
+   * Database reachable, schema at the expected head and not shutting down:
+   * enough for database-only work (the issuance deadline sweep), which must
+   * not pause during a storage or renderer outage. Never used for `/health/ready`.
+   */
+  isPersistenceReady(): boolean {
+    return !this.lifecycle.isShuttingDown && this.records.database.status === "up" && this.schemaState === "READY";
+  }
+
   readiness(): ReadinessSnapshot {
     const checks: Record<ReadinessCheckName, CheckResult> = {
       database: this.records.database.status === "up" ? "ok" : "fail",

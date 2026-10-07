@@ -5,6 +5,7 @@ import type { PoolClient } from "pg";
 import { hasScope, type AuthenticatedPrincipal } from "../../../application/auth/principal";
 import { idempotencyScope, type IdempotentOperation } from "../../../application/idempotency/idempotency-scope";
 import { canonicalDecimal } from "../../../application/quote-v2/arithmetic";
+import type { CommittedArtifactManifest } from "../../../application/quote-v2/document/artifact-store-port";
 import { QuoteRequestRejected } from "../../../application/quote-v2/create-quote-request";
 import { effectiveExpiry, effectiveStatusSql } from "../../../application/quote-v2/expiry";
 import { formatInstant } from "../../../application/quote-v2/validity";
@@ -361,6 +362,31 @@ export async function readOperation(client: PoolClient, operationId: string): Pr
 }
 
 /**
+ * Current durable representation of an accepted quote and its operation, in
+ * one consistent snapshot: the inline issuance response is built from this,
+ * never from in-memory assumptions (Idempotency §4.4).
+ */
+export function readIssuanceResult(
+  database: PostgresDatabase,
+  quoteId: string,
+  operationId: string,
+  clock: QuoteClock = databaseClock
+): Promise<{ quote: QuoteView; operation: OperationView }> {
+  return withReadSnapshot(database, async (client) => ({
+    quote: await readQuote(client, quoteId, clock),
+    operation: await readOperation(client, operationId)
+  }));
+}
+
+/** True while the operation is `pending` or `running`. */
+export async function isOperationActive(database: PostgresDatabase, operationId: string): Promise<boolean> {
+  const { rows } = await database.query<{ status: string }>(`select status from quote_service.issuance_operations where operation_id = $1`, [
+    operationId
+  ]);
+  return rows[0]?.status === "pending" || rows[0]?.status === "running";
+}
+
+/**
  * `and <alias>.created_by_principal_id = $n` unless the principal holds
  * `quotes:read:any` (security §3). Appends the parameter it uses.
  */
@@ -395,6 +421,81 @@ export function getVisibleQuote(database: PostgresDatabase, principal: Authentic
     }
 
     return (await loadQuoteViews(client, rows, await clock.now(client)))[0]!;
+  });
+}
+
+/**
+ * What `GET /v2/quotes/{quoteId}/document` needs (R1.5B4). Internal only:
+ * the storage facts of the committed manifest are passed to the verified
+ * read and never serialized into a response.
+ */
+export interface VisibleQuoteDocument {
+  readonly quoteId: string;
+  readonly quoteNumber: string | null;
+  /** Effective (expiry-projected) status, for `document_not_available.details.status`. */
+  readonly status: string;
+  /** The committed manifest, or null when the quote never reached `issued`. */
+  readonly manifest: (CommittedArtifactManifest & { readonly documentId: string }) | null;
+}
+
+/**
+ * Document visibility is the quote's (security §3): 404 when missing or not
+ * visible, exactly like `GET /v2/quotes/{id}`. One read-only snapshot of the
+ * quote row and its manifest. A manifest exists only once T5 committed (or
+ * for a migrated V1 document), so its presence is "reached `issued`"
+ * whatever the current status (expired, cancelled after issue).
+ */
+export function getVisibleQuoteDocument(
+  database: PostgresDatabase,
+  principal: AuthenticatedPrincipal,
+  quoteId: string,
+  clock: QuoteClock
+): Promise<VisibleQuoteDocument> {
+  return withReadSnapshot(database, async (client) => {
+    const values: unknown[] = [quoteId];
+    const visibility = visibilityClause("q", principal, values);
+    const { rows } = await client.query<{
+      quote_id: string;
+      quote_number: string | null;
+      status: string;
+      valid_until_exclusive: Date | null;
+      expired_at: Date | null;
+      document_id: string | null;
+      origin: "issuance" | "legacy_v1" | null;
+      storage_key: string | null;
+      pdf_sha256: string | null;
+      byte_length: string | null;
+    }>(
+      `select q.quote_id, q.quote_number, q.status, q.valid_until_exclusive, q.expired_at,
+              d.document_id, d.origin, d.storage_key, d.pdf_sha256, d.byte_length::text as byte_length
+       from quote_service.quotes q
+       left join quote_service.quote_documents d on d.quote_id = q.quote_id
+       where q.quote_id = $1${visibility}`,
+      values
+    );
+    const row = rows[0];
+
+    if (!row) {
+      throw quoteNotFound();
+    }
+
+    const effective = effectiveExpiry({ status: row.status, validUntilExclusive: row.valid_until_exclusive, expiredAt: row.expired_at }, await clock.now(client));
+
+    return {
+      quoteId: row.quote_id,
+      quoteNumber: row.quote_number,
+      status: effective.status,
+      manifest:
+        row.document_id === null
+          ? null
+          : {
+              documentId: row.document_id,
+              origin: row.origin!,
+              storageKey: row.storage_key!,
+              pdfSha256: row.pdf_sha256!,
+              byteLength: row.byte_length === null ? null : Number(row.byte_length)
+            }
+    };
   });
 }
 

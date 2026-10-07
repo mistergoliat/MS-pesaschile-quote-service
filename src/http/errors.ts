@@ -25,9 +25,11 @@ type HttpErrorCode =
   | "version_conflict"
   | "invalid_state_transition"
   | "operation_in_progress"
+  | "document_not_available"
   | "payload_too_large"
   | "dependency_unavailable"
-  | "schema_not_ready";
+  | "schema_not_ready"
+  | "document_storage_failed";
 
 interface HttpErrorPayload {
   readonly code: HttpErrorCode;
@@ -159,6 +161,10 @@ export function sendErrorResponse(
       },
       "Request rejected: dependencies not ready"
     );
+  } else if (httpError.code === "document_storage_failed") {
+    // The integrity incident itself is logged by the document route
+    // (event document.integrity_failed, ids and status only, never a path).
+    request.log.warn({ code: httpError.code, requestId: request.id, route: request.routeOptions.url }, "Document not served");
   } else if (httpError.statusCode >= 500) {
     request.log.error(
       {

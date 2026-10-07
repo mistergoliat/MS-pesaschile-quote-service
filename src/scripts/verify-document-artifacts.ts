@@ -4,12 +4,17 @@ import { Client } from "pg";
 import { z } from "zod";
 
 import { describeConfigError, loadMigrationEnv } from "../infrastructure/config/env";
+import { FilesystemContentAddressedArtifactStore } from "../infrastructure/documents/content-addressed-artifact-store";
 import { verifyDocumentArtifacts } from "../infrastructure/documents/document-artifact-verifier";
-import { FilesystemDocumentArtifactStorage } from "../infrastructure/documents/filesystem-document-artifact-storage";
 
-// Operator check: every document manifest against its stored bytes. Read-only
-// unless --record-byte-length is given (records verified legacy V1 sizes).
-// Exit 0 when every artifact verifies, 2 when any is missing or altered.
+// Operator integrity check (R1.5B4): every committed document manifest (V2
+// and migrated V1) against its stored bytes, with the document endpoint's
+// verified read. Detection only: nothing is repaired, regenerated, moved or
+// deleted. Read-only unless --record-byte-length is given (records verified
+// legacy V1 sizes once; V2 manifests are never written).
+// Exit 0 when every artifact verifies, 2 when any is MISSING / HASH_MISMATCH /
+// LENGTH_MISMATCH / READ_FAILED / KEY_INVALID / OVERSIZED, 1 when the check
+// itself could not run.
 async function main(): Promise<void> {
   const env = loadMigrationEnv();
   const storageRoot = z.string().min(1).parse(process.env.QUOTE_DOCUMENT_STORAGE_ROOT);
@@ -19,7 +24,7 @@ async function main(): Promise<void> {
   try {
     const report = await verifyDocumentArtifacts({
       database: client,
-      storage: new FilesystemDocumentArtifactStorage(storageRoot),
+      store: new FilesystemContentAddressedArtifactStore(storageRoot),
       recordLegacyByteLength: process.argv.includes("--record-byte-length")
     });
 

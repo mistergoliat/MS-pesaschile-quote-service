@@ -114,6 +114,8 @@ async function start(options: { legacy?: boolean; migrate?: boolean; databaseUrl
     {
       principalRegistry: registry(),
       quoteClock: clock,
+      // Acceptance-only suite: quotes must stay `issuing` (issuance execution is covered in issuance-commit tests).
+      disableIssuanceExecution: true,
       ...(options.logs ? { logStream: { write: (line: string) => void options.logs!.push(line) } } : {})
     }
   );

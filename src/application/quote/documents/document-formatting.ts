@@ -1,5 +1,10 @@
 import Decimal from "decimal.js";
 
+import { formatClpMoney } from "./display-formatting";
+
+// Shared display formatters live in display-formatting.ts (also used by the V2 formal PDF).
+export { formatClpMoney, formatQuantityDisplay } from "./display-formatting";
+
 const SPANISH_SHORT_MONTHS = [
   "ENE",
   "FEB",
@@ -15,23 +20,7 @@ const SPANISH_SHORT_MONTHS = [
   "DIC"
 ] as const;
 
-export function formatClpMoney(value: string): string {
-  const normalized = value.trim();
-  const isNegative = normalized.startsWith("-");
-  const digits = isNegative ? normalized.slice(1) : normalized;
-  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-
-  return `${isNegative ? "-" : ""}$${grouped}`;
-}
-
-export function formatQuantityDisplay(value: string): string {
-  if (!value.includes(".")) {
-    return value;
-  }
-
-  return value.replace(/\.?0+$/, "");
-}
-
+/** LEGACY (R1.6 email only): derives a unit price from a V1 line total. Never used by the V2 PDF, which displays the frozen unit amount. */
 export function formatCommercialUnitPriceDisplay(input: {
   readonly lineTotal: string;
   readonly quantity: string;
@@ -40,15 +29,6 @@ export function formatCommercialUnitPriceDisplay(input: {
   const unitPrice = new Decimal(input.lineTotal).div(quantity).toDecimalPlaces(0, Decimal.ROUND_HALF_UP);
 
   return formatClpMoney(unitPrice.toFixed(0));
-}
-
-export function formatUtcDateDisplay(value: string): string {
-  const date = new Date(value);
-  const year = date.getUTCFullYear().toString().padStart(4, "0");
-  const month = (date.getUTCMonth() + 1).toString().padStart(2, "0");
-  const day = date.getUTCDate().toString().padStart(2, "0");
-
-  return `${day}/${month}/${year}`;
 }
 
 export function formatUtcShortSpanishDateDisplay(value: string): string {

@@ -27,7 +27,6 @@ export function buildRuntimeTestEnv(input: {
     HEALTH_PROBE_RETRY_MAX_MS: "400",
     QUOTE_COMPANY_NAME: "Pesas Chile SPA",
     QUOTE_DOCUMENT_STORAGE_ROOT: input.storageRoot,
-    QUOTE_RENDER_VERSION: "quote-pdf-v3",
     ...input.overrides
   });
 }

@@ -1,4 +1,7 @@
-FROM node:20-bookworm-slim AS base
+# Node is pinned to an exact release: the formal PDF renderer profile pins the
+# Node major and its bundled zlib (src/infrastructure/documents/renderer-profile.ts),
+# and the renderer refuses to start on any other runtime. Bump both together.
+FROM node:24.14.0-bookworm-slim AS base
 
 ENV APP_HOME=/app
 WORKDIR ${APP_HOME}
@@ -14,7 +17,7 @@ COPY test ./test
 COPY scripts ./scripts
 RUN npm run build
 
-FROM node:20-bookworm-slim AS runtime
+FROM node:24.14.0-bookworm-slim AS runtime
 ENV NODE_ENV=production
 ENV APP_HOME=/app
 ENV HOST=0.0.0.0

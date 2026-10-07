@@ -6,9 +6,10 @@
   "main": "dist/server.js",
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && tsc -p tsconfig.build.json && npm run copy:migrations && npm run copy:brand-assets",
+    "build": "npm run clean && tsc -p tsconfig.build.json && npm run copy:migrations && npm run copy:brand-assets && npm run copy:document-assets",
     "copy:migrations": "node scripts/copy-migrations.cjs",
     "copy:brand-assets": "node scripts/copy-brand-assets.cjs",
+    "copy:document-assets": "node scripts/copy-document-assets.cjs",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "lint": "eslint .",
@@ -37,10 +38,12 @@
     "pdf:preview": "tsx src/scripts/preview-quote-pdf.ts",
     "pdf:benchmark": "tsx src/scripts/benchmark-pdf-renderer.ts",
     "pdf:concurrency-smoke": "tsx src/scripts/pdf-concurrency-smoke.ts",
+    "pdf:determinism": "tsx src/scripts/pdf-determinism.ts",
+    "pdf:determinism:runtime": "node dist/scripts/pdf-determinism.js",
     "smoke:docker": "node scripts/docker-smoke.mjs"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0 <25"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -48,6 +51,7 @@
     "@types/pg": "^8.21.0",
     "eslint": "^10.8.1",
     "node-pg-migrate": "^9.0.0",
+    "pdfjs-dist": "5.7.284",
     "tsx": "^4.23.11",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.66.0",
@@ -57,7 +61,7 @@
     "decimal.js": "^10.6.0",
     "dotenv": "^17.4.2",
     "fastify": "^5.11.3",
-    "pdfmake": "^0.2.20",
+    "pdfmake": "0.2.20",
     "pg": "^8.23.0",
     "zod": "^4.4.3"
   }

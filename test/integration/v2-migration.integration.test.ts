@@ -6,8 +6,8 @@ import path from "node:path";
 import pg from "pg";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { FilesystemContentAddressedArtifactStore } from "../../src/infrastructure/documents/content-addressed-artifact-store";
 import { verifyDocumentArtifacts } from "../../src/infrastructure/documents/document-artifact-verifier";
-import { FilesystemDocumentArtifactStorage } from "../../src/infrastructure/documents/filesystem-document-artifact-storage";
 import { MIGRATION_MANIFEST } from "../../src/infrastructure/persistence/postgres/migration-manifest";
 import { MigrationIntegrityError, runMigrations } from "../../src/infrastructure/persistence/postgres/migrator";
 import { PostgresDependencyProbe } from "../../src/infrastructure/persistence/postgres/postgres-dependency-probe";
@@ -524,20 +524,21 @@ describe("V2 migration: legacy artifacts (D, item 14)", () => {
       );
     }
 
-    const storage = new FilesystemDocumentArtifactStorage(root);
+    // R1.5B4: the same verified read as the document endpoint (legacy keys and null byteLength honoured).
+    const store = new FilesystemContentAddressedArtifactStore(root);
     const before = await snapshotDatabase(client);
-    const readOnly = await verifyDocumentArtifacts({ database: client, storage, recordLegacyByteLength: false });
+    const readOnly = await verifyDocumentArtifacts({ database: client, store, recordLegacyByteLength: false });
 
     expect(readOnly).toMatchObject({ checked: 5, ok: 3, byteLengthsRecorded: 0 });
     expect(readOnly.problems.map((problem) => [problem.quoteId, problem.status])).toEqual([
-      [V1_IDS.cancelledIssued, "missing"],
-      [V1_IDS.expired, "hash_mismatch"]
+      [V1_IDS.cancelledIssued, "MISSING"],
+      [V1_IDS.expired, "HASH_MISMATCH"]
     ]);
     expect(await snapshotDatabase(client)).toEqual(before);
     // Nothing was written or regenerated in storage.
     await expect(fsPromises.access(path.join(root, documents.find((d) => d.quote_id === V1_IDS.cancelledIssued)!.storage_key))).rejects.toThrow();
 
-    const recorded = await verifyDocumentArtifacts({ database: client, storage, recordLegacyByteLength: true });
+    const recorded = await verifyDocumentArtifacts({ database: client, store, recordLegacyByteLength: true });
     expect(recorded.byteLengthsRecorded).toBe(3);
     expect(
       await rows(client, `select quote_id, byte_length::int from quote_service.quote_documents where byte_length is not null order by quote_id`)

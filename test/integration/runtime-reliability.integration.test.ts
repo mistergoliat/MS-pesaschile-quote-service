@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -268,7 +269,9 @@ describe("runtime reliability: storage and renderer", () => {
   it("G: storage unavailable → not ready; restoring it recovers; probes leave no files", async () => {
     const harness = await startHarness();
     expect(await readyStatus(harness)).toBe(200);
-    expect(await fsPromises.readdir(path.join(harness.storageRoot, ".health"))).toEqual([]);
+    // R1.5B3: the content-addressed store probes inside artifacts/tmp and leaves nothing behind.
+    expect(await fsPromises.readdir(path.join(harness.storageRoot, "artifacts", "tmp"))).toEqual([]);
+    expect(fsSync.existsSync(path.join(harness.storageRoot, "artifacts", "sha256"))).toBe(false);
 
     await fsPromises.rm(harness.storageRoot, { recursive: true, force: true });
     await fsPromises.writeFile(harness.storageRoot, "blocked", "utf8");
@@ -291,6 +294,7 @@ describe("runtime reliability: storage and renderer", () => {
     const harness = await startHarness({
       appOverrides: {
         pdfRenderer: {
+          rendererVersion: "test-broken-renderer",
           renderPdf: () => Promise.reject(new Error("renderer broken")),
           probe: () => Promise.resolve(probeFailed("renderer_unavailable"))
         }
@@ -327,7 +331,8 @@ describe("runtime reliability: diagnostics", () => {
         emailProvider: { status: "disabled", failureCategory: null, lastSuccessAt: null }
       },
       workers: {
-        issuance: { enabled: false, lastPollAt: null, queueDepth: 0, oldestPendingAgeSeconds: null },
+        // R1.5B3: the issuance worker runs (lastPollAt depends on tick timing).
+        issuance: { enabled: true, queueDepth: 0, oldestPendingAgeSeconds: null },
         expiry: { enabled: false },
         emailDelivery: { enabled: false }
       }

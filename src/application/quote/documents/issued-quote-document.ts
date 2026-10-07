@@ -1,20 +1,20 @@
 import type { QuoteSnapshot } from "../../../domain";
-import { createCanonicalRequestHash } from "../canonical-json";
-import {
-  formatCommercialUnitPriceDisplay,
-  formatClpMoney,
-  formatQuantityDisplay,
-  formatUtcDateDisplay
-} from "./document-formatting";
+
+/*
+ * LEGACY (R1.6 email only). The V1 issued-quote snapshot is still the input of
+ * the email view model and the email preview/smoke scripts until the R1.6 V2
+ * email refactor. It is NOT an input of the V2 formal PDF: that path is
+ * IssuedSnapshot → IssuedQuoteDocumentModelV2 → PdfRendererPort
+ * (application/quote-v2/document). The V1 PDF view model, the V1 content hash
+ * and the printable HTML artifact were removed in R1.5B2.
+ */
 
 export interface CanonicalIssuedQuoteLineSnapshot {
   readonly lineId: string;
   readonly type: QuoteSnapshot["items"][number]["type"];
   /**
-   * SALES-AGENT-R1-T1.1: frozen into the immutable content hash exactly like
-   * every other commercial field of the line (description/quantity/price) -
-   * never surfaced in IssuedQuoteDocumentViewModel below, which is the only
-   * shape the PDF/email templates ever see.
+   * SALES-AGENT-R1-T1.1: provenance identity, never surfaced by the email
+   * view model.
    */
   readonly externalSource: string | null;
   readonly externalItemId: string | null;
@@ -42,42 +42,6 @@ export interface CanonicalIssuedQuoteSnapshot {
   readonly customerSnapshot: QuoteSnapshot["customerSnapshot"];
   readonly items: readonly CanonicalIssuedQuoteLineSnapshot[];
   readonly pricing: QuoteSnapshot["pricing"];
-}
-
-export interface IssuedQuoteDocumentViewModel {
-  readonly renderVersion: string;
-  readonly companyName: string;
-  readonly quoteNumber: string;
-  readonly currency: string;
-  readonly issuedAt: string;
-  readonly issuedAtDisplay: string;
-  readonly validUntil: string;
-  readonly validUntilDisplay: string;
-  readonly customer: {
-    readonly name: string;
-    readonly businessName: string | null;
-    readonly email: string | null;
-    readonly phone: string | null;
-    readonly address: string | null;
-    readonly district: string | null;
-    readonly region: string | null;
-  };
-  readonly items: Array<{
-    readonly typeLabel: string;
-    readonly description: string;
-    readonly sku: string | null;
-    readonly quantityDisplay: string;
-    readonly unitPriceDisplay: string;
-    readonly lineSubtotalDisplay: string;
-    readonly lineTaxDisplay: string;
-    readonly lineTotalDisplay: string;
-  }>;
-  readonly pricing: {
-    readonly pricingNote: string;
-    readonly subtotalDisplay: string;
-    readonly taxAmountDisplay: string;
-    readonly totalDisplay: string;
-  };
 }
 
 export function buildCanonicalIssuedQuoteSnapshot(
@@ -111,58 +75,5 @@ export function buildCanonicalIssuedQuoteSnapshot(
       lineTotal: item.lineTotal
     })),
     pricing: quote.pricing
-  };
-}
-
-export function createIssuedQuoteContentHash(snapshot: CanonicalIssuedQuoteSnapshot): string {
-  return createCanonicalRequestHash({
-    documentType: "issued_quote",
-    snapshot
-  });
-}
-
-export function buildIssuedQuoteDocumentViewModel(input: {
-  readonly snapshot: CanonicalIssuedQuoteSnapshot;
-  readonly renderVersion: string;
-  readonly companyName: string;
-}): IssuedQuoteDocumentViewModel {
-  return {
-    renderVersion: input.renderVersion,
-    companyName: input.companyName,
-    quoteNumber: input.snapshot.quoteNumber,
-    currency: input.snapshot.currency,
-    issuedAt: input.snapshot.issuedAt,
-    issuedAtDisplay: formatUtcDateDisplay(input.snapshot.issuedAt),
-    validUntil: input.snapshot.validUntil,
-    validUntilDisplay: formatUtcDateDisplay(input.snapshot.validUntil),
-    customer: {
-      name: input.snapshot.customerSnapshot.name,
-      businessName: input.snapshot.customerSnapshot.businessName,
-      email: input.snapshot.customerSnapshot.email,
-      phone: input.snapshot.customerSnapshot.phone,
-      address: input.snapshot.customerSnapshot.address,
-      district: input.snapshot.customerSnapshot.district,
-      region: input.snapshot.customerSnapshot.region
-    },
-    items: input.snapshot.items.map((item) => ({
-      typeLabel:
-        item.type === "product" ? "Producto" : item.type === "service" ? "Servicio" : "Despacho",
-      description: item.description,
-      sku: item.sku,
-      quantityDisplay: formatQuantityDisplay(item.quantity),
-      unitPriceDisplay: formatCommercialUnitPriceDisplay({
-        lineTotal: item.lineTotal,
-        quantity: item.quantity
-      }),
-      lineSubtotalDisplay: formatClpMoney(item.lineSubtotal),
-      lineTaxDisplay: formatClpMoney(item.lineTax),
-      lineTotalDisplay: formatClpMoney(item.lineTotal)
-    })),
-    pricing: {
-      pricingNote: "Precios incluyen IVA",
-      subtotalDisplay: formatClpMoney(input.snapshot.pricing.subtotal),
-      taxAmountDisplay: formatClpMoney(input.snapshot.pricing.taxAmount),
-      totalDisplay: formatClpMoney(input.snapshot.pricing.total)
-    }
   };
 }

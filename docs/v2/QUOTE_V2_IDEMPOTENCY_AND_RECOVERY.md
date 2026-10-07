@@ -112,7 +112,7 @@ operator retry after a `failed` one), with at most one active
 | `issuanceLeaseMs` | 60000 | 10000–300000 (renewed every third of the lease) |
 | `issuancePollIntervalMs` | 2000 | 500–60000 |
 | `issuanceDeadline` | 24 h | 1 h–72 h (copied to `deadline_at` at acceptance) |
-| Backoff after failed attempt *n* | 5 s, 30 s, 2 min, 10 min, 30 min, then 60 min | fixed schedule, capped by `deadline_at` |
+| Backoff after retryable failed attempt *n* (A5) | 5 s, 30 s, 2 min, 10 min, 30 min, then 60 min | fixed schedule, capped by `deadline_at` |
 
 ### 4.3 Attempt protocol
 
@@ -135,9 +135,13 @@ commit (tx):  UPDATE op SET status='succeeded', completed_at=now()
               INSERT manifest; UPDATE quote SET status='issued', version+1
               WHERE status='issuing'; INSERT audit quote.issued
 5. respond (inline path only)                -- MANIFEST COMMIT BEFORE RESPONSE
-on failure (tx, fenced by :g): status='pending', last_error_code,
-              next_attempt_at=now()+backoff(attempt_count);
-              audit quote.issue.attempt_failed
+on failure (tx, fenced by :g), classified by the owner (amendment A5):
+  retryable:     status='pending', last_error_code,
+                 next_attempt_at=min(now()+backoff(attempt_count), deadline_at);
+                 audit quote.issue.attempt_failed
+  non-retryable: status='failed', last_error_code (the attempt's code),
+                 completed_at=now(); audit quote.issue.failed; operator alert
+                 (state machine T12; quote stays issuing)
 lease renewal: UPDATE … SET lease_expires_at=now()+lease
               WHERE operation_id=:id AND generation=:g   -- 0 rows → stop
 ```
@@ -182,6 +186,7 @@ exits; unfinished leases simply expire.
 | After artifact write, before manifest commit | as above; complete content-addressed file | new attempt re-renders or reuses and verifies the same address; commits | same quote; same bytes if renderer deterministic, otherwise the committed manifest's bytes |
 | After manifest commit, before response | quote `issued` | caller replay → `201`/`200`; lookup → `bound`, `quoteStatus = issued` | same quote |
 | Zombie holder after lease loss | — | its commit/renewal/failure updates match 0 rows (stale generation) | no effect |
+| Non-retryable attempt failure (A5) | operation `failed` with the attempt's code; quote `issuing` | no automatic retry; operator fixes the cause, then operator retry (T10) or principal cancel (T11) | quote stays `issuing` with its number; a replay keeps returning `202` with the current operation |
 | Storage/renderer down until deadline | operation `pending` with backoff | deadline sweep → operation `failed`, operator alert | quote stays `issuing` with its number; operator retry (new operation, same quote) or principal cancel; a replay keeps returning `202` with the current operation |
 
 ## 5. Email delivery idempotency (when enabled)
@@ -227,7 +232,7 @@ stateDiagram-v2
     Unbound --> Bound_Issuing: acceptance tx commits (quote issuing, number, validity, operation pending)
     Bound_Issuing --> Bound_Issuing: replay same fingerprint → 202 / lookup → bound(issuing)
     Bound_Issuing --> Bound_Issued: manifest commit (fenced attempt)
-    Bound_Issuing --> Bound_Issuing: deadline exceeded → operation failed (quote stays issuing); operator retry → new operation
+    Bound_Issuing --> Bound_Issuing: deadline exceeded or non-retryable failure → operation failed (quote stays issuing); operator retry → new operation
     Bound_Issuing --> Bound_Cancelled: principal cancel after operation failed
     Bound_Issued --> Bound_Issued: replay → 201 (issued / expired / cancelled by principal)
     Bound_Cancelled --> Bound_Cancelled: replay → 201 (cancelled)
@@ -247,7 +252,8 @@ ASCII equivalent:
            ▼
    [Bound: issuing] ──replay──► 202 (same quote)        any state + different
        │         │                                     fingerprint → 409
-       │         │  (deadline → operation failed; quote stays issuing;
+       │         │  (deadline or non-retryable failure → operation failed;
+       │         │   quote stays issuing;
        │         │   operator retry → new operation, same quote)
        │         └─principal cancel after failed op─► [Bound: cancelled] ──replay──► 201
        │ fenced manifest commit

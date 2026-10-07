@@ -184,6 +184,44 @@ describe("DependencyMonitor readiness", () => {
   });
 });
 
+describe("DependencyMonitor persistence readiness (issuance deadline sweep)", () => {
+  it("AK/AL: stays persistence-ready while storage or the renderer is down", async () => {
+    const { monitor, state } = createHarness();
+    state.artifactStorage = probeFailed("storage_read_only");
+    state.renderer = probeFailed("renderer_unavailable");
+    await monitor.probeNow();
+
+    expect(monitor.isReady()).toBe(false);
+    expect(monitor.isPersistenceReady()).toBe(true);
+  });
+
+  it("AM: is not persistence-ready without the database, at a wrong schema head, before the first probe or while shutting down", async () => {
+    const { monitor, state } = createHarness();
+    expect(monitor.isPersistenceReady()).toBe(false);
+
+    state.database = DB_DOWN;
+    await monitor.probeNow();
+    expect(monitor.isPersistenceReady()).toBe(false);
+
+    state.database = schemaResult("SCHEMA_BEHIND", "000004_x");
+    await monitor.probeNow();
+    expect(monitor.isPersistenceReady()).toBe(false);
+
+    state.database = schemaResult("SCHEMA_INTEGRITY_MISMATCH", "000005_head");
+    await monitor.probeNow();
+    expect(monitor.isPersistenceReady()).toBe(false);
+
+    state.database = DB_UP;
+    await monitor.probeNow();
+    expect(monitor.isPersistenceReady()).toBe(true);
+
+    state.shuttingDown = true;
+    expect(monitor.isPersistenceReady()).toBe(false);
+    // The public readiness semantics are unchanged.
+    expect(monitor.readiness().checks.lifecycle).toBe("fail");
+  });
+});
+
 describe("DependencyMonitor transition logging (K)", () => {
   it("logs one down event for a long outage and one recovery event", async () => {
     const { monitor, state, logs, events } = createHarness();

@@ -203,6 +203,20 @@ check('A4: updateDraft / issueDraft / cancelQuote descriptions are creator-only'
 check('A4: state machine T2/T3/T7/T8/T11 initiated by the creator principal', ['T2', 'T3', 'T7', 'T8', 'T11'].every((t) => new RegExp('^\\| ' + t + ' \\|[^\\n]*\\| creator principal \\(', 'm').test(sm)));
 check('A4: recorded in the freeze record', /^\| A4 \| Read authority never implies mutation authority/m.test(text('QUOTE_V2_CONTRACT_FREEZE.md')));
 
+// 11. R1.5B3 contract amendment A5 (QUOTE_V2_CONTRACT_FREEZE.md §3c)
+const idem = text('QUOTE_V2_IDEMPOTENCY_AND_RECOVERY.md');
+const opSchema = doc.components.schemas.Operation;
+const nonRetryable = read('examples/operation-failed-non-retryable.json');
+check('A5: recorded in the freeze record', /^\| A5 \| Issuance attempt failures are classified by the owner as \*\*retryable\*\* or \*\*non-retryable\*\*/m.test(text('QUOTE_V2_CONTRACT_FREEZE.md')));
+check('A5: state machine T12 fails the operation and keeps the quote issuing', /^\| T12 \| `issuing` \| `issuing` \| non-retryable attempt failure \(amendment A5\) \|[^\n]*operation `failed` with the attempt's `lastErrorCode`/m.test(sm));
+check('A5: failed = deadline (T6) or non-retryable failure (T12)', /\| `failed` \| Deadline exceeded \(T6\) or non-retryable attempt failure \(T12, A5\)/.test(sm));
+check('A5: no normative text retries every failure or reaches failed only at the deadline', !/Every attempt failure\s*\(`document_generation_failed`/.test(sm) && !/only reached at\s+`deadlineAt`/.test(text('openapi.yaml')));
+check('A5: attempt protocol has retryable and non-retryable branches', /retryable:\s+status='pending'/.test(idem) && /non-retryable: status='failed', last_error_code \(the attempt's code\)/.test(idem));
+check('A5: Operation description states the non-retryable path', /non-retryable attempt failure \(amendment A5\)/.test(opSchema.description));
+check('A5: no new operation state or error code', JSON.stringify(opSchema.properties.status.enum) === JSON.stringify(['pending', 'running', 'succeeded', 'failed']) && JSON.stringify(opSchema.properties.attempts.properties.lastErrorCode.oneOf[0].enum) === JSON.stringify(['document_generation_failed', 'document_storage_failed', 'dependency_unavailable', 'issuance_deadline_exceeded']));
+check('A5: non-retryable example fails before its deadline with the attempt code', nonRetryable.status === 'failed' && nonRetryable.attempts.lastErrorCode !== 'issuance_deadline_exceeded' && nonRetryable.attempts.nextAttemptAt === null && nonRetryable.completedAt !== null && Date.parse(nonRetryable.completedAt) < Date.parse(nonRetryable.deadlineAt));
+check('A5: issuance_deadline_exceeded only paired with the deadline (T6)', [...sm.matchAll(/^\| T\d+ \|[^\n]*$/gm)].every(([line]) => !line.includes('issuance_deadline_exceeded') || /deadline exceeded/.test(line)));
+
 const failed = results.filter((r) => !r.ok);
 console.log(`checks: ${results.length}, passed: ${results.length - failed.length}, failed: ${failed.length}`);
 for (const f of failed) console.log('FAIL', f.name, f.detail);
