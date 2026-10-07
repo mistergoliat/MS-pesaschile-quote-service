@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { DependencyMonitor } from "../../src/application/health/dependency-monitor";
+import { CAPABILITIES, DependencyMonitor } from "../../src/application/health/dependency-monitor";
 import {
   PROBE_OK,
   probeFailed,
@@ -328,5 +328,34 @@ describe("DependencyMonitor cadence", () => {
     await monitor.stop();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(calls.database).toBe(7);
+  });
+});
+
+describe("DependencyMonitor capability gates (R1.6D)", () => {
+  const storage = { code: "dependency_unavailable", dependency: "artifactStorage" };
+  const renderer = { code: "dependency_unavailable", dependency: "renderer" };
+  const database = { code: "dependency_unavailable", dependency: "database" };
+  const lifecycle = { code: "dependency_unavailable", dependency: "lifecycle" };
+
+  it.each([
+    ["all healthy", {}, { PERSISTENCE: null, DOCUMENT_READ: null, ISSUANCE: null, DELIVERY_REQUEST: null, DELIVERY_SEND: null, DEADLINE_SWEEP: null }],
+    ["renderer down", { renderer: true }, { PERSISTENCE: null, DOCUMENT_READ: null, ISSUANCE: renderer, DELIVERY_REQUEST: null, DELIVERY_SEND: null, DEADLINE_SWEEP: null }],
+    ["storage down", { storage: true }, { PERSISTENCE: null, DOCUMENT_READ: storage, ISSUANCE: storage, DELIVERY_REQUEST: null, DELIVERY_SEND: storage, DEADLINE_SWEEP: null }],
+    ["storage and renderer down", { storage: true, renderer: true }, { PERSISTENCE: null, DOCUMENT_READ: storage, ISSUANCE: storage, DELIVERY_REQUEST: null, DELIVERY_SEND: storage, DEADLINE_SWEEP: null }],
+    ["database down", { database: true }, { PERSISTENCE: database, DOCUMENT_READ: database, ISSUANCE: database, DELIVERY_REQUEST: database, DELIVERY_SEND: database, DEADLINE_SWEEP: database }],
+    ["schema behind", { schema: true }, Object.fromEntries(CAPABILITIES.map((capability) => [capability, { code: "schema_not_ready" }]))],
+    ["shutting down", { shutdown: true }, Object.fromEntries(CAPABILITIES.map((capability) => [capability, lifecycle]))]
+  ] as const)("%s", async (_label, faults: Partial<Record<"renderer" | "storage" | "database" | "schema" | "shutdown", boolean>>, expected) => {
+    const { monitor, state } = createHarness();
+    state.renderer = faults.renderer ? probeFailed("renderer_unavailable") : PROBE_OK;
+    state.artifactStorage = faults.storage ? probeFailed("unreachable") : PROBE_OK;
+    state.database = faults.database ? DB_DOWN : faults.schema ? schemaResult("SCHEMA_BEHIND", "000004_x") : DB_UP;
+    await monitor.probeNow();
+    state.shuttingDown = faults.shutdown ?? false;
+
+    expect(Object.fromEntries(CAPABILITIES.map((capability) => [capability, monitor.gate(capability)]))).toEqual(expected);
+    // The compatibility alias is exactly the full issuance gate, and readiness is unchanged by capabilities.
+    expect(monitor.businessGate()).toEqual(monitor.gate("ISSUANCE"));
+    expect(monitor.isReady()).toBe(monitor.gate("ISSUANCE") === null);
   });
 });

@@ -26,6 +26,8 @@ export function buildRuntimeTestEnv(input: {
     HEALTH_PROBE_RETRY_MIN_MS: "100",
     HEALTH_PROBE_RETRY_MAX_MS: "400",
     QUOTE_DOCUMENT_STORAGE_ROOT: input.storageRoot,
+    // Expiry materialization changes versions: suites drive it explicitly.
+    QUOTE_EXPIRY_INTERVAL_MS: "3600000",
     ...input.overrides
   });
 }

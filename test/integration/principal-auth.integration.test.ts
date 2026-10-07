@@ -36,13 +36,13 @@ afterEach(async () => {
  */
 function probeRoutes(holder: { context?: ApplicationContext }): BusinessRouteRegistrar {
   return (app) => {
-    app.get("/probe/whoami", { config: { requiredScope: "quotes:read" } }, (request) => ({
+    app.get("/probe/whoami", { config: { requiredScope: "quotes:read", capability: "PERSISTENCE" } }, (request) => ({
       principalId: request.principal!.principalId,
       principalType: request.principal!.principalType,
       scopes: [...request.principal!.scopes].sort()
     }));
 
-    app.post("/probe/drafts", { config: { requiredScope: "quotes:draft:write" } }, async (request, reply) => {
+    app.post("/probe/drafts", { config: { requiredScope: "quotes:draft:write", capability: "PERSISTENCE" } }, async (request, reply) => {
       const rawKey = request.headers["idempotency-key"];
 
       if (!isValidIdempotencyKey(rawKey)) {

@@ -100,7 +100,7 @@ Always `200` when authorized. The shape is the contract's `DependencyHealth`:
 | `dependencies.<name>.status` | `up` / `down`. `database` is `degraded` + `schema_mismatch` when connected but not at head. `emailProvider` is `disabled` / `up` / `degraded` |
 | `dependencies.<name>.failureCategory` | Stable sanitized reason: `unreachable`, `timeout`, `authentication`, `permission`, `schema_mismatch`, `storage_full`, `storage_read_only`, `integrity`, `renderer_unavailable`, `provider_error` |
 | `dependencies.<name>.lastSuccessAt` | Time of the last successful probe |
-| `workers.*` | `enabled`, `lastPollAt`. `queueDepth` / `oldestPendingAgeSeconds` are reported as `0` / `null` until the V2 workers (R1.5) measure them. `issuance` is not present in V1 (`enabled: false`) |
+| `workers.*` | `enabled`, `lastPollAt`, and the backlog of work due now, measured in PostgreSQL by persistence-gated ticks (`issuance`, `expiry`: R1.6D; `emailDelivery`: R1.6B). Before the first measurement `0` / `null`. Definitions: [operational-hardening.md §4](operational-hardening.md#4-queue-metrics-healthdependencies-workers) |
 
 The task brief's `reasonCode` / `lastSuccessfulCheckAt` are the frozen
 contract's `failureCategory` / `lastSuccessAt`.
@@ -149,11 +149,14 @@ Probes:
 
 ## 6. Business traffic while unready
 
-Every business route sits behind an `onRequest` readiness gate. The V1
-routes were retired in R1.4; the V2 routes (R1.5) mount in the same gated
-context. When the gate is closed, no handler, repository or storage call
-runs. Checks run in this order: lifecycle → database → schema →
-storage → renderer.
+Every business route sits behind an `onRequest` gate on the **capability
+it declares** (R1.6D, [operational-hardening.md §1](operational-hardening.md#1-capability-model)):
+reads, drafts, cancel and delivery requests need only lifecycle + database +
+schema; `GET …/document` also needs storage; issuance also needs storage and
+the renderer. When the gate is closed, no handler, repository or storage
+call runs. Checks run in this order: lifecycle → database → schema →
+storage → renderer. `/health/ready` keeps its full-issuance meaning.
+`/v1/*` answers `410 api_version_retired` without any gate.
 
 ```http
 HTTP/1.1 503 Service Unavailable
@@ -296,7 +299,7 @@ green without a restart.
 | ~~Separate DB roles and grants~~ | **Done in R1.4** (`000008`, [v2-persistence.md §6](v2-persistence.md#6-database-roles-and-grants)) | — |
 | ~~Migration file checksums~~ | **Done in R1.4** (`000006`, [v2-persistence.md §3](v2-persistence.md#3-migration-integrity)) | — |
 | ~~`service:health:dependencies` scope enforcement~~ | **Done in R1.5A** ([principals.md](principals.md)) | — |
-| Worker `queueDepth` / `oldestPendingAgeSeconds` | Measured by the V2 durable workers | R1.5 |
+| ~~Worker `queueDepth` / `oldestPendingAgeSeconds`~~ | **Done in R1.6B/R1.6D** ([operational-hardening.md §4](operational-hardening.md#4-queue-metrics-healthdependencies-workers)) | — |
 | Email provider active probe | Health checks must not call Gmail. Status is derived from delivery outcomes | — |
 | Backup/restore rehearsal (DB + document root) | Recovery model documented in R1.4 ([v2-persistence.md §7](v2-persistence.md#7-recovery-model)); rehearsal needs the production environment | R1.7 |
 | `requestId` in error bodies | V2 error envelope | R1.5 |

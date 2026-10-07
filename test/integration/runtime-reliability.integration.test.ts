@@ -71,13 +71,13 @@ async function startHarness(options: {
   // quotes table through the request pool.
   const holder: { context?: ApplicationContext } = {};
   const probeRoutes: BusinessRouteRegistrar = (businessApp) => {
-    businessApp.get("/probe/quotes", { config: { requiredScope: "quotes:read" } }, async () => {
+    businessApp.get("/probe/quotes", { config: { requiredScope: "quotes:read", capability: "ISSUANCE" } }, async () => {
       const result = await holder.context!.database.query<{ count: number }>(
         "select count(*)::int as count from quote_service.quotes"
       );
       return { quotes: result.rows[0]!.count };
     });
-    businessApp.post("/probe/hang", { config: { requiredScope: "quotes:read" } }, async () => {
+    businessApp.post("/probe/hang", { config: { requiredScope: "quotes:read", capability: "ISSUANCE" } }, async () => {
       await options.hang;
       return { done: true };
     });
@@ -333,7 +333,7 @@ describe("runtime reliability: diagnostics", () => {
       workers: {
         // R1.5B3: the issuance worker runs (lastPollAt depends on tick timing).
         issuance: { enabled: true, queueDepth: 0, oldestPendingAgeSeconds: null },
-        expiry: { enabled: false },
+        expiry: { enabled: true },
         emailDelivery: { enabled: false }
       }
     });

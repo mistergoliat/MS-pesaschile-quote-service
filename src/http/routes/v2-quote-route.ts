@@ -192,8 +192,11 @@ function sendIssuance(reply: FastifyReply, result: QuoteOperationResult, doneSta
  * V2 quote routes. Mutation evaluation order (Domain §12): 400 headers/params →
  * 401 → 403 (incl. the validityOverride scope) → idempotency binding → 404 →
  * 422 → 409 state/version → acceptance. Reads: 400 → 401 → 403 → 404
- * (missing or not visible). Readiness (503) is enforced earlier by the
- * business context gate. `clock` is the single expiry-projection time source;
+ * (missing or not visible). Dependency readiness (503) is enforced earlier by
+ * the business context, per route `config.capability` (R1.6D): issuance
+ * (create-and-issue, issue) needs ISSUANCE (storage + renderer), the document
+ * read DOCUMENT_READ (storage, never the renderer), everything else
+ * PERSISTENCE only. `clock` is the single expiry-projection time source;
  * `issuanceDeadlineMs` is copied onto every operation accepted here.
  *
  * Issuance (create-and-issue, issue): after the acceptance commit a newly
@@ -242,7 +245,7 @@ export function v2QuoteRoutes(
   });
 
   return (app) => {
-    app.post("/v2/quotes", { config: { requiredScope: "quotes:create" }, preValidation: validateHeaders }, async (request, reply) => {
+    app.post("/v2/quotes", { config: { requiredScope: "quotes:create", capability: "ISSUANCE" }, preValidation: validateHeaders }, async (request, reply) => {
       authorizeOverride(request);
       const outcome = await issueInline(await acceptCreateAndIssue(database, commandInput(request)), request);
       return sendIssuance(reply, resultOf(outcome, "quote.create_and_issue", reply), 201);
@@ -250,7 +253,7 @@ export function v2QuoteRoutes(
 
     app.post(
       "/v2/quotes/drafts",
-      { config: { requiredScope: "quotes:draft:write" }, preValidation: validateHeaders },
+      { config: { requiredScope: "quotes:draft:write", capability: "PERSISTENCE" }, preValidation: validateHeaders },
       async (request, reply) => {
         const quote = resultOf(await createDraft(database, commandInput(request)), "quote.draft.create", reply);
         return reply.header("Location", `/v2/quotes/${quote.quoteId}`).code(201).send(quote);
@@ -259,7 +262,7 @@ export function v2QuoteRoutes(
 
     app.patch(
       "/v2/quotes/:quoteId/draft",
-      { config: { requiredScope: "quotes:draft:write" }, preValidation: validateHeaders },
+      { config: { requiredScope: "quotes:draft:write", capability: "PERSISTENCE" }, preValidation: validateHeaders },
       async (request, reply) => {
         const outcome = await updateDraft(database, quoteIdOf(request), commandInput(request));
         return reply.code(200).send(resultOf(outcome, "quote.draft.update", reply));
@@ -268,7 +271,7 @@ export function v2QuoteRoutes(
 
     app.post(
       "/v2/quotes/:quoteId/issue",
-      { config: { requiredScope: "quotes:issue" }, preValidation: validateHeaders },
+      { config: { requiredScope: "quotes:issue", capability: "ISSUANCE" }, preValidation: validateHeaders },
       async (request, reply) => {
         authorizeOverride(request);
         const outcome = await issueInline(await issueDraft(database, quoteIdOf(request), commandInput(request)), request);
@@ -279,7 +282,7 @@ export function v2QuoteRoutes(
     // Creator only (A4): `quotes:read:any` never reaches the transition; a non-creator gets 404.
     app.post(
       "/v2/quotes/:quoteId/cancel",
-      { config: { requiredScope: "quotes:cancel" }, preValidation: validateHeaders },
+      { config: { requiredScope: "quotes:cancel", capability: "PERSISTENCE" }, preValidation: validateHeaders },
       async (request, reply) => {
         const outcome = await cancelQuote(database, quoteIdOf(request), commandInput(request));
         return reply.code(200).send(resultOf(outcome, "quote.cancel", reply));
@@ -288,11 +291,11 @@ export function v2QuoteRoutes(
 
     // ---------- reads (visibility: creator, or `quotes:read:any`) ----------
 
-    app.get("/v2/quotes/:quoteId", { config: { requiredScope: "quotes:read" }, preValidation: validateRead(null) }, async (request) =>
+    app.get("/v2/quotes/:quoteId", { config: { requiredScope: "quotes:read", capability: "PERSISTENCE" }, preValidation: validateRead(null) }, async (request) =>
       getVisibleQuote(database, request.principal!, quoteIdOf(request), clock)
     );
 
-    app.get("/v2/quotes", { config: { requiredScope: "quotes:read" }, preValidation: validateRead(listQuerySchema) }, async (request) =>
+    app.get("/v2/quotes", { config: { requiredScope: "quotes:read", capability: "PERSISTENCE" }, preValidation: validateRead(listQuerySchema) }, async (request) =>
       listVisibleQuotes(database, request.principal!, parseQuery(listQuerySchema, request), clock)
     );
 
@@ -300,7 +303,7 @@ export function v2QuoteRoutes(
     // 409 until a manifest exists; kept after expiry and after cancel-after-issue.
     app.get(
       "/v2/quotes/:quoteId/document",
-      { config: { requiredScope: "quotes:document:read" }, preValidation: validateRead(null) },
+      { config: { requiredScope: "quotes:document:read", capability: "DOCUMENT_READ" }, preValidation: validateRead(null) },
       async (request, reply) => {
         const document = await getVisibleQuoteDocument(database, request.principal!, quoteIdOf(request), clock);
 
@@ -354,19 +357,19 @@ export function v2QuoteRoutes(
 
     app.get(
       "/v2/operations/:operationId",
-      { config: { requiredScope: "quotes:read" }, preValidation: validateRead(null) },
+      { config: { requiredScope: "quotes:read", capability: "PERSISTENCE" }, preValidation: validateRead(null) },
       async (request) => getVisibleOperation(database, request.principal!, (request.params as { operationId: string }).operationId)
     );
 
     app.get(
       "/v2/quotes/:quoteId/audit",
-      { config: { requiredScope: "quotes:audit:read" }, preValidation: validateRead(auditQuerySchema) },
+      { config: { requiredScope: "quotes:audit:read", capability: "PERSISTENCE" }, preValidation: validateRead(auditQuerySchema) },
       async (request) => listVisibleAudit(database, request.principal!, quoteIdOf(request), parseQuery(auditQuerySchema, request))
     );
 
     app.get(
       "/v2/idempotency/current",
-      { config: { requiredScope: "quotes:read" }, preValidation: validateRead(lookupQuerySchema, { idempotencyKey: true }) },
+      { config: { requiredScope: "quotes:read", capability: "PERSISTENCE" }, preValidation: validateRead(lookupQuerySchema, { idempotencyKey: true }) },
       async (request) =>
         lookupIdempotencyBinding(
           database,

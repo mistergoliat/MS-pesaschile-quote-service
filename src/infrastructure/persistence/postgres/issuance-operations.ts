@@ -28,6 +28,7 @@ import {
 import { loadIssuedSnapshot, loadVerifiedIssuedSnapshot } from "./issued-snapshot-loader";
 import { CommitOutcomeUnknownError, type PostgresDatabase } from "./postgres";
 import { appendAudit } from "./quote-v2-acceptance";
+import type { DeliveryQueueMetrics } from "../../../application/quote-v2/delivery/delivery-execution";
 
 /*
  * PostgreSQL implementation of the issuance operation core (R1.5B1).
@@ -708,4 +709,39 @@ export class PostgresIssuanceOperationRepository implements IssuanceOperationRep
     );
     return rows[0];
   }
+}
+
+/**
+ * `workers.issuance` metrics, with the claim's own eligibility (and the
+ * `emailDelivery` definition of "queue": work due now): issuance operations
+ * that are the current operation of an `issuing` quote, before their deadline,
+ * and either `pending` with `next_attempt_at <= now` or `running` with an
+ * expired lease (reclaimable). Excluded: terminal operations, `pending` ones
+ * still in backoff, live leases, and operations past their deadline (those
+ * belong to the deadline sweep, not the worker). The age is measured from
+ * when the oldest one became due. Read only; served by the pending-due and
+ * running-lease partial indexes.
+ */
+export async function issuanceQueueMetrics(database: Pick<PostgresDatabase, "query">): Promise<DeliveryQueueMetrics> {
+  const { rows } = await database.query<{ depth: number; oldest: number | null }>(
+    `with clock as materialized (select ${DB_NOW} as now),
+     due as (
+       select o.next_attempt_at as due_at, o.deadline_at, o.quote_id, o.operation_id
+       from quote_service.issuance_operations o
+       where o.status = 'pending' and o.next_attempt_at <= (select now from clock)
+       union all
+       select o.lease_expires_at, o.deadline_at, o.quote_id, o.operation_id
+       from quote_service.issuance_operations o
+       where o.status = 'running' and o.lease_expires_at < (select now from clock)
+     )
+     select count(d.operation_id)::int as depth,
+            floor(extract(epoch from (k.now - min(d.due_at))))::int as oldest
+     from clock k
+     left join (due d join quote_service.quotes q
+                  on q.quote_id = d.quote_id and q.current_operation_id = d.operation_id and q.status = 'issuing')
+       on k.now < d.deadline_at
+     group by k.now`
+  );
+  const row = rows[0]!;
+  return { queueDepth: row.depth, oldestPendingAgeSeconds: row.oldest === null ? null : Math.max(0, row.oldest) };
 }

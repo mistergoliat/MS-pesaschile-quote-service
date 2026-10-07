@@ -9,6 +9,7 @@ Owner service for PesasChile commercial quotes, being rebuilt on the frozen
 | R1.3 runtime reliability and health | done: [docs/runtime-lifecycle.md](docs/runtime-lifecycle.md) |
 | R1.4 V2 schema and migration foundation | done: [docs/v2-persistence.md](docs/v2-persistence.md) |
 | R1.5 V2 API, idempotency, durable issuance | in progress: A.1–A.4 done; B1 operation core, B2 formal document, B3 publication + fenced commit + inline issuance done ([docs/issuance-execution.md](docs/issuance-execution.md)); B4 document endpoint, integrity verifier and process-kill crash matrix done ([docs/document-access.md](docs/document-access.md), [docs/issuance-crash-matrix.md](docs/issuance-crash-matrix.md)) |
+| R1.6 operation and delivery | closed: A delivery request, B delivery execution ([docs/email-delivery-execution.md](docs/email-delivery-execution.md)), C operator controls ([docs/operator-controls.md](docs/operator-controls.md)), D operational hardening ([docs/operational-hardening.md](docs/operational-hardening.md), runbook [docs/runbooks/degraded-operation.md](docs/runbooks/degraded-operation.md)). R1.7 production readiness is next |
 
 **Current runtime:** health endpoints and the readiness-gated business
 context. The V1 API (`/v1/*`), its repositories and workers were retired in
@@ -50,6 +51,7 @@ curl -i localhost:3000/health/ready
 | `npm run issuance:retry` / `issuance:retry:runtime` | operator: T10 retry of a failed issuance (`--operator`, `--reason`; dry run unless `--yes`) |
 | `npm run documents:repair` / `documents:repair:runtime` | operator: restore a missing V2 PDF only if the re-render reproduces the recorded `pdfSha256` (dry run unless `--yes`) |
 | `npm run smoke:docker` | build the image and smoke the runtime (migrate, check, health, restart, shutdown) |
+| `npm run rehearsal:migration` | synthetic V1 → V2 migration rehearsal on disposable local databases; writes [docs/R1.6D_SYNTHETIC_MIGRATION_REHEARSAL.md](docs/R1.6D_SYNTHETIC_MIGRATION_REHEARSAL.md) |
 | `npm run pdf:preview`, `pdf:benchmark`, `pdf:concurrency-smoke` | formal PDF previews (template v4), cost and concurrency checks |
 | `npm run pdf:determinism` / `pdf:determinism:runtime` | SHA-256 of the golden formal-PDF fixtures (must equal the pinned values on every OS) |
 | `npm run email:preview` | offline preview of the V2 email envelope (`.preview/`; sends nothing) |

@@ -377,7 +377,7 @@ describe("GET /v2/quotes/{quoteId}/document", () => {
       expect(corrupt.code).toBe(2);
       const report = JSON.parse(corrupt.stdout);
       expect(report).toMatchObject({ status: "exceptions", checked: 1, ok: 0, byStatus: { LENGTH_MISMATCH: 1 } });
-      expect(report.problems).toEqual([{ documentId: manifest.document_id, quoteId: manifest.quote_id, origin: "issuance", status: "LENGTH_MISMATCH" }]);
+      expect(report.problems).toEqual([{ documentId: manifest.document_id, quoteId: manifest.quote_id, origin: "issuance", status: "LENGTH_MISMATCH", pdfSha256: manifest.pdf_sha256 }]);
       expect(corrupt.stdout).not.toContain(env.storageRoot);
       expect(corrupt.stdout).not.toContain(manifest.storage_key);
       expect(await env.tableSnapshot()).toEqual(before);

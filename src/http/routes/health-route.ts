@@ -20,8 +20,8 @@ export interface HealthRouteDependencies {
   readonly backgroundJobs: BackgroundJobManager;
   /** `emailProvider` status, derived from configuration and the delivery worker's outcomes; never a provider probe. */
   readonly emailProvider: () => EmailProviderView;
-  /** Last measured `emailDelivery` queue metrics (database), or null before the first measurement. */
-  readonly emailQueueMetrics: () => DeliveryQueueMetrics | null;
+  /** Last measured queue metrics per public worker (database), or null before the first measurement. */
+  readonly queueMetrics: Record<"issuance" | "expiry" | "emailDelivery", () => DeliveryQueueMetrics | null>;
   readonly startedAt: Date;
 }
 
@@ -38,11 +38,13 @@ interface EmailProviderView {
   readonly lastSuccessAt: string | null;
 }
 
-// Issuance and expiry queue metrics are still not measured (R1.6D); the
-// frozen contract requires the fields, so they report an empty queue.
-// emailDelivery reports the due `pending` deliveries measured by the
-// persistence sweep (R1.6B).
-function toWorkerView(job: BackgroundJobStatus, metrics: DeliveryQueueMetrics | null = null): WorkerStatusView {
+// Queue metrics are measured in PostgreSQL by persistence-gated ticks (R1.6B
+// emailDelivery, R1.6D issuance and expiry) and read here from cache, never
+// queried per request. Before a worker's first measurement (lastPollAt null)
+// or when it is not composed (enabled false), the frozen schema has no
+// "unknown" value: queueDepth 0 / oldestPendingAgeSeconds null are reported.
+// A failed measurement keeps the last successful one.
+function toWorkerView(job: BackgroundJobStatus, metrics: DeliveryQueueMetrics | null): WorkerStatusView {
   return {
     enabled: job.enabled,
     lastPollAt: job.lastPollAt,
@@ -57,7 +59,7 @@ function toWorkerView(job: BackgroundJobStatus, metrics: DeliveryQueueMetrics | 
  * fast and cannot fan out load onto a struggling database.
  */
 export function registerHealthRoute(app: FastifyInstance, deps: HealthRouteDependencies): void {
-  const { env, monitor, principalRegistry, backgroundJobs, emailProvider, emailQueueMetrics, startedAt } = deps;
+  const { env, monitor, principalRegistry, backgroundJobs, emailProvider, queueMetrics, startedAt } = deps;
 
   app.get("/health/live", async (_request, reply) => {
     return reply.header("Cache-Control", "no-store").code(200).send({ status: "live" });
@@ -104,9 +106,9 @@ export function registerHealthRoute(app: FastifyInstance, deps: HealthRouteDepen
           emailProvider: emailProvider()
         },
         workers: {
-          issuance: toWorkerView(jobs.issuance),
-          expiry: toWorkerView(jobs.expiry),
-          emailDelivery: toWorkerView(jobs.emailDelivery, emailQueueMetrics())
+          issuance: toWorkerView(jobs.issuance, queueMetrics.issuance()),
+          expiry: toWorkerView(jobs.expiry, queueMetrics.expiry()),
+          emailDelivery: toWorkerView(jobs.emailDelivery, queueMetrics.emailDelivery())
         }
       });
     }
